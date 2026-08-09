@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.log
+.agent/
+.build/
+*.xcodeproj/
+.DS_Store
+*.app/
+AgentSignalBar.app/
