@@ -142,6 +142,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let doneSound = cfg.doneSoundName ?? "Glass"
         let attentionSound = cfg.attentionSoundName ?? "Basso"
         let sleepMode = "\(SleepManager.shared.mode.rawValue):\(SleepManager.shared.isAssertionActive):\(SleepManager.shared.currentReason ?? "")"
+        let closedLid = "\(SleepManager.shared.isClosedLidModeEnabled):\(SleepManager.shared.isDisableSleepActive)"
         let autoRelay = OutputRelayManager.shared.isAutoRelayEnabled
         let usageRefreshTs = lastUsageRefreshTime.timeIntervalSince1970
 
@@ -164,7 +165,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
         }
-        return "\(summary)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
+        return "\(summary)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
     }
 
 
@@ -590,6 +591,20 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             }
             sleepSubmenu.addItem(item)
         }
+
+        // Closed-Lid / Clamshell Prevention (pmset) Submenu Item
+        sleepSubmenu.addItem(NSMenuItem.separator())
+        let isClosedLid = SleepManager.shared.isClosedLidModeEnabled
+        let privStatus = SleepManager.checkPrivilegeStatus()
+        let privTag = privStatus.hasPrivilege ? "" : " [Requires Sudoers Setup]"
+        let closedLidTitle = isClosedLid ? "Closed-Lid / Clamshell Mode (pmset): ON (Click to Disable)\(privTag)" : "Closed-Lid / Clamshell Mode (pmset): OFF (Click to Enable)\(privTag)"
+        let closedLidItem = NSMenuItem(title: closedLidTitle, action: #selector(toggleClosedLidModeClicked), keyEquivalent: "")
+        closedLidItem.target = self
+        if isClosedLid {
+            closedLidItem.state = .on
+        }
+        sleepSubmenu.addItem(closedLidItem)
+
         sleepMainItem.submenu = sleepSubmenu
         settingsSubmenu.addItem(sleepMainItem)
 
@@ -906,6 +921,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             newStatus: .done,
             detail: "Test Notification Alert from AgentSignalBar!"
         )
+    }
+
+    @objc private func toggleClosedLidModeClicked() {
+        let current = SleepManager.shared.isClosedLidModeEnabled
+        SleepManager.shared.isClosedLidModeEnabled = !current
+        print("🛡️ Closed-Lid / Clamshell Mode toggled to: \(!current)")
+        updateTitleAndMenu()
     }
 
     @objc private func quitClicked() {

@@ -1,5 +1,6 @@
 import Foundation
 import IOKit.pwr_mgt
+import IOKit.ps
 
 public enum AntiSleepMode: String, Codable, CaseIterable {
     case smartAuto = "smartAuto"       // Smart Auto driven by trusted real agent lifecycle states (ChatGPT, Claude, AGY)
@@ -19,17 +20,37 @@ public enum AntiSleepMode: String, Codable, CaseIterable {
     }
 }
 
+public struct PowerStateInfo: Codable, Sendable {
+    public let isACPower: Bool
+    public let batteryPercent: Int?
+    public let isCharging: Bool
+    public let isBatterySafe: Bool
+}
+
 public final class SleepManager: @unchecked Sendable {
     public static let shared = SleepManager()
 
     public static let trustedProviders: Set<AgentID> = [.chatgpt, .claude, .antigravity]
+    public static let disableSleepMarkerPath: String = {
+        let home = NSHomeDirectory()
+        return "\(home)/.config/AgentSignalBar/disablesleep_active"
+    }()
 
     private var assertionID: IOPMAssertionID = 0
     public private(set) var isAssertionActive: Bool = false
+    public private(set) var isDisableSleepActive: Bool = false
     public private(set) var currentReason: String? = nil
     private var caffeinateProcess: Process?
     private var timer: Timer?
     private var timerExpiryDate: Date?
+
+    public var isClosedLidModeEnabled: Bool {
+        get { ConfigManager.shared.config.isClosedLidEnabled ?? false }
+        set {
+            ConfigManager.shared.setClosedLidEnabled(newValue)
+            updateSleepAssertionState()
+        }
+    }
 
     public var mode: AntiSleepMode = .smartAuto {
         didSet {
@@ -38,8 +59,11 @@ public final class SleepManager: @unchecked Sendable {
     }
 
     private init() {
-        // Audit and clean up orphaned caffeinate processes from previous runs on startup
+        // 1. Audit and clean up orphaned caffeinate processes from previous runs
         SleepManager.cleanupStaleCaffeinateProcesses()
+
+        // 2. Audit and restore normal sleep if prior abnormal termination left disablesleep active
+        SleepManager.cleanupStaleDisableSleepState()
 
         let savedModeStr = ConfigManager.shared.config.antiSleepMode ?? "smartAuto"
         self.mode = AntiSleepMode(rawValue: savedModeStr) ?? .smartAuto
@@ -112,24 +136,44 @@ public final class SleepManager: @unchecked Sendable {
 
         if shouldKeepAwake {
             enableSleepPrevention(reason: reason)
+            if isClosedLidModeEnabled {
+                enableClosedLidPrevention(reason: reason)
+            } else {
+                disableClosedLidPrevention()
+            }
         } else {
             disableSleepPrevention()
+            disableClosedLidPrevention()
         }
     }
 
     public var statusDescription: String {
-        if isAssertionActive {
-            return "ACTIVE: \(currentReason ?? "Keep awake held")"
-        } else {
-            return "IDLE: \(currentReason ?? "Released sleep assertion")"
+        var prefix = isAssertionActive ? "ACTIVE: \(currentReason ?? "Keep awake held")" : "IDLE: \(currentReason ?? "Released sleep assertion")"
+        if isDisableSleepActive {
+            prefix += " [Closed-Lid pmset Active]"
         }
+        return prefix
     }
 
     public func getDebugInfo() -> [String: Any] {
+        let minBatt = ConfigManager.shared.config.minBatteryPercentForClosedLid ?? 20
+        let power = SleepManager.getPowerState(minBatteryPercent: minBatt)
+        let priv = SleepManager.checkPrivilegeStatus()
+
         return [
             "mode": mode.rawValue,
             "modeDisplayName": mode.displayName,
             "isAssertionActive": isAssertionActive,
+            "isClosedLidEnabled": isClosedLidModeEnabled,
+            "isDisableSleepActive": isDisableSleepActive,
+            "hasClosedLidPrivilege": priv.hasPrivilege,
+            "privilegeDetail": priv.detail,
+            "powerState": [
+                "isACPower": power.isACPower,
+                "batteryPercent": power.batteryPercent as Any,
+                "isCharging": power.isCharging,
+                "isBatterySafe": power.isBatterySafe
+            ],
             "assertionID": assertionID,
             "reason": currentReason ?? "",
             "caffeinatePID": caffeinateProcess?.processIdentifier as Any,
@@ -146,6 +190,155 @@ public final class SleepManager: @unchecked Sendable {
         timer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             print("⏱️ Anti-sleep timer expired!")
             self?.mode = .disabled
+        }
+    }
+
+    // MARK: - Battery & Power State Inspection
+    public static func getPowerState(minBatteryPercent: Int = 20) -> PowerStateInfo {
+        let snapshot = IOPSCopyPowerSourcesInfo().takeRetainedValue()
+        let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as [CFTypeRef]
+        var isAC = false
+        var batteryCapacity: Int? = nil
+        var isCharging = false
+
+        for s in sources {
+            if let desc = IOPSGetPowerSourceDescription(snapshot, s).takeUnretainedValue() as? [String: Any] {
+                let state = desc[kIOPSPowerSourceStateKey as String] as? String
+                if state == (kIOPSACPowerValue as String) {
+                    isAC = true
+                }
+                if let cap = desc[kIOPSCurrentCapacityKey as String] as? Int {
+                    batteryCapacity = cap
+                }
+                if let charging = desc[kIOPSIsChargingKey as String] as? Bool {
+                    isCharging = charging
+                }
+            }
+        }
+
+        let isSafe = isAC || ((batteryCapacity ?? 0) >= minBatteryPercent)
+        return PowerStateInfo(isACPower: isAC, batteryPercent: batteryCapacity, isCharging: isCharging, isBatterySafe: isSafe)
+    }
+
+    // MARK: - Privilege & Sudo Validation
+    public static func checkPrivilegeStatus() -> (hasPrivilege: Bool, detail: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        task.arguments = ["-n", "-l", "/usr/bin/pmset"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let outStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let code = task.terminationStatus
+            if code == 0 && (outStr.contains("NOPASSWD") || outStr.contains("disablesleep") || outStr.contains("ALL")) {
+                return (true, "Passwordless sudo configured for pmset")
+            } else if code == 0 {
+                return (true, "Sudo validation succeeded")
+            } else {
+                return (false, "Sudo privilege not configured (requires sudoers rule)")
+            }
+        } catch {
+            return (false, "Failed to run sudo check: \(error.localizedDescription)")
+        }
+    }
+
+    @discardableResult
+    public static func executePmsetDisableSleep(enable: Bool) -> (success: Bool, exitCode: Int32, output: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        task.arguments = ["-n", "/usr/bin/pmset", "disablesleep", enable ? "1" : "0"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let outStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let code = task.terminationStatus
+            return (code == 0, code, outStr)
+        } catch {
+            return (false, -1, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Stale State Recovery on Launch
+    public static func cleanupStaleDisableSleepState() {
+        let fm = FileManager.default
+        let marker = disableSleepMarkerPath
+
+        var isStale = false
+        if fm.fileExists(atPath: marker) {
+            isStale = true
+        }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        task.arguments = ["-g", "live"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        if (try? task.run()) != nil {
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let outStr = String(data: data, encoding: .utf8), outStr.contains("SleepDisabled") && outStr.contains("1") {
+                isStale = true
+            }
+        }
+
+        if isStale {
+            print("🧹 Detected stale or active SleepDisabled state from prior run. Restoring normal sleep...")
+            let res = executePmsetDisableSleep(enable: false)
+            if res.success {
+                try? fm.removeItem(atPath: marker)
+                print("✅ Successfully restored normal sleep (pmset disablesleep 0) on startup")
+            } else {
+                print("⚠️ Could not restore pmset disablesleep 0: \(res.output)")
+            }
+        }
+    }
+
+    public func enableClosedLidPrevention(reason: String) {
+        let minBatt = ConfigManager.shared.config.minBatteryPercentForClosedLid ?? 20
+        let powerState = SleepManager.getPowerState(minBatteryPercent: minBatt)
+
+        if !powerState.isBatterySafe {
+            print("⚠️ Closed-lid mode suppressed: battery low (\(powerState.batteryPercent ?? 0)%) on battery power")
+            if isDisableSleepActive {
+                disableClosedLidPrevention()
+            }
+            return
+        }
+
+        if !isDisableSleepActive {
+            let res = SleepManager.executePmsetDisableSleep(enable: true)
+            if res.success {
+                isDisableSleepActive = true
+                let markerContent = "pid:\(ProcessInfo.processInfo.processIdentifier)\ntime:\(Date().timeIntervalSince1970)\nreason:\(reason)\n"
+                try? markerContent.write(toFile: SleepManager.disableSleepMarkerPath, atomically: true, encoding: .utf8)
+                print("🛡️ Enabled macOS Closed-Lid keep-awake (pmset disablesleep 1): \(reason)")
+            } else {
+                print("⚠️ Failed to enable pmset disablesleep 1: \(res.output)")
+            }
+        }
+    }
+
+    public func disableClosedLidPrevention() {
+        if isDisableSleepActive || FileManager.default.fileExists(atPath: SleepManager.disableSleepMarkerPath) {
+            let res = SleepManager.executePmsetDisableSleep(enable: false)
+            try? FileManager.default.removeItem(atPath: SleepManager.disableSleepMarkerPath)
+            isDisableSleepActive = false
+            if res.success {
+                print("🛡️ Restored macOS Normal sleep (pmset disablesleep 0)")
+            } else {
+                print("⚠️ Failed to restore pmset disablesleep 0: \(res.output)")
+            }
         }
     }
 
@@ -198,8 +391,33 @@ public final class SleepManager: @unchecked Sendable {
         return terminatedPIDs
     }
 
+    public func getLiveIOPMAssertionName() -> String? {
+        var assertions: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&assertions) == kIOReturnSuccess,
+              let dict = assertions?.takeRetainedValue() as? [pid_t: [[String: Any]]] else {
+            return nil
+        }
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        guard let list = dict[myPID] else { return nil }
+        for item in list {
+            if let aid = item["AssertionId"] as? IOPMAssertionID, aid == assertionID,
+               let name = item["AssertName"] as? String {
+                return name
+            }
+        }
+        return nil
+    }
+
     private func enableSleepPrevention(reason: String) {
+        let reasonChanged = (isAssertionActive && currentReason != reason)
         currentReason = reason
+
+        if reasonChanged {
+            IOPMAssertionRelease(assertionID)
+            assertionID = 0
+            isAssertionActive = false
+        }
+
         if !isAssertionActive {
             let reasonString = reason as CFString
             let result = IOPMAssertionCreateWithName(
@@ -247,5 +465,6 @@ public final class SleepManager: @unchecked Sendable {
 
     deinit {
         disableSleepPrevention()
+        disableClosedLidPrevention()
     }
 }

@@ -69,6 +69,8 @@ public struct AppConfig: Codable {
     public var doneSoundName: String? // default "Glass"
     public var attentionSoundName: String? // default "Basso"
     public var antiSleepMode: String? // default "smartAuto"
+    public var isClosedLidEnabled: Bool? // default false
+    public var minBatteryPercentForClosedLid: Int? // default 20
     public var customMainIconPath: String?
     public var agents: [String: AgentCustomConfig]
     public var quotas: [String: AgentQuotaConfig]?
@@ -83,6 +85,8 @@ public struct AppConfig: Codable {
             doneSoundName: "Glass",
             attentionSoundName: "Basso",
             antiSleepMode: "smartAuto",
+            isClosedLidEnabled: false,
+            minBatteryPercentForClosedLid: 20,
             customMainIconPath: nil,
             agents: [
                 "chatgpt": AgentCustomConfig(displayName: "ChatGPT Web", symbol: "💬", shortTag: "GPT", customIconPath: "~/.config/AgentSignalBar/icons/chatgpt.png"),
@@ -183,6 +187,18 @@ public final class ConfigManager: @unchecked Sendable {
         } catch {
             print("⚠️ Failed to parse config.json, using defaults: \(error)")
         }
+    }
+
+    public func setClosedLidEnabled(_ enabled: Bool) {
+        var cfg = config
+        cfg.isClosedLidEnabled = enabled
+        saveConfig(cfg)
+    }
+
+    public func setMinBatteryPercentForClosedLid(_ percent: Int) {
+        var cfg = config
+        cfg.minBatteryPercentForClosedLid = percent
+        saveConfig(cfg)
     }
 
     public func saveConfig(_ newConfig: AppConfig) {

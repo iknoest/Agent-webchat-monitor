@@ -237,6 +237,23 @@ public final class HTTPServer: @unchecked Sendable {
                 }
             }
             sendResponse(connection: connection, statusCode: 400, body: "Invalid relay request")
+        } else if path == "/sleep/closed-lid/toggle" {
+            let current = SleepManager.shared.isClosedLidModeEnabled
+            SleepManager.shared.isClosedLidModeEnabled = !current
+            MenuBarManager.shared.updateTitleAndMenu()
+            let resp: [String: Any] = [
+                "success": true,
+                "isClosedLidEnabled": SleepManager.shared.isClosedLidModeEnabled,
+                "isDisableSleepActive": SleepManager.shared.isDisableSleepActive,
+                "privilege": SleepManager.checkPrivilegeStatus().detail
+            ]
+            if let jsonData = try? JSONSerialization.data(withJSONObject: resp),
+               let jsonStr = String(data: jsonData, encoding: .utf8) {
+                sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonStr)
+            } else {
+                sendResponse(connection: connection, statusCode: 200, body: "{\"success\":true}")
+            }
+            return
         } else if path == "/relay/chatgpt-output" {
             if method == "POST", let bodyRange = requestString.range(of: "\r\n\r\n") {
                 let body = String(requestString[bodyRange.upperBound...])

@@ -609,6 +609,105 @@ final class AgentSignalBarTests: XCTestCase {
         _ = store.handleClaudeHookEvent(json: ["event": "Stop", "session_id": testSess, "cwd": "/tmp"], isTestMode: true)
         XCTAssertEqual(store.getStatus(for: .claude).status, .done, "Stop must transition to done.")
     }
+
+    func testClosedLidV2PowerStateAndSmartAutoIntegration() throws {
+        let sleepMgr = SleepManager.shared
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+
+        // 1. Power State Schema
+        let powerState = SleepManager.getPowerState(minBatteryPercent: 20)
+        if !powerState.isACPower {
+            XCTAssertNotNil(powerState.batteryPercent, "Battery percent must be available on battery power.")
+        } else {
+            XCTAssertTrue(powerState.isBatterySafe, "AC power must evaluate isBatterySafe == true.")
+        }
+
+        // 2. Closed-Lid Mode State Binding
+        sleepMgr.isClosedLidModeEnabled = true
+        defer {
+            sleepMgr.isClosedLidModeEnabled = false
+            store.updateStatus(for: .antigravity, status: .idle)
+            store.updateStatus(for: .claude, status: .idle)
+            store.updateStatus(for: .chatgpt, status: .idle)
+        }
+
+        // Claude exhausted alone -> Smart Auto idle -> Closed-Lid disabled
+        let exhaustedUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 100.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+
+        let evalIdle = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertFalse(evalIdle.shouldKeepAwake, "Smart Auto must be idle for exhausted Claude alone.")
+        sleepMgr.updateSleepAssertionState()
+        XCTAssertFalse(sleepMgr.isAssertionActive, "Assertion must be released.")
+        XCTAssertFalse(sleepMgr.isDisableSleepActive, "Closed-Lid must not be active.")
+
+        // AGY working -> Smart Auto active
+        store.updateStatus(for: .antigravity, status: .working, detail: "AGY Task")
+        let evalWorking = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertTrue(evalWorking.shouldKeepAwake, "Smart Auto must be active when AGY is working.")
+        XCTAssertTrue(evalWorking.reason.contains("Antigravity"), "Reason must mention Antigravity.")
+    }
+
+    func testAssertionReasonSynchronizationAcrossProviderTransitions() throws {
+        let sleepMgr = SleepManager.shared
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+
+        sleepMgr.mode = .smartAuto
+        defer {
+            store.updateStatus(for: .chatgpt, status: .idle)
+            store.updateStatus(for: .claude, status: .idle)
+            store.updateStatus(for: .antigravity, status: .idle)
+            sleepMgr.updateSleepAssertionState()
+        }
+
+        // 1. ChatGPT working
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        store.updateStatus(for: .chatgpt, status: .working, detail: "Generating")
+        sleepMgr.updateSleepAssertionState()
+
+        XCTAssertTrue(sleepMgr.isAssertionActive)
+        XCTAssertTrue(sleepMgr.currentReason?.contains("ChatGPT Web") == true)
+        let debug1 = sleepMgr.getDebugInfo()
+        XCTAssertTrue((debug1["reason"] as? String)?.contains("ChatGPT Web") == true)
+        if let liveName1 = sleepMgr.getLiveIOPMAssertionName() {
+            XCTAssertTrue(liveName1.contains("ChatGPT Web"))
+        }
+
+        // 2. Switch to Claude working
+        let availUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 15.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: availUsage)
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+        sleepMgr.updateSleepAssertionState()
+
+        XCTAssertTrue(sleepMgr.isAssertionActive, "Keep-awake assertion must remain active continuously.")
+        XCTAssertTrue(sleepMgr.currentReason?.contains("Claude Code") == true)
+        let debug2 = sleepMgr.getDebugInfo()
+        XCTAssertTrue((debug2["reason"] as? String)?.contains("Claude Code") == true)
+        if let liveName2 = sleepMgr.getLiveIOPMAssertionName() {
+            XCTAssertTrue(liveName2.contains("Claude Code"))
+        }
+    }
 }
 #endif
 

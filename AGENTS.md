@@ -614,3 +614,36 @@ Next: Report Phase A & B completion to Ava.
 Blockers: none
 
 [RELEASE] Phase A & B — Recoverable Baseline Checkpoint & Claude Quota Exhaustion Semantics — antigravity — 2026-08-16T14:15:00+02:00
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: Closed-Lid V2 Implementation & Post-Quota Checkpoint
+Done:
+1. Created post-quota checkpoint commit `792b3af61f0f9b69fc4da4cbf86ca55685d0d828` ("checkpoint: separate Claude quota availability from lifecycle").
+2. Updated `PLAN.md` to record AGY permission as `IMPLEMENTED — HUMAN ACCEPTANCE PENDING` and Claude quota semantics as `IMPLEMENTATION ACCEPTED (100% exhausted UI natural-event confirmation pending)`.
+3. Implemented Closed-Lid V2 capability in `SleepManager.swift`:
+   - Power State Inspection: Added `IOKit.ps` inspection (`PowerStateInfo`, `getPowerState`) to verify AC power vs Battery power and battery percentage.
+   - Battery Safety Guard: Automatically suppresses `disablesleep 1` if battery is < 20% on battery power to prevent complete battery drain.
+   - Scoped Privileged Execution: Added `checkPrivilegeStatus()` and `executePmsetDisableSleep()` executing `/usr/bin/sudo -n /usr/bin/pmset disablesleep 1` and `0`.
+   - Lifecycle & Quota Binding: Layered under Smart Auto policy; enables `disablesleep 1` only when enabled and Smart Auto is active; restores `disablesleep 0` on completion, app quit, mode disable, or on startup if a stale state marker is detected.
+   - UI & API Integration: Added menu item toggle in `MenuBarManager.swift`, render signature integration, and `/sleep/closed-lid/toggle` in `HTTPServer.swift`.
+4. Tests: Added Tests 29–31 to `Stage1TestRunner` (31/31 passed) and unit tests in `AgentSignalBarTests.swift` (XCTest passed). Built release bundle.
+Verified: `swift run Stage1TestRunner` (31/31 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Present Closed-Lid V2 architecture and exact one-time sudoers command to Ava for approval.
+Blockers: Sudoers configuration pending Ava's review and approval.
+
+[RELEASE] Closed-Lid V2 Implementation & Post-Quota Checkpoint — antigravity — 2026-08-16T15:35:00+02:00
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: Closed-Lid V2 Final Closeout & IOPMAssertion Synchronization Fix
+Done:
+1. Human Acceptance: Ava completed real-world closed-lid testing (4-minute continuous execution with lid closed, followed by clean automatic restoration to `SleepDisabled 0` upon session completion). Recorded Closed-Lid V2 as `HUMAN ACCEPTED` in `PLAN.md`.
+2. Fixed Reason Synchronization Bug: In `SleepManager.swift` (`enableSleepPrevention`), synchronized active `IOPMAssertion` label upon provider transition (e.g. ChatGPT -> Claude) by releasing and recreating the assertion with the new reason string, ensuring `/debug/sleep`, `currentReason`, and live `powerd` assertion names (`getLiveIOPMAssertionName()`) remain 100% in sync without disrupting background caffeinate.
+3. Updated Project Truth: In `PLAN.md`, marked Closed-Lid V2 as `HUMAN ACCEPTED`, while preserving `AGY permission: IMPLEMENTED — HUMAN ACCEPTANCE PENDING` and `Claude 100% quota UI: NATURAL-EVENT HUMAN CONFIRMATION PENDING`.
+4. Added Regression Tests: Added Test 32 to `Stage1TestRunner` (32/32 passed) and `testAssertionReasonSynchronizationAcrossProviderTransitions` to `AgentSignalBarTests.swift` (XCTest passed). Rebuilt release bundle (`./build_app.sh`).
+Verified: `swift run Stage1TestRunner` (32/32 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Create local commit `checkpoint: accept closed-lid Smart Auto keep-awake`.
+Blockers: none
+
+[RELEASE] Closed-Lid V2 Final Closeout & IOPMAssertion Synchronization Fix — antigravity — 2026-08-16T19:55:00+02:00

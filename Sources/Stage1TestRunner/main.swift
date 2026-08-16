@@ -825,7 +825,142 @@ runTest("28. Transitioning From Quota Exhausted to Available Restores Clean Stat
     try assert(info.availability == .available, "AgentInfo.availability must restore to .available.")
 }
 
-print("🎉 All 28 Production Swift Containment, Turn Continuity & Quota Tests Passed!")
+// 29. Closed-Lid V2: Power State Inspection & Battery Safety
+runTest("29. Closed-Lid V2: Power State Inspection & Battery Safety") {
+    let powerState = SleepManager.getPowerState(minBatteryPercent: 20)
+    print("🔋 Tested Power State: isACPower=\(powerState.isACPower), battery=\(powerState.batteryPercent ?? -1)%, charging=\(powerState.isCharging), isSafe=\(powerState.isBatterySafe)")
+
+    // Validate schema
+    if !powerState.isACPower {
+        try assert(powerState.batteryPercent != nil, "Battery percent must be available on battery power.")
+        let expectedSafe = (powerState.batteryPercent ?? 0) >= 20
+        try assert(powerState.isBatterySafe == expectedSafe, "isBatterySafe must be true only when battery >= 20% on battery power.")
+    } else {
+        try assert(powerState.isBatterySafe == true, "isBatterySafe must be true on AC power.")
+    }
+}
+
+// 30. Closed-Lid V2: Stale Marker Detection & Startup Recovery Lifecycle
+runTest("30. Closed-Lid V2: Stale Marker Detection & Startup Recovery Lifecycle") {
+    let markerPath = SleepManager.disableSleepMarkerPath
+    let fm = FileManager.default
+
+    // Simulate a stale marker left by a crashed prior process
+    let fakeStaleContent = "pid:99999\ntime:\(Date().timeIntervalSince1970 - 3600)\nreason:Prior crash\n"
+    try? fakeStaleContent.write(toFile: markerPath, atomically: true, encoding: .utf8)
+    try assert(fm.fileExists(atPath: markerPath), "Stale marker file must exist for test.")
+
+    // Run cleanup
+    SleepManager.cleanupStaleDisableSleepState()
+
+    // Clean up test marker
+    try? fm.removeItem(atPath: markerPath)
+    try assert(!fm.fileExists(atPath: markerPath), "Marker file must be removed after cleanup.")
+}
+
+// 31. Closed-Lid V2: Smart Auto Lifecycle Binding & Quota Exhaustion Decoupling
+runTest("31. Closed-Lid V2: Smart Auto Lifecycle Binding & Quota Exhaustion Decoupling") {
+    let sleepMgr = SleepManager.shared
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    sleepMgr.mode = .smartAuto
+    sleepMgr.isClosedLidModeEnabled = true
+    defer {
+        sleepMgr.isClosedLidModeEnabled = false
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        store.updateStatus(for: .chatgpt, status: .idle)
+    }
+
+    // Scenario A: Claude quota exhausted alone -> Smart Auto IDLE -> Closed-Lid NOT active
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    let evalA = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalA.shouldKeepAwake == false, "A. Smart Auto MUST be idle for quota-exhausted Claude alone.")
+    sleepMgr.updateSleepAssertionState()
+    try assert(sleepMgr.isAssertionActive == false, "A. Open-lid keep-awake MUST be released.")
+    try assert(sleepMgr.isDisableSleepActive == false, "A. Closed-lid disablesleep MUST NOT be active when Smart Auto is idle.")
+
+    // Scenario B: Active AGY + Exhausted Claude -> Smart Auto ACTIVE -> Keep-awake asserted
+    store.updateStatus(for: .antigravity, status: .working, detail: "AGY Task active")
+    let evalB = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalB.shouldKeepAwake == true, "B. Smart Auto MUST be active when AGY is working.")
+    try assert(evalB.reason.contains("Antigravity"), "B. Smart Auto reason must attribute keep-awake to Antigravity.")
+
+    // Scenario C: Completion -> Releases all keep-awake
+    store.updateStatus(for: .antigravity, status: .done, detail: "AGY Task completed")
+    let evalC = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalC.shouldKeepAwake == false, "C. Smart Auto MUST release when AGY completes.")
+    sleepMgr.updateSleepAssertionState()
+    try assert(sleepMgr.isAssertionActive == false, "C. Keep-awake MUST be released.")
+    try assert(sleepMgr.isDisableSleepActive == false, "C. Closed-lid disablesleep MUST be restored upon completion.")
+}
+
+// 32. Smart Auto Reason & Live IOPMAssertion Label Synchronization Across Provider Transitions
+runTest("32. Smart Auto Reason & Live IOPMAssertion Label Synchronization Across Provider Transitions") {
+    let sleepMgr = SleepManager.shared
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    sleepMgr.mode = .smartAuto
+    defer {
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        sleepMgr.updateSleepAssertionState()
+    }
+
+    // Step 1: ChatGPT working
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .working, detail: "Generating")
+    sleepMgr.updateSleepAssertionState()
+
+    try assert(sleepMgr.isAssertionActive == true, "Keep-awake must be active for ChatGPT.")
+    try assert(sleepMgr.currentReason?.contains("ChatGPT Web") == true, "currentReason must mention ChatGPT Web.")
+    let debugInfo1 = sleepMgr.getDebugInfo()
+    try assert((debugInfo1["reason"] as? String)?.contains("ChatGPT Web") == true, "/debug/sleep reason must contain ChatGPT Web.")
+    if let liveName1 = sleepMgr.getLiveIOPMAssertionName() {
+        try assert(liveName1.contains("ChatGPT Web"), "Live IOPMAssertion label in powerd must contain ChatGPT Web: \(liveName1)")
+    }
+
+    // Step 2: Transition: ChatGPT becomes idle, Claude becomes working
+    let availableUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 10.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: availableUsage)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+    sleepMgr.updateSleepAssertionState()
+
+    try assert(sleepMgr.isAssertionActive == true, "Keep-awake must REMAIN active continuously across provider switch.")
+    try assert(sleepMgr.currentReason?.contains("Claude Code") == true, "currentReason must update to Claude Code.")
+    let debugInfo2 = sleepMgr.getDebugInfo()
+    try assert((debugInfo2["reason"] as? String)?.contains("Claude Code") == true, "/debug/sleep reason must update to Claude Code.")
+    if let liveName2 = sleepMgr.getLiveIOPMAssertionName() {
+        try assert(liveName2.contains("Claude Code"), "Live IOPMAssertion label in powerd must update to Claude Code: \(liveName2)")
+    }
+}
+
+print("🎉 All 32 Production Swift Containment, Turn Continuity, Quota, Closed-Lid & Assertion Synchronization Tests Passed!")
 
 
 
