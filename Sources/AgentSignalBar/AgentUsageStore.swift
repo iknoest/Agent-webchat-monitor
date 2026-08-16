@@ -59,6 +59,18 @@ public struct AgentUsageData: Codable {
             self.freshness = "Fresh"
         }
     }
+
+    public var isQuotaExhausted: Bool {
+        guard isLiveSource, freshness != "Unavailable" else { return false }
+        if isPercentUsed {
+            if let session = sessionLimitPercent, session >= 100.0 { return true }
+            if let weekly = weeklyLimitPercent, weekly >= 100.0 { return true }
+        } else {
+            if let session = sessionLimitPercent, session <= 0.0 { return true }
+            if let weekly = weeklyLimitPercent, weekly <= 0.0 { return true }
+        }
+        return false
+    }
 }
 
 public final class AgentUsageStore: @unchecked Sendable {

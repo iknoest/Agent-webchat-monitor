@@ -19,10 +19,11 @@
 
 ### ACCEPTED
 - [x] **ChatGPT**: Exact Chrome return routing (`[x] Ava accepted`: exact Chrome tabId activation without opening new tabs/windows)
+- [x] **Claude Quota Semantics**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, Smart Auto keep-awake excluded when exhausted (`[x] Implementation Accepted`; 100% exhausted UI natural-event confirmation pending)
 
-### TESTING
-- [ ] **Claude**: Provider-native hooks undergoing final Ava real-use acceptance
-- [ ] **Antigravity**: Native hooks + Notification Center probe undergoing final Ava real-use acceptance
+### TESTING / HUMAN ACCEPTANCE PENDING
+- [ ] **Antigravity Permission**: Native hooks + AX notification center probe (`IMPLEMENTED — HUMAN ACCEPTANCE PENDING`)
+- [ ] **Claude Lifecycle**: Provider-native hooks undergoing final Ava real-use acceptance
 
 ### OPEN
 - [ ] **Codex**: Codex Desktop session detector

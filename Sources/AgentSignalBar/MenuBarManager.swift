@@ -162,7 +162,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
 
 
-            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false);"
+            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
         }
         return "\(summary)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
     }
@@ -274,9 +274,27 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         for agent in AgentID.allCases {
             let info = allStates[agent] ?? AgentInfo(id: agent)
             let providerSessions = AgentStore.shared.getSessions(for: agent)
-            
+
+            let isQuotaExhausted = (info.availability == .quotaExhausted) || (AgentUsageStore.shared.getUsage(for: agent)?.isQuotaExhausted == true)
+            let isUnavailable = (info.detail?.contains("Monitoring unavailable") == true || info.detail?.contains("Experimental") == true)
+            let statusLabel: String
+            if isQuotaExhausted {
+                statusLabel = "Quota Exhausted"
+            } else if isUnavailable {
+                statusLabel = "Monitoring unavailable / Experimental"
+            } else {
+                statusLabel = info.status.statusTitle
+            }
+
             var durationTag = ""
-            if info.status == .working, let start = info.thinkingStartTime {
+            if isQuotaExhausted {
+                if agent == .claude {
+                    let pct = Int(AgentUsageStore.shared.getUsage(for: .claude)?.sessionLimitPercent ?? 100.0)
+                    durationTag = " [5-hour usage: \(pct)%]"
+                } else {
+                    durationTag = " [\(info.lastUpdated.relativeString())]"
+                }
+            } else if info.status == .working, let start = info.thinkingStartTime {
                 let elapsed = Int(Date().timeIntervalSince(start))
                 let mins = elapsed / 60
                 let secs = elapsed % 60
@@ -295,8 +313,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
             let badge = info.status.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
-            let isUnavailable = (info.detail?.contains("Monitoring unavailable") == true || info.detail?.contains("Experimental") == true)
-            let statusLabel = isUnavailable ? "Monitoring unavailable / Experimental" : info.status.statusTitle
             let title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(statusLabel)]\(durationTag)"
 
             let item = NSMenuItem(title: title, action: #selector(agentItemClicked(_:)), keyEquivalent: "")
@@ -306,6 +322,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             // Submenu for Detailed Info & Tracked Sessions
             let submenu = NSMenu()
+
+            if isQuotaExhausted {
+                let pct = Int(AgentUsageStore.shared.getUsage(for: agent)?.sessionLimitPercent ?? 100.0)
+                let availItem = NSMenuItem(title: "Availability: Quota Exhausted (\(agent == .claude ? "5-hour usage: \(pct)%" : "100% used"))", action: nil, keyEquivalent: "")
+                availItem.isEnabled = false
+                submenu.addItem(availItem)
+            }
 
             if let sessionTitle = info.sessionTitle, !sessionTitle.isEmpty {
                 let compactTitle = sessionTitle.count > 45 ? String(sessionTitle.prefix(42)) + "..." : sessionTitle
@@ -452,7 +475,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             if let sPct = claudeUsage.sessionLimitPercent {
                 let sBar = makeCompactBar(percent: sPct)
                 let sReset = claudeUsage.sessionResetText ?? ""
-                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sPct))% used · \(sReset)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let resetTag = sReset.isEmpty ? "" : " · \(sReset)"
+                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sPct))% used\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
                 row1.isEnabled = false
                 menu.addItem(row1)
             } else {
@@ -464,7 +488,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             if let wPct = claudeUsage.weeklyLimitPercent {
                 let wBar = makeCompactBar(percent: wPct)
                 let wReset = claudeUsage.weeklyResetText ?? ""
-                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wPct))% used · \(wReset)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let resetTag = wReset.isEmpty ? "" : " · \(wReset)"
+                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wPct))% used\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
                 row2.isEnabled = false
                 menu.addItem(row2)
             } else {

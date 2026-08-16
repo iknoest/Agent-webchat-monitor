@@ -292,40 +292,17 @@ public final class AutoMonitor: @unchecked Sendable {
         let sd = (uDict["sd"] as? NSNumber)?.doubleValue ?? 0.0 // Weekly % used
 
         var sampleDate: Date? = nil
-        var resetText = "resets in 3h 02m"
-
         if let lastTimestampMs = (lastSample["t"] as? NSNumber)?.doubleValue {
             sampleDate = Date(timeIntervalSince1970: lastTimestampMs / 1000.0)
-            let windowDurationMs: Double = 5.0 * 3600.0 * 1000.0
-            let nowMs = Date().timeIntervalSince1970 * 1000.0
-            
-            var windowStartMs = lastTimestampMs
-            for sample in samples.reversed() {
-                if let u = sample["u"] as? [String: Any],
-                   let fhVal = (u["fh"] as? NSNumber)?.doubleValue, fhVal == 0 {
-                    if let t = (sample["t"] as? NSNumber)?.doubleValue {
-                        windowStartMs = t
-                        break
-                    }
-                }
-            }
-
-            let resetTimeMs = windowStartMs + windowDurationMs
-            if resetTimeMs > nowMs {
-                let diffSecs = Int((resetTimeMs - nowMs) / 1000.0)
-                let hrs = diffSecs / 3600
-                let mins = (diffSecs % 3600) / 60
-                resetText = "resets in \(hrs)h \(mins)m"
-            }
         }
 
         let isStale = sampleDate != nil && Date().timeIntervalSince(sampleDate!) > 86400
 
         var usage = AgentUsageStore.shared.getUsage(for: .claude) ?? AgentUsageData(agent: .claude)
         usage.sessionLimitPercent = fh
-        usage.sessionResetText = resetText
+        usage.sessionResetText = nil // No guessing or fabricating Claude reset time
         usage.weeklyLimitPercent = sd
-        usage.weeklyResetText = "resets Mon 10:59 PM"
+        usage.weeklyResetText = nil
         usage.isPercentUsed = true
         usage.isLiveSource = true
         usage.quotaSource = "plan-usage-history.json"
@@ -335,6 +312,9 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.lastUpdated = Date()
 
         AgentUsageStore.shared.updateUsage(for: .claude, data: usage)
+
+        let isExhausted = usage.isQuotaExhausted
+        AgentStore.shared.updateAvailability(for: .claude, availability: isExhausted ? .quotaExhausted : .available)
     }
 
     // Dynamic Codex Usage Calculator from config.json and local files (No fake hardcoded fallback percentages)

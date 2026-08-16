@@ -110,6 +110,7 @@ public final class HTTPServer: @unchecked Sendable {
 
                     dict[agent.rawValue] = [
                         "status": info.status.rawValue,
+                        "availability": info.availability.rawValue,
                         "badge": info.status.badge(),
                         "name": info.id.displayName,
                         "detail": info.detail ?? "",
@@ -118,7 +119,8 @@ public final class HTTPServer: @unchecked Sendable {
                         "quotaSource": usage?.quotaSource ?? "none",
                         "quotaTimestamp": quotaTsStr as Any,
                         "parserDecision": usage?.parserDecision ?? "no_live_disk_file",
-                        "freshness": usage?.freshness ?? "Unavailable"
+                        "freshness": usage?.freshness ?? "Unavailable",
+                        "isQuotaExhausted": usage?.isQuotaExhausted ?? false
                     ]
                 }
                 dict["sleep"] = SleepManager.shared.getDebugInfo()

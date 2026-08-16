@@ -639,7 +639,193 @@ runTest("23. Native Antigravity Permission Detection, Correlation Lifecycle & Sm
     try assert(evalDone.shouldKeepAwake == false, "9. Smart Auto releases assertion once all agents are done/idle.")
 }
 
-print("🎉 All 23 Production Swift Containment, Turn Continuity & Keep-Awake Tests Passed!")
+// 24. Claude Quota Exhaustion Semantics & Separation from Lifecycle
+runTest("24. Claude Quota Exhaustion Semantics & Separation from Lifecycle") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let menuMgr = MenuBarManager.shared
+
+    // Set Claude live usage to 100% (quota exhausted)
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        sessionResetText: nil,
+        weeklyLimitPercent: 54.0,
+        weeklyResetText: nil,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        quotaTimestamp: Date(),
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+
+    // 1. Quota exhaustion establishes availability == .quotaExhausted
+    try assert(exhaustedUsage.isQuotaExhausted == true, "1. 100% session usage must evaluate isQuotaExhausted == true.")
+    try assert(store.getAvailability(for: .claude) == .quotaExhausted, "1. Provider availability must be .quotaExhausted.")
+
+    let claudeState = store.getStatus(for: .claude)
+    try assert(claudeState.availability == .quotaExhausted, "1. AgentInfo.availability must be .quotaExhausted.")
+
+    // 2. Quota exhausted alone MUST NOT produce .blocked (Needs You) or Attention Needed
+    try assert(claudeState.status != .blocked, "2. Quota exhaustion MUST NOT set lifecycle status to .blocked.")
+    try assert(claudeState.status != .working, "2. Quota exhaustion MUST NOT set lifecycle status to .working.")
+
+    // 3. Render signature and menu bar display should communicate Quota Exhausted
+    let renderSig = menuMgr.computeRenderSignature()
+    try assert(renderSig.contains("quotaExhausted"), "3. Render signature must reflect quotaExhausted availability.")
+}
+
+// 25. Quota Exhausted Alone Does Not Keep Smart Auto Awake
+runTest("25. Quota Exhausted Alone Does Not Keep Smart Auto Awake") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+
+    // Ensure all providers are otherwise idle/done
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    // Claude quota is exhausted
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "Quota exhausted Claude alone MUST NOT keep Smart Auto awake.")
+    try assert(eval.reason.contains("idle/done/off"), "Smart Auto reason must report idle.")
+}
+
+// 26. Quota Exhausted Claude + Active AGY or ChatGPT Keeps Smart Auto Awake
+runTest("26. Quota Exhausted Claude + Active AGY or ChatGPT Keeps Smart Auto Awake") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+
+    // Claude quota is exhausted
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    // Scenario A: Claude exhausted + AGY Working -> Smart Auto active because of AGY
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .antigravity, status: .working, detail: "AGY Task running")
+    let evalAgy = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalAgy.shouldKeepAwake == true, "A. Smart Auto MUST be active when AGY is working while Claude is exhausted.")
+    try assert(evalAgy.reason.contains("Antigravity"), "A. Smart Auto reason must attribute keep-awake to Antigravity.")
+
+    // Scenario B: Claude exhausted + ChatGPT Working -> Smart Auto active because of ChatGPT
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .working, detail: "ChatGPT generating")
+    let evalGpt = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalGpt.shouldKeepAwake == true, "B. Smart Auto MUST be active when ChatGPT is working while Claude is exhausted.")
+    try assert(evalGpt.reason.contains("ChatGPT Web"), "B. Smart Auto reason must attribute keep-awake to ChatGPT Web.")
+
+    // Reset ChatGPT
+    store.updateStatus(for: .chatgpt, status: .idle)
+}
+
+// 27. Genuine Claude Needs You While Available Triggers Needs You & Smart Auto
+runTest("27. Genuine Claude Needs You While Available Triggers Needs You & Smart Auto") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+    let testSessionId = "test_claude_quota_perm_001"
+    defer { store.purgeSyntheticAndStaleSessions(provider: .claude) }
+
+    // Claude quota is available (e.g. 45% used)
+    let availableUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 45.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: availableUsage)
+    try assert(store.getAvailability(for: .claude) == .available, "Claude must be available.")
+
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    // Genuine PermissionRequest hook arrives
+    let permPayload: [String: Any] = [
+        "event": "PermissionRequest",
+        "session_id": testSessionId,
+        "tool_name": "Bash",
+        "cwd": "/tmp"
+    ]
+    _ = store.handleClaudeHookEvent(json: permPayload, isTestMode: true)
+
+    let claudeInfo = store.getStatus(for: .claude)
+    try assert(claudeInfo.status == .blocked, "Genuine PermissionRequest while quota is available MUST trigger .blocked (Needs You).")
+    try assert(claudeInfo.availability == .available, "Availability must remain .available.")
+
+    let evalPerm = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalPerm.shouldKeepAwake == true, "Smart Auto MUST be active for genuine Claude permission gate.")
+    try assert(evalPerm.reason.contains("Claude Code"), "Smart Auto reason must mention Claude Code.")
+
+    // User approves -> Stop -> Done
+    _ = store.handleClaudeHookEvent(json: ["event": "Stop", "session_id": testSessionId, "cwd": "/tmp"], isTestMode: true)
+    try assert(store.getStatus(for: .claude).status == .done, "Stop after approval must transition to done.")
+    try assert(sleepMgr.evaluateSmartAutoRequirement().shouldKeepAwake == false, "Smart Auto must release keep-awake upon completion.")
+}
+
+// 28. Transitioning From Quota Exhausted to Available Restores Clean State
+runTest("28. Transitioning From Quota Exhausted to Available Restores Clean State") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    // Start exhausted
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    try assert(store.getAvailability(for: .claude) == .quotaExhausted, "Must be quotaExhausted.")
+
+    // Usage resets/drops to 0% (e.g. 5-hour window rollover)
+    let resetUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 0.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: resetUsage)
+
+    try assert(resetUsage.isQuotaExhausted == false, "0% usage must NOT be quota exhausted.")
+    try assert(store.getAvailability(for: .claude) == .available, "Availability must restore to .available without residue.")
+    let info = store.getStatus(for: .claude)
+    try assert(info.availability == .available, "AgentInfo.availability must restore to .available.")
+}
+
+print("🎉 All 28 Production Swift Containment, Turn Continuity & Quota Tests Passed!")
 
 
 

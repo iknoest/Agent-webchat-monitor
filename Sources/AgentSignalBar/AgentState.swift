@@ -56,6 +56,18 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum ProviderAvailability: String, Codable, Sendable {
+    case available = "available"
+    case quotaExhausted = "quotaExhausted"
+
+    public var displayName: String {
+        switch self {
+        case .available: return "Available"
+        case .quotaExhausted: return "Quota Exhausted"
+        }
+    }
+}
+
 public enum AgentStatus: String, Codable, Sendable {
     case off = "off"
     case idle = "idle"
@@ -227,6 +239,7 @@ public struct AgentSessionInfo: Codable, Sendable {
 public struct AgentInfo: Codable {
     public let id: AgentID
     public var status: AgentStatus
+    public var availability: ProviderAvailability
     public var lastUpdated: Date
     public var detail: String?
     public var thinkingStartTime: Date?
@@ -244,6 +257,7 @@ public struct AgentInfo: Codable {
     public init(
         id: AgentID,
         status: AgentStatus = .off,
+        availability: ProviderAvailability = .available,
         lastUpdated: Date = Date(),
         detail: String? = nil,
         thinkingStartTime: Date? = nil,
@@ -260,6 +274,7 @@ public struct AgentInfo: Codable {
     ) {
         self.id = id
         self.status = status
+        self.availability = availability
         self.lastUpdated = lastUpdated
         self.detail = detail
         self.thinkingStartTime = thinkingStartTime
@@ -1146,25 +1161,76 @@ public final class AgentStore: @unchecked Sendable {
         lock.unlock()
     }
 
+    public func getAvailability(for agent: AgentID) -> ProviderAvailability {
+        lock.lock()
+        defer { lock.unlock() }
+        if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
+            return .quotaExhausted
+        }
+        return states[agent]?.availability ?? .available
+    }
+
+    public func updateAvailability(for agent: AgentID, availability: ProviderAvailability) {
+        lock.lock()
+        if var info = states[agent] {
+            let oldAvail = info.availability
+            info.availability = availability
+            states[agent] = info
+            lock.unlock()
+            if oldAvail != availability {
+                notifyObservers(agent: agent, oldStatus: info.status, newStatus: info.status, detail: info.detail)
+            }
+        } else {
+            lock.unlock()
+        }
+    }
+
     public func getStatus(for agent: AgentID) -> AgentInfo {
         lock.lock()
         defer { lock.unlock() }
-        return states[agent] ?? AgentInfo(id: agent, status: .off)
+        var info = states[agent] ?? AgentInfo(id: agent, status: .off)
+        if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
+            info.availability = .quotaExhausted
+        } else {
+            info.availability = .available
+        }
+        return info
     }
 
     public func getAllStates() -> [AgentID: AgentInfo] {
         lock.lock()
         defer { lock.unlock() }
-        return states
+        var copy = states
+        for agent in AgentID.allCases {
+            var info = copy[agent] ?? AgentInfo(id: agent, status: .off)
+            if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
+                info.availability = .quotaExhausted
+            } else {
+                info.availability = .available
+            }
+            copy[agent] = info
+        }
+        return copy
     }
 
     public func getHighestPriorityAgent() -> AgentInfo? {
         lock.lock()
         defer { lock.unlock() }
 
-        let candidateBlocked = AgentID.allCases.map({ states[$0] ?? AgentInfo(id: $0) }).first(where: { $0.status == .blocked })
-        let candidateDone = AgentID.allCases.map({ states[$0] ?? AgentInfo(id: $0) }).first(where: { $0.status == .done })
-        let candidateWorking = AgentID.allCases.map({ states[$0] ?? AgentInfo(id: $0) }).first(where: { $0.status == .working })
+        var resolvedStates: [AgentID: AgentInfo] = [:]
+        for agent in AgentID.allCases {
+            var info = states[agent] ?? AgentInfo(id: agent, status: .off)
+            if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
+                info.availability = .quotaExhausted
+            } else {
+                info.availability = .available
+            }
+            resolvedStates[agent] = info
+        }
+
+        let candidateBlocked = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .blocked && $0.availability != .quotaExhausted })
+        let candidateDone = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .done && $0.availability != .quotaExhausted })
+        let candidateWorking = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .working && $0.availability != .quotaExhausted })
 
         let candidate = candidateBlocked ?? candidateDone ?? candidateWorking
 

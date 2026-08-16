@@ -599,3 +599,18 @@ Verified: `swift run Stage1TestRunner` (23/23 passed), `swift test` (clean exit 
 Next: Give Ava the single human acceptance test.
 Blockers: none
 [RELEASE] AGY Permission Bounded Repair — Proven Native AX Banner Shape & Tool Correlation — antigravity — 2026-08-16T14:00:00+02:00
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: Phase A & B — Recoverable Baseline Checkpoint & Claude Quota Exhaustion Semantics
+Done:
+1. Phase A Checkpoint: Verified working tree against full test suite. Cleaned temporary probe binaries, created local git commit `e77dff3b337ea4ac47791341edffadab265ebf17` ("checkpoint: AgentSignalBar pre-quota and closed-lid baseline") without pushing. Recorded `e77dff3b337ea4ac47791341edffadab265ebf17` as the true rollback baseline.
+2. Provider Availability Separation: Added `ProviderAvailability` (`.available`, `.quotaExhausted`) to `AgentState.swift` & `AgentUsageStore.swift`. Decoupled quota exhaustion from lifecycle turn states (`.working`, `.blocked`, `.done`, `.idle`, `.off`). Quota exhaustion communicates `Quota Exhausted` with live percentage without triggering Attention Needed 🔴 alarms.
+3. Removed Fabricated Claude Reset Guessing: In `AutoMonitor.swift` (`updateClaudeUsageFromLocalHistory`) and `MenuBarManager.swift`, removed hardcoded guessing fallback (`"resets in 3h 02m"`). Live 5-hour usage (e.g. `5-hour usage: 100%` or `100% used`) displays without fabricated reset time.
+4. Smart Auto Policy Enforced: In `SleepManager.swift` (`evaluateSmartAutoRequirement`), quota-exhausted providers are filtered out of keep-awake evaluation. Claude quota exhaustion alone keeps Smart Auto IDLE, while active AGY/ChatGPT continues to keep Smart Auto ACTIVE. Genuine Claude permission gates while available continue to trigger Needs You and activate Smart Auto.
+5. Verification: Added Tests 24–28 to `Stage1TestRunner` (28/28 passed) and unit tests in `AgentSignalBarTests.swift` (XCTest passed). Ran `background_test.js` (28/28 passed) and built release app bundle (`./build_app.sh`).
+Verified: `swift run Stage1TestRunner` (28/28 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Report Phase A & B completion to Ava.
+Blockers: none
+
+[RELEASE] Phase A & B — Recoverable Baseline Checkpoint & Claude Quota Exhaustion Semantics — antigravity — 2026-08-16T14:15:00+02:00

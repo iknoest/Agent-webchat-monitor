@@ -53,14 +53,18 @@ public final class SleepManager: @unchecked Sendable {
     public func evaluateSmartAutoRequirement() -> (shouldKeepAwake: Bool, reason: String) {
         let trusted = SleepManager.trustedProviders
 
-        // 1. Check child sessions of trusted providers
-        let allSessions = AgentStore.shared.getAllSessions().filter { trusted.contains($0.provider) }
+        // Quota exhaustion is provider availability: providers with exhausted quota CANNOT execute
+        // and must NOT independently keep Smart Auto awake or masquerade as a user-action gate.
+        let availableTrusted = trusted.filter { AgentStore.shared.getAvailability(for: $0) == .available }
+
+        // 1. Check child sessions of available trusted providers
+        let allSessions = AgentStore.shared.getAllSessions().filter { availableTrusted.contains($0.provider) }
         let workingSessions = allSessions.filter { $0.status == .working }
         let blockedSessions = allSessions.filter { $0.status == .blocked }
 
-        // 2. Check parent states of trusted providers
+        // 2. Check parent states of available trusted providers
         let allStates = AgentStore.shared.getAllStates()
-        let trustedParentStates = allStates.filter { trusted.contains($0.key) }
+        let trustedParentStates = allStates.filter { availableTrusted.contains($0.key) }
         let workingParents = trustedParentStates.values.filter { $0.status == .working }
         let blockedParents = trustedParentStates.values.filter { $0.status == .blocked }
 

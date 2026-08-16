@@ -533,6 +533,82 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertNotNil(session6?.lastDurationSeconds, "lastDurationSeconds must be recorded.")
         XCTAssertGreaterThan(session6?.lastDurationSeconds ?? 0, 0.05, "Turn duration must cover the turn interval.")
     }
+
+    func testClaudeQuotaExhaustionSemanticsAndKeepAwakeSeparation() throws {
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+        let sleepMgr = SleepManager.shared
+        sleepMgr.mode = .smartAuto
+
+        // 1. Quota Exhaustion at 100%
+        var exhaustedUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 100.0,
+            sessionResetText: nil,
+            weeklyLimitPercent: 60.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            quotaTimestamp: Date(),
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+
+        XCTAssertTrue(exhaustedUsage.isQuotaExhausted, "100% usage must evaluate isQuotaExhausted == true.")
+        XCTAssertEqual(store.getAvailability(for: .claude), .quotaExhausted, "Claude availability must be .quotaExhausted.")
+
+        let claudeState = store.getStatus(for: .claude)
+        XCTAssertEqual(claudeState.availability, .quotaExhausted, "AgentInfo.availability must be .quotaExhausted.")
+        XCTAssertNotEqual(claudeState.status, .blocked, "Quota exhaustion MUST NOT produce .blocked (Needs You).")
+        XCTAssertNotEqual(claudeState.status, .working, "Quota exhaustion MUST NOT produce .working.")
+
+        // 2. Quota Exhausted Alone -> Smart Auto Inactive
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        store.updateStatus(for: .codex, status: .off)
+
+        let evalAlone = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertFalse(evalAlone.shouldKeepAwake, "Quota exhausted Claude alone must NOT keep Smart Auto awake.")
+
+        // 3. Quota Exhausted + AGY Working -> Smart Auto Active because of AGY
+        store.updateStatus(for: .antigravity, status: .working, detail: "Task running")
+        let evalAgy = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertTrue(evalAgy.shouldKeepAwake, "Smart Auto must be active when AGY is working while Claude is exhausted.")
+        XCTAssertTrue(evalAgy.reason.contains("Antigravity"), "Reason must mention Antigravity.")
+        store.updateStatus(for: .antigravity, status: .idle)
+
+        // 4. Quota Exhausted + ChatGPT Working -> Smart Auto Active because of ChatGPT
+        store.updateStatus(for: .chatgpt, status: .working, detail: "Generating")
+        let evalGpt = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertTrue(evalGpt.shouldKeepAwake, "Smart Auto must be active when ChatGPT is working while Claude is exhausted.")
+        XCTAssertTrue(evalGpt.reason.contains("ChatGPT Web"), "Reason must mention ChatGPT Web.")
+        store.updateStatus(for: .chatgpt, status: .idle)
+
+        // 5. Genuine Claude Needs You While Available
+        var availUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 30.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: availUsage)
+        XCTAssertEqual(store.getAvailability(for: .claude), .available, "Claude must be available at 30% usage.")
+
+        let testSess = "test_claude_xctest_perm"
+        defer { store.purgeSyntheticAndStaleSessions(provider: .claude) }
+        _ = store.handleClaudeHookEvent(json: ["event": "PermissionRequest", "session_id": testSess, "tool_name": "Bash", "cwd": "/tmp"], isTestMode: true)
+        XCTAssertEqual(store.getStatus(for: .claude).status, .blocked, "Genuine PermissionRequest while quota is available must trigger .blocked.")
+        let evalPerm = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertTrue(evalPerm.shouldKeepAwake, "Genuine permission gate must activate Smart Auto.")
+        XCTAssertTrue(evalPerm.reason.contains("Claude Code"), "Reason must mention Claude Code.")
+
+        // 6. Reset / Rollover
+        _ = store.handleClaudeHookEvent(json: ["event": "Stop", "session_id": testSess, "cwd": "/tmp"], isTestMode: true)
+        XCTAssertEqual(store.getStatus(for: .claude).status, .done, "Stop must transition to done.")
+    }
 }
 #endif
 
