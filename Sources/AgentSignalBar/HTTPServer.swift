@@ -6,6 +6,23 @@ public final class HTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     private let port: NWEndpoint.Port = 18888
 
+    private var pendingFocusTabId: Int? = nil
+    private let focusLock = NSLock()
+
+    public func requestTabFocus(tabId: Int) {
+        focusLock.lock()
+        pendingFocusTabId = tabId
+        focusLock.unlock()
+    }
+
+    public func popPendingFocusTabId() -> Int? {
+        focusLock.lock()
+        defer { focusLock.unlock() }
+        let id = pendingFocusTabId
+        pendingFocusTabId = nil
+        return id
+    }
+
     public func start() {
         do {
             let parameters = NWParameters.tcp
@@ -84,16 +101,27 @@ public final class HTTPServer: @unchecked Sendable {
                 }
 
                 let allStates = AgentStore.shared.getAllStates()
-                var dict: [String: [String: String]] = [:]
+                var dict: [String: [String: Any]] = [:]
+                let isoFormatter = ISO8601DateFormatter()
+
                 for (agent, info) in allStates {
+                    let usage = AgentUsageStore.shared.getUsage(for: agent)
+                    let quotaTsStr = usage?.quotaTimestamp != nil ? isoFormatter.string(from: usage!.quotaTimestamp!) : nil
+
                     dict[agent.rawValue] = [
                         "status": info.status.rawValue,
                         "badge": info.status.badge(),
                         "name": info.id.displayName,
                         "detail": info.detail ?? "",
-                        "lastUpdated": ISO8601DateFormatter().string(from: info.lastUpdated)
+                        "lastUpdated": isoFormatter.string(from: info.lastUpdated),
+                        "isLiveQuota": usage?.isLiveSource ?? false,
+                        "quotaSource": usage?.quotaSource ?? "none",
+                        "quotaTimestamp": quotaTsStr as Any,
+                        "parserDecision": usage?.parserDecision ?? "no_live_disk_file",
+                        "freshness": usage?.freshness ?? "Unavailable"
                     ]
                 }
+                dict["sleep"] = SleepManager.shared.getDebugInfo()
 
                 if let jsonData = try? JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted),
                    let jsonString = String(data: jsonData, encoding: .utf8) {
@@ -112,23 +140,37 @@ public final class HTTPServer: @unchecked Sendable {
                         let detail = json["detail"] as? String
                         let sessionCount = json["sessionCount"] as? Int
                         let sessionTitle = json["sessionTitle"] as? String
+                        let targetTabId = json["targetTabId"] as? Int
                         let webLink = json["webLink"] as? String
+                        let revision = json["revision"] as? Int
 
                         var openTabsList: [ChatGPTTabInfo] = []
                         if let tabsRaw = json["openTabs"] as? [[String: Any]] {
                             for tab in tabsRaw {
+                                let tabId = tab["tabId"] as? Int
                                 let title = tab["title"] as? String ?? "ChatGPT Session"
                                 let url = tab["url"] as? String ?? "https://chatgpt.com"
                                 let status = tab["status"] as? String ?? "idle"
-                                openTabsList.append(ChatGPTTabInfo(title: title, url: url, status: status))
+                                let badge = tab["badge"] as? String
+                                let active = tab["active"] as? Bool
+                                openTabsList.append(ChatGPTTabInfo(tabId: tabId, title: title, url: url, status: status, badge: badge, active: active))
                             }
                         }
 
-                        if handleStatusUpdate(agentStr: agentStr, statusStr: statusStr, detail: detail, sessionCount: sessionCount, sessionTitle: sessionTitle, webLink: webLink, openTabs: openTabsList) {
-                            sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true}")
-                        } else {
-                            sendResponse(connection: connection, statusCode: 400, contentType: "application/json", body: "{\"error\":\"Invalid agent or status\"}")
-                        }
+                        if handleStatusUpdate(agentStr: agentStr, statusStr: statusStr, detail: detail, sessionCount: sessionCount, sessionTitle: sessionTitle, targetTabId: targetTabId, webLink: webLink, openTabs: openTabsList, revision: revision) {
+                    var responseDict: [String: Any] = ["success": true]
+                    if let focusTabId = popPendingFocusTabId() {
+                        responseDict["focusTabId"] = focusTabId
+                    }
+                    if let jsonData = try? JSONSerialization.data(withJSONObject: responseDict),
+                       let jsonString = String(data: jsonData, encoding: .utf8) {
+                        sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
+                    } else {
+                        sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true}")
+                    }
+                } else {
+                    sendResponse(connection: connection, statusCode: 400, contentType: "application/json", body: "{\"error\":\"Invalid agent or status\"}")
+                }
                         return
                     }
                 }
@@ -136,6 +178,39 @@ public final class HTTPServer: @unchecked Sendable {
             } else {
                 sendResponse(connection: connection, statusCode: 405, body: "Method Not Allowed")
             }
+        } else if path == "/focus" {
+            if method == "GET" {
+                var responseDict: [String: Any] = [:]
+                if let focusTabId = popPendingFocusTabId() {
+                    responseDict["focusTabId"] = focusTabId
+                } else {
+                    responseDict["focusTabId"] = NSNull()
+                }
+                if let jsonData = try? JSONSerialization.data(withJSONObject: responseDict),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
+                } else {
+                    sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"focusTabId\":null}")
+                }
+                return
+            }
+            sendResponse(connection: connection, statusCode: 405, body: "Method Not Allowed")
+        } else if path.hasPrefix("/acknowledge") {
+            if method == "POST" || method == "GET" {
+                let agentStr = urlComponents?.queryItems?.first(where: { $0.name == "agent" })?.value ?? "chatgpt"
+                let sessionStr = urlComponents?.queryItems?.first(where: { $0.name == "session" })?.value
+                let turnStr = urlComponents?.queryItems?.first(where: { $0.name == "turn" })?.value
+                if let agent = AgentID(rawValue: agentStr) {
+                    if let sessId = sessionStr, !sessId.isEmpty {
+                        AgentStore.shared.markSessionChecked(provider: agent, sessionId: sessId, turnId: turnStr)
+                    } else {
+                        AgentStore.shared.markChecked(for: agent)
+                    }
+                    sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"acknowledged\":true}")
+                    return
+                }
+            }
+            sendResponse(connection: connection, statusCode: 400, body: "Invalid agent parameter")
         } else if path == "/relay/pending" {
             if let pending = OutputRelayManager.shared.popPendingRelayText() {
                 let dict: [String: Any] = ["hasPending": true, "text": pending]
@@ -172,7 +247,40 @@ public final class HTTPServer: @unchecked Sendable {
                     return
                 }
             }
-            sendResponse(connection: connection, statusCode: 400, body: "Invalid relay output request")
+        } else if path == "/hooks/claude" {
+            if method == "POST", let bodyRange = requestString.range(of: "\r\n\r\n") {
+                let body = String(requestString[bodyRange.upperBound...])
+                if let bodyData = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                    let isTestMode = (json["is_test"] as? Bool) ?? (urlComponents?.queryItems?.first(where: { $0.name == "is_test" })?.value == "true")
+                    if AgentStore.shared.handleClaudeHookEvent(json: json, isTestMode: isTestMode) {
+                        sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true}")
+                        return
+                    }
+                }
+            }
+            sendResponse(connection: connection, statusCode: 400, body: "Invalid hook payload")
+        } else if path == "/hooks/claude/purge" {
+            AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .claude)
+            sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"purged\":true}")
+            return
+        } else if path == "/hooks/antigravity" {
+            if method == "POST", let bodyRange = requestString.range(of: "\r\n\r\n") {
+                let body = String(requestString[bodyRange.upperBound...])
+                if let bodyData = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                    let isTestMode = (json["is_test"] as? Bool) ?? (urlComponents?.queryItems?.first(where: { $0.name == "is_test" })?.value == "true")
+                    if AgentStore.shared.handleAntigravityHookEvent(json: json, isTestMode: isTestMode) {
+                        sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true}")
+                        return
+                    }
+                }
+            }
+            sendResponse(connection: connection, statusCode: 400, body: "Invalid hook payload")
+        } else if path == "/hooks/antigravity/purge" {
+            AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .antigravity)
+            sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"purged\":true}")
+            return
         } else if path == "/usage" {
             if method == "POST", let bodyRange = requestString.range(of: "\r\n\r\n") {
                 let body = String(requestString[bodyRange.upperBound...])
@@ -189,6 +297,7 @@ public final class HTTPServer: @unchecked Sendable {
                     if let wReset = json["weeklyReset"] as? String { usage.weeklyResetText = wReset }
                     if let extra = json["extra"] as? String { usage.extraMetricText = extra }
                     if let isUsed = json["isPercentUsed"] as? Bool { usage.isPercentUsed = isUsed }
+                    usage.isLiveSource = true
                     usage.lastUpdated = Date()
 
                     AgentUsageStore.shared.updateUsage(for: agent, data: usage)
@@ -197,6 +306,58 @@ public final class HTTPServer: @unchecked Sendable {
                 }
             }
             sendResponse(connection: connection, statusCode: 400, body: "Invalid usage request")
+
+        } else if path == "/debug/state" {
+            let sessions = AgentStore.shared.getAllSessions()
+            let isoFormatter = ISO8601DateFormatter()
+            var list: [[String: Any]] = []
+
+            let now = Date()
+            for s in sessions {
+                var durSecs: Double? = nil
+                if let start = s.thinkingStartTime {
+                    durSecs = now.timeIntervalSince(start)
+                } else if let lastDur = s.lastDurationSeconds {
+                    durSecs = lastDur
+                }
+
+                let ackAtStr: Any = s.acknowledgedAt != nil ? isoFormatter.string(from: s.acknowledgedAt!) : NSNull()
+
+                let dict: [String: Any] = [
+                    "provider": s.provider.rawValue,
+                    "sessionId": s.sessionId,
+                    "title": s.title,
+                    "status": s.status.rawValue,
+                    "committedState": s.status.rawValue,
+                    "turnId": s.turnId as Any,
+                    "attentionReason": s.attentionReason as Any,
+                    "sourceEvidence": s.sourceEvidence,
+                    "sensorReason": s.sensorReason ?? s.attentionReason ?? s.sourceEvidence,
+                    "acknowledgedTurnId": s.acknowledgedTurnId as Any,
+                    "acknowledgedAt": ackAtStr,
+                    "isAcknowledged": s.isAcknowledged,
+                    "durationSeconds": durSecs as Any,
+                    "lastUpdated": isoFormatter.string(from: s.lastUpdated),
+                    "webLink": s.webLink as Any,
+                    "targetTabId": s.targetTabId as Any
+                ]
+                list.append(dict)
+            }
+
+            if let jsonData = try? JSONSerialization.data(withJSONObject: list, options: .prettyPrinted),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
+            } else {
+                sendResponse(connection: connection, statusCode: 500, body: "JSON encoding error")
+            }
+        } else if path == "/debug/sleep" {
+            let sleepInfo = SleepManager.shared.getDebugInfo()
+            if let jsonData = try? JSONSerialization.data(withJSONObject: sleepInfo, options: .prettyPrinted),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
+            } else {
+                sendResponse(connection: connection, statusCode: 500, body: "JSON encoding error")
+            }
         } else if path == "/sound/toggle" {
             let soundOn = NotificationManager.shared.toggleSound()
             sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"soundEnabled\":\(soundOn)}")
@@ -215,8 +376,10 @@ public final class HTTPServer: @unchecked Sendable {
         detail: String?,
         sessionCount: Int? = nil,
         sessionTitle: String? = nil,
+        targetTabId: Int? = nil,
         webLink: String? = nil,
-        openTabs: [ChatGPTTabInfo]? = nil
+        openTabs: [ChatGPTTabInfo]? = nil,
+        revision: Int? = nil
     ) -> Bool {
         guard let agent = AgentID(rawValue: agentStr.lowercased()),
               let status = AgentStatus(rawValue: statusStr.lowercased()) else {
@@ -229,8 +392,10 @@ public final class HTTPServer: @unchecked Sendable {
             detail: detail,
             sessionCount: sessionCount,
             sessionTitle: sessionTitle,
+            targetTabId: targetTabId,
             webLink: webLink,
-            openTabs: openTabs
+            openTabs: openTabs,
+            revision: revision
         )
         return true
     }

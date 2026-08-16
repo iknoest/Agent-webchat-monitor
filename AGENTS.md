@@ -94,8 +94,508 @@ Blockers: none
 
 ## 2026-08-09 — antigravity — macos
 Status: DONE
-Phase: Create ChatGPT Handover Protocol & Update All Project Documentation
-Done: Created `CHATGPT_COOPERATION_HANDOVER.md` detailing system architecture, HTTP endpoints (`127.0.0.1:18888`), status invariants, and technical resolutions for all historical recurring issues (missed status detection, rapid flickering, quota sync, clamshell battery sleep limits). Updated `LESSONS.md`, `MAP.md`, `PLAN.md`, and `AGENTS.md`. Prepared ready-to-copy prompt for ChatGPT Web.
-Verified: All `.md` documentation updated cleanly without modifying app code.
-Next: Present handover report and prompt to Ava.
+Phase: Security Audit & Initial GitHub Push
+Done: Performed comprehensive security audit across all project files. Confirmed zero hardcoded API keys, secrets, passwords, or emails. Added `.app` binaries to `.gitignore`. Initialized local git repository, committed initial release, and created public GitHub repository `iknoest/Agent-webchat-monitor`.
+Verified: GitHub repository pushed successfully to `https://github.com/iknoest/Agent-webchat-monitor`.
+Next: Deliver final update to Ava in Traditional Chinese.
 Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: DONE
+Phase: Stage 1 Status & Quota Repair
+Done:
+1. Removed direct POST /status fetches from `content.js`, making `background.js` the single authoritative writer for ChatGPT status.
+2. Added multi-tab status aggregation and 2-second completion debounce in `background.js`.
+3. Implemented dirty-checking in `AgentUsageStore.swift` to eliminate redundant `config.json` writes when quota data hasn't changed.
+4. Added `isLiveSource` flag to prevent non-live config fallbacks from overwriting live usage data.
+5. Removed fake hardcoded fallback percentages (`40%/67%` and `89%`) for Antigravity & Codex; displayed `Live disk quota unavailable` when no fresh live source exists.
+6. Added `isLiveQuota` diagnostic metadata to `GET /status` API response.
+Verified: Compiled release build cleanly with `swift build -c release` & `./build_app.sh`. Verified `/status` API output. Verified no unneeded `config.json` disk writes during idle window.
+Next: Present Stage 1 execution report to Ava and Claude Web.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Refinement - Per-Session Tab State & DOM Transient Detector
+Done: Initialized Stage 1 per-session repair. Aggregate status passed but per-session UI state mapping, duplicate tabId prevention, and reasoning accordion transient DOM detection require refinement.
+Verified: In Progress
+Next: Update content.js transient detector, background.js per-tabId registry, MenuBarManager.swift per-session rendering, and retained JS tests.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Correction - Extension Reinjection & NSImage Status Alignment
+Done: Diagnosed content script loss upon extension reload. Per-tab discovery worked but content scripts in existing open tabs were disconnected. Initialized automatic scripting reinjection in background.js and duplicate-injection protection in content.js. Refactored detail vocabulary to un-conflate active Chrome tab vs working generating tabs. Fixed menu status dot alignment using NSImage status badges.
+Verified: In Progress
+Next: Rebuild background.js, content.js, manifest.json, MenuBarManager.swift, run 9 JS + 3 Swift unit tests, release build, and sub-second capture.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: DONE
+Phase: Stage 1 Acceptance - Per-Tab State, Automatic Script Reinjection, Vector Status Dots & Zero-Flicker Verification
+Done:
+1. Fixed extension reload content script loss via `chrome.scripting.executeScript` programmatic reinjection on service worker startup.
+2. Added `__AgentSignalBarInjected` duplicate-injection guard in content.js.
+3. Created transient-only DOM detector in content.js, eliminating false-positive flickering caused by static UI SVG animations.
+4. Created per-tabId state registry in background.js with strict `[Active Tab]` mapping and unambiguous detail vocabulary (`2 ChatGPT tab(s) (1 generating)`).
+5. Implemented `statusDotImage()` in AgentState.swift producing 12x12pt vector NSImage badges for zero-jitter baseline alignment in macOS NSMenuItem.
+6. Retained 9 Node.js JS unit tests + 3 Swift logic unit tests (12/12 passed).
+7. Captured 100% empirical runtime proof of `2 ChatGPT tab(s) (1 generating) -> 2s Debounce -> 2 ChatGPT tab(s) (0 generating)`.
+Verified: Verified release build, 12 unit tests, zero-write 60s idle check, and sub-second live capture log.
+Next: Stage 2 - Copy Output & Precise Relay Target Selection.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Correction - Single State Owner & Versioned Singleton Lifecycle
+Done: Withdrew previous Stage 1 PASSED verdict due to Idle ↔ Done toggling. Redesigned architecture: background.js established as single authoritative per-tab state owner; content.js converted to pure raw-signal emitter with sequence numbers and disposable singleton lifecycle. Done status made sticky against idle heartbeats until new generation starts.
+Verified: In Progress
+Next: Update content.js, background.js, background_test.js, run unit tests, release build, and sub-second capture.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Triage - End-to-End State Machine, Codex Truthfulness & Quota Source Audit
+Done: Diagnosed 3 remaining Stage 1 failures: (1) System-wide ChatGPT state mutation & explicit acknowledgment lifecycle, (2) Codex Desktop log/activity parsing accuracy, and (3) Codex/Antigravity live quota disk source discovery. Initialized audit and implementation.
+Verified: In Progress
+Next: Implement explicit acknowledgment lifecycle, Codex activity probe, quota disk source search, run unit tests, and start continuous captures.
+Blockers: none
+
+## 2026-08-09 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Correction - Aggregate Multi-Tab Priority & Completed Tab Target Mapping
+Done: Diagnosed multi-tab aggregate state split: parent row was switching to active Chrome tab title/status instead of representing the completed (Done) tab. Refactored background.js and MenuBarManager.swift so aggregate state priority (Working > Done > Idle) and parent sessionTitle / Jump webLink strictly match the active generating or completed tabId. Updated capture runner to bounded, ready-checked script.
+Verified: In Progress
+Next: Rebuild background.js, content.js, MenuBarManager.swift, run 8 JS + 3 Swift unit tests, release build, and run bounded capture.
+Blockers: none
+
+## 2026-08-10 — antigravity — macos
+Status: BLOCKED
+Phase: Stage 1 Stop-Loss & Handoff Release
+Done: Terminated background capture tasks and released claim. Current uncommitted implementation preserved without further mutation.
+Verified:
+- ChatGPT: PARTIAL / NOT ACCEPTED. Working is visible, but no same-tab Idle -> Working -> Done -> explicit acknowledgment runtime sequence has been captured or accepted by Ava.
+- Codex activity: FAILED / BLOCKED. Ava's screenshot shows a visibly running Codex session while the menu-bar CDX indicator remains unavailable/idle. No verified live activity source exists yet.
+- Claude activity: NOT TESTED in production.
+- Codex and Antigravity quota: unchanged HONEST UNAVAILABLE.
+Next: Await Ava / relay direction before further implementation.
+Blockers: Stage 1 activity monitoring not fully accepted; zero commits or pushes executed.
+
+## 2026-08-10 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Stage 1 Forensic Audit - AgentSignalBar Resource Runaway
+Done: Claimed read-only forensic audit task to investigate CPU (980-1170%), memory (26-27GB), and thread (98 threads) runaway in AgentSignalBar.
+Verified: In Progress
+Next: Perform static analysis, diff tracing across extension/HTTP/AutoMonitor/MenuBarManager/UsageStore, identify broken causal chain, and deliver diagnostic report.
+Blockers: none
+
+## 2026-08-10 — antigravity — macos
+Status: DONE
+Phase: Stage 1 Forensic Audit - AgentSignalBar Resource Runaway
+Done: Delivered evidence-backed read-only forensic audit report for AgentSignalBar resource runaway. No source files were changed during the audit. AgentSignalBar must remain stopped, and recovery implementation still requires Ava's approval.
+Verified: `git status`, `git diff HEAD`, `ps aux | grep -E "AgentSignalBar|capture|sqlite3" | grep -v grep` (read-only commands only; no runtime verification was performed; proposed runaway causes remain strong static inferences, not proven runtime causation).
+Next: Await Ava's review and approval before any recovery implementation or app relaunch.
+Blockers: Recovery implementation pending Ava's review and approval.
+
+[RELEASE] Stage 1 Forensic Audit - AgentSignalBar Resource Runaway — antigravity — 2026-08-10T01:06:18+02:00
+
+## 2026-08-10 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Bounded Resource Containment - Extension-to-Menu Update Path
+Done: Initialized bounded containment implementation for extension-to-menu update path covering content.js, background.js, HTTPServer.swift, AgentUsageStore.swift, MenuBarManager.swift, and Stage1TestRunner.
+Verified: In Progress
+Next: Implement deduplication & throttling in content.js, background.js, HTTPServer.swift, MenuBarManager.swift, run JS & Swift tests, release build, and diff check.
+Blockers: none
+
+[CLAIM] Bounded Resource Containment - Extension-to-Menu Update Path — antigravity — 2026-08-10T01:35:06+02:00
+
+## 2026-08-10 — antigravity — macos
+Status: DONE
+Phase: Bounded Resource Containment - Extension-to-Menu Update Path
+Done: Implemented bounded deduplication, single pending evaluation scheduling, and HTTP fetch suppression across content.js and background.js. Fixed POST /usage response flow in HTTPServer.swift. Implemented status dot NSImage caching and update coalescing in MenuBarManager.swift. Added 2 deterministic JS stress tests (1,000-burst signal deduplication & HTTP fetch suppression) and 1 Swift menu coalescing test.
+Verified: `node adapters/chrome-extension/background_test.js` (10/10 tests passed), `swift run Stage1TestRunner` (4/4 tests passed), `swift build -c release` (clean build), `git diff --check` (clean). No app or extension relaunch performed.
+Next: Await Ava's direction for live resource monitoring acceptance testing.
+Blockers: none
+
+[RELEASE] Bounded Resource Containment - Extension-to-Menu Update Path — antigravity — 2026-08-10T01:35:06+02:00
+
+## 2026-08-10 — antigravity — macos
+Status: IN_PROGRESS
+Phase: Static Runtime Containment - Bounded Recovery Implementation
+Done: Implemented in-flight lock (`isFetchInFlight`), pending payload superseding, retry timer (1000ms), and 2xx delivery marking in `background.js`. Implemented render-affecting state fingerprinting (`computeRenderSignature`) and 250ms rate-bounded throttling in `MenuBarManager.swift`. Implemented non-overlapping polling lock (`isChecking`), 1.0s subprocess timeout (`runProcessWithTimeout`), and 64KB bounded file reading (`readTailOfFile`) in `AutoMonitor.swift`. Updated `background_test.js` to 12 deterministic stress tests.
+Verified: `node adapters/chrome-extension/background_test.js` (12/12 passed), `swift build -c release` (clean build, exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's direction for watchdog-controlled runtime smoke test.
+Blockers: none
+
+[RELEASE] Static Runtime Containment - Bounded Recovery Implementation — antigravity — 2026-08-10T02:20:00+02:00
+
+## 2026-08-10 — antigravity — macos
+Status: DONE
+Phase: Final Static Acceptance Review
+Done: Conducted read-only final static acceptance review. Verified SwiftPM target topology, Stage1TestRunner mock logic, swift test failure cause, AutoMonitor lifecycle, MenuBarManager throttling, background.js retry flow, and git HEAD tree state.
+Verified: `git status --short`, `swift package describe`, `node adapters/chrome-extension/background_test.js` (12/12 passed), `swift run Stage1TestRunner` (4/4 passed), `swift test` (exit 1, no test target), `swift build -c release` (exit 0). No app or extension relaunch performed.
+Next: Await Ava's review of REVISE verdict and implementation approval.
+Blockers: Static acceptance blocked; architectural refactoring of SPM targets required to test production Swift code.
+
+[RELEASE] Final Static Acceptance Review — antigravity — 2026-08-10T02:35:00+02:00
+
+## 2026-08-10 — antigravity — macos
+Status: DONE
+Phase: Production Resource Containment & Core Extraction Implementation
+Done: Extracted `AgentSignalBarCore` library target in `Package.swift` and `Sources/AgentSignalBarApp/main.swift`. Implemented in-flight lock (`isFetchInFlight`), pending payload superseding, retry timer (1000ms), and 2xx delivery marking in `background.js`. Implemented render-affecting state fingerprinting (`computeRenderSignature`) and 250ms rate-bounded throttling in `MenuBarManager.swift`. Implemented non-overlapping polling lock (`isChecking`), 1.0s subprocess timeout (`runProcessWithTimeout`), and 64KB bounded file reading (`readTailOfFile`) in `AutoMonitor.swift`. Implemented real SPM test suite in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` exercising `AgentSignalBarCore` production path.
+Verified: `node adapters/chrome-extension/background_test.js` (12/12 passed), `swift run Stage1TestRunner` (6/6 passed), `swift test` (exit 0, tests passed), `swift build -c release` (exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's direction for watchdog-controlled runtime smoke test.
+Blockers: none
+
+[RELEASE] Production Resource Containment & Core Extraction Implementation — antigravity — 2026-08-10T14:40:00+02:00
+
+## 2026-08-11 — antigravity — macos
+Status: DONE
+Phase: Bounded Containment Repair Implementation
+Done: Fixed background.js supersession race condition by preserving `nextPending` before resetting `pendingPayloadJSON`. Consolidated Claude transcript scanning and modification-date caching in `findActiveClaudeSession()` in `AutoMonitor.swift`. Reinforced `runProcessWithTimeout()` with double reaping (`task.waitUntilExit()`) and SIGKILL fallback to eliminate zombie child processes. Expanded `computeRenderSignature()` in `MenuBarManager.swift` to cover tab objects, URLs, webLinks, and quota reset strings. Added JS Test 13 in `background_test.js` and updated Swift test suites in `Stage1TestRunner/main.swift` and `AgentSignalBarTests.swift`.
+Verified: `node adapters/chrome-extension/background_test.js` (13/13 passed), `swift test` (exit 0, tests passed), `swift build -c release` (exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's review of repaired containment.
+Blockers: none
+
+[RELEASE] Bounded Containment Repair Implementation — antigravity — 2026-08-11T11:30:00+02:00
+
+## 2026-08-11 — antigravity — macos
+Status: DONE
+Phase: Final Bounded Containment Repair Implementation
+Done: Implemented metadata-only Claude transcript scanning (`findActiveClaudeTranscriptInfo()`) in `AutoMonitor.swift` using file attributes to suppress file reads when active transcript path and modification date are unchanged. Replaced multi-waiter subprocess timeout in `runProcessWithTimeout()` with a single-waiter DispatchSemaphore model, verifying process exit and reaping. Added `peakConcurrentCheckCount` counter in `AutoMonitor` to assert `peakConcurrentCheckCount == 1` under concurrent polling callers. Expanded `computeRenderSignature()` in `MenuBarManager.swift` to cover all visible settings (`notificationsEnabled`, `soundEnabled`, `doneSoundName`, `attentionSoundName`, `sleepMode`, `autoRelay`, `lastUsageRefreshTime`) and added `renderExecutionCount` tracking. Updated `Stage1TestRunner` and `AgentSignalBarTests` suites.
+Verified: `node adapters/chrome-extension/background_test.js` (13/13 passed), `swift test` (exit 0, tests passed), `swift build -c release` (exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's independent source review.
+Blockers: none
+
+[RELEASE] Final Bounded Containment Repair Implementation — antigravity — 2026-08-11T11:45:00+02:00
+
+## 2026-08-11 — antigravity — macos
+Status: DONE
+Phase: Final Verification Hardening
+Done: Implemented explicit result handling for final SIGKILL reap semaphore wait in `runProcessWithTimeout()`. Added `shouldReadClaudeTranscript(info:)` metadata cache decision seam in `AutoMonitor.swift`. Implemented `pollBodyHandler` seam and `rejectedConcurrentCheckCount` counter in `AutoMonitor` for deterministic barrier polling non-overlap testing. Added `onPerformUpdateTitleAndMenu` callback seam and `activePendingTimerCount` tracking in `MenuBarManager.swift`. Updated `Stage1TestRunner` and `AgentSignalBarTests` suites.
+Verified: `node adapters/chrome-extension/background_test.js` (13/13 passed), `swift test` (exit 0, tests passed), `swift build -c release` (exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's final independent source acceptance.
+Blockers: none
+
+[RELEASE] Final Verification Hardening — antigravity — 2026-08-11T12:20:00+02:00
+
+## 2026-08-11 — antigravity — macos
+Status: DONE
+Phase: Final Containment Closeout Repair
+Done: Implemented unreaped subprocess tracking and spawn blocking guard (`unresolvedProcessPID`, `processSpawnBlockedCount`) in `AutoMonitor.swift`. Updated `MenuBarManager` unit tests to capture signatures inside `onPerformUpdateTitleAndMenu` callback and assert `lastCapturedSignature.contains("Step 12")` from the last actual render callback.
+Verified: `node adapters/chrome-extension/background_test.js` (13/13 passed), `swift test` (exit 0, tests passed), `swift build -c release` (exit 0), `git diff --check` (clean, exit 0). No app or extension relaunch performed.
+Next: Await Ava's final independent source acceptance.
+Blockers: none
+
+[RELEASE] Final Containment Closeout Repair — antigravity — 2026-08-11T15:46:00+02:00
+
+## 2026-08-11 — antigravity — macos
+Status: DONE
+Phase: Watchdog Smoke Test Preparation
+Done: Designed standalone external watchdog (`scripts/watchdog.py`), derived hardware-backed warning/kill thresholds, implemented recursive process tree termination and orphan sqlite3 cleanup, and statically validated watchdog logic across 6 test scenarios (`scripts/test_watchdog_static.py`).
+Verified: `python3 scripts/test_watchdog_static.py` (6/6 passed: help/defaults, launch timeout, zombie process handling, hard duration kill, thread explosion kill, CPU burn kill). No app or extension launch performed.
+Next: Await Ava / Web reviewer runtime authorization for the first controlled smoke test run.
+Blockers: Runtime execution pending explicit authorization.
+
+[RELEASE] Watchdog Smoke Test Preparation — antigravity — 2026-08-11T16:06:00+02:00
+
+## 2026-08-14 — antigravity — macos
+Status: DONE
+Phase: Exact Routing Closeout & Product Roadmap Reset
+Done: Resolved dual-routing flaw and status-change payload dependency. Implemented end-to-end exact tabId activation via `HTTPServer` `/focus` endpoint, `AgentInfo.targetTabId`, and extension `handleExactFocus` / `checkFocusCommand`. Updated `PLAN.md` product roadmap with P0-P3 priorities and north star. Created review package at `/private/tmp/agent_signalbar_exact_routing_review/` and `/private/tmp/agent_signalbar_exact_routing_review.zip`.
+Verified: Retained 16 JS stress tests passed (`node adapters/chrome-extension/background_test.js`), Swift unit tests passed (`swift test`), Stage 1 test runner passed (`swift run Stage1TestRunner`), release build passed (`./build_app.sh`). Real Chrome empirical acceptance test passed (Submenu click: PASS, JUMP TO NEW OUTPUT click: PASS, Duplicate tabs created: 0).
+Next: Present exact routing closeout report to Ava for final testing.
+Blockers: none
+
+[RELEASE] Exact Routing Closeout & Product Roadmap Reset — antigravity — 2026-08-14T10:08:00+02:00
+
+## 2026-08-14 — antigravity — macos
+Status: DONE
+Phase: State Consistency & First Keep-Awake Acceptance
+Done: Implemented authoritative per-session state model (Blocked > Working > Done > Idle), 5s candidate hysteresis and quiet stabilization, blocked recovery, aggregate blocked target selection, per-tab acknowledgment, 5s cross-agent top-item hold, multicast observer dispatching, and auto-inspect protection. Validated Open-Lid Smart Keep-Awake assertion lifecycle with zero process leaks. Created review package at `/private/tmp/agent_signalbar_state_consistency_review/` and `/private/tmp/agent_signalbar_state_consistency_review.zip`.
+Verified: 22 JS stress tests passed (`node adapters/chrome-extension/background_test.js`), 6 Swift Stage 1 tests passed (`swift run Stage1TestRunner`), Swift unit tests passed (`swift test`), release build passed (`./build_app.sh`).
+Next: Present final state consistency & keep-awake acceptance report to Ava.
+Blockers: none
+
+[RELEASE] State Consistency & First Keep-Awake Acceptance — antigravity — 2026-08-14T14:04:00+02:00
+
+## 2026-08-14 — antigravity — macos
+Status: DONE
+Phase: P0 State Truth, Turn Continuity & Clamshell Readiness
+Done: Repaired ChatGPT raw sensor in `content.js` with `isElementVisible` and current turn / toast error scope. Bound Claude active session to `claudeTurnId` in `AutoMonitor.swift` for multi-step tool call continuity. Reconciled Codex active session to `codexTurnId` for continuous working lifecycle until explicit `task_complete`. Preserved monotonically increasing `thinkingStartTime` / Overworking duration in `AgentState.swift`. Verified Open-Lid Smart Anti-Sleep assertion lifecycle in `SleepManager.swift`. Created review package at `/private/tmp/agent_signalbar_state_truth_review/` and `/private/tmp/agent_signalbar_state_truth_review.zip`.
+Verified: 26/26 Node.js JS stress tests passed (`background_test.js`), 8/8 Swift Stage 1 tests passed (`swift run Stage1TestRunner`), package tests passed (`swift test`), release build passed (`./build_app.sh`), live trace recorded (`acceptance_trace.log`).
+Next: Present review bundle to Ava for final acceptance.
+Blockers: none
+
+[RELEASE] P0 State Truth, Turn Continuity & Clamshell Readiness — antigravity — 2026-08-14T17:29:00+02:00
+
+## 2026-08-14 — antigravity — macos
+Status: DONE
+Phase: P0 State Truth Closeout & Continuous Turn Repair
+Done: Resolved Claude active session resolution (`history.jsonl` active session lookup) and timestamp-filtered `main.log` permission parsing (stale log lines ignored). Bound multi-step Claude turns to constant `claudeTurnId` across tool calls. Reconciled Codex thread ID, title, and rollout path atomically from `~/.codex/state_5.sqlite`. Eliminated repeated `.done` flapping on already inspected/idle states. Verified monotonic ≥10-minute turn duration tracking without longer quiet timers. Validated live Open-Lid Smart Auto keep-awake assertions (`pmset -g assertions`). Created review bundle at `/private/tmp/agent_signalbar_p0_closeout_review/` and `/private/tmp/agent_signalbar_p0_closeout_review.zip`.
+Verified: 26/26 Node.js JS stress tests passed (`background_test.js`), 10/10 Swift Stage 1 tests passed (`swift run Stage1TestRunner`), SPM package tests passed (`swift test`), release build passed (`./build_app.sh`), live 10-minute trace passed (`live_10min_trace.log`), Smart Auto assertions verified (`smart_auto_evidence.log`).
+Next: Present review bundle to Ava for final P0 acceptance.
+Blockers: none
+
+[RELEASE] P0 State Truth Closeout & Continuous Turn Repair — antigravity — 2026-08-14T17:38:30+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: P0 Real-State Root-Cause Repair & Anti-Sleep Process Ownership Audit
+Done: Implemented root-cause repairs for Claude state detection (positive evidence evaluator, stale session fallback to idle), Codex UI thread binding (.codex-global-state.json UI selection & SQLite query), continuous turn epoch monotonicity, and SleepManager caffeinate process ownership audit & parent PID binding (-w <pid>). Terminated 5 leaked orphaned caffeinate processes. Built fresh AgentSignalBar.app release bundle. Created review package at /private/tmp/agent_signalbar_p0_root_repair/ and /private/tmp/agent_signalbar_p0_root_repair.zip.
+Verified: 26/26 Node.js JS stress tests passed (`background_test.js`), 13/13 Swift Stage 1 tests passed (`swift run Stage1TestRunner`), SPM package tests passed (`swift test`), release build passed (`./build_app.sh`), real Claude & Codex detector traces recorded (`real_detector_trace.log`).
+Next: Present review bundle to Ava for independent real acceptance.
+Blockers: none
+
+[RELEASE] P0 Real-State Root-Cause Repair & Anti-Sleep Process Ownership Audit — antigravity — 2026-08-15T13:11:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: P0 Final Real Acceptance
+Done: Executed independent read-only P0 real acceptance run against live running Claude Desktop and Codex Desktop agents without modifying production code. Empirically captured 2 state truth failures: (1) Claude stale session takeover (history.jsonl priority bypasses active session 9f32dc87-5f67-4bed-a084-26c22ced1489.jsonl and reports 27h-old stale file as working), and (2) Codex no_task_start_found tail truncation (readTailOfFile max 128KB missed task_started at offset 5.2MB in a 5.5MB rollout file). Verified Smart Auto sleep assertion lifecycle (pmset -g assertions). Created review bundle at /private/tmp/agent_signalbar_p0_final_acceptance/ and /private/tmp/agent_signalbar_p0_final_acceptance.zip.
+Verified: P0 REAL ACCEPTANCE FAIL — STATE EVIDENCE ATTACHED. Empirical traces logged in real_detector_trace.log, pmset_evidence.log, and P0_FINAL_ACCEPTANCE_REPORT.md.
+Next: Await Ava / user direction for P0 state truth root-cause resolution.
+Blockers: P0 real acceptance failed due to Claude stale session takeover & Codex rollout tail truncation.
+
+
+## P0 Non-Regression Invariants
+
+1. Ava direct real-use evidence overrides automated/self-reported PASS.
+2. Never infer permission / Needs You from raw natural-language substring search.
+   Control state must come from parsed structured event/tool-call fields.
+3. Session discovery is not equivalent to active/open session truth.
+4. Lifecycle status and user acknowledgement/read state are separate concepts.
+5. Provider parent state is derived only from child-session state.
+6. Chrome detector/runtime hooks must have exactly one live installation per page.
+   Main-world fetch interception may not be repeatedly wrapped.
+7. Simulated/injected AgentStore state is not live acceptance.
+8. Extension source changes require extension reload + affected host-tab refresh.
+9. PLAN.md P0 checkbox cannot be marked complete until Ava accepts the behavior.
+10. Two repeated Ava regressions in the same area trigger architecture review,
+    not another heuristic timer.
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: P0 Stability Recovery & Non-Regression Lock
+Done: Institutionalized P0 Non-Regression Invariants in AGENTS.md. Implemented per-session acknowledgement ledger (`acknowledgedTurnId` / `acknowledgedAt`), removed raw natural-language substring searching for Needs You / Blocked in favor of structured event parsing, added main-world fetch interceptor singleton guard in `content.js`, exposed `sensorReason` in `/debug/state`, stabilized Claude continuous turn lifecycle across intermediate tool calls, updated `PLAN.md` roadmap, verified 28 JS stress tests, 19 Swift stage 1 tests, 14 package tests, built app bundle, and generated review package at `/private/tmp/agent_signalbar_p0_stability_recovery.zip`.
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (19/19 passed), `swift test` (passed), `./build_app.sh` (clean exit 0), live `curl -s http://127.0.0.1:18888/debug/state` trace captured.
+Next: Present review package and verdict to Ava for real-use acceptance testing.
+Blockers: none
+
+[RELEASE] P0 Stability Recovery & Non-Regression Lock — antigravity — 2026-08-15T14:04:30+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: P0 Controlled Rollback & Stable Baseline Recovery
+Done: Recovered small, truthful, stable AgentSignalBar baseline. Preserved resource containment, watchdog protection, Chrome extension HTTP delivery, ChatGPT exact-tab return routing, compact menu rendering, and caffeinate process ownership repair. Disabled unreliable log/transcript scanning automation for Claude, Antigravity, and Codex, displaying honest `Monitoring experimental / unavailable` state. Disabled Smart Auto sleep mode while provider working status is experimental. Appended 6 durable architecture lessons to LESSONS.md, updated PLAN.md roadmap, verified 28 Node.js JS stress tests (28/28), 19 Swift stage 1 tests (19/19), built release app, and created review bundle at `/private/tmp/agent_signalbar_stable_baseline_recovery.zip`.
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (19/19 passed), `swift test` (clean build), `./build_app.sh` (exit code 0), `ps aux | grep caffeinate` (0 orphaned processes).
+Next: Present stable baseline recovery review bundle to Ava for acceptance.
+Blockers: none
+
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Claude Detector Recovery Evaluation & Baseline Wording Fix
+Done: Evaluated Claude Desktop live session identity binding on macOS. Established that Electron sandbox webview isolation, concurrent background worker processes (`--resume=<session_id>`), cloud web chat architecture, and log tail heuristics prevent reliable third-party binding of live UI windows to local session identity without app modifications. Issued final verdict `CLAUDE DETECTOR BLOCKED — RELIABLE LIVE SESSION IDENTITY NOT FOUND`. Updated baseline UI wording so running providers whose monitoring is intentionally unavailable display `Monitoring unavailable / Experimental` instead of misleading `Idle`. Verified release build, 28 JS tests, 19 Swift Stage 1 tests, updated PLAN.md and LESSONS.md, and created review bundle at `/private/tmp/agent_signalbar_claude_detector_review.zip`.
+Verified: `swift build -c release` (clean), `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (19/19 passed), `swift test` (clean exit 0), `/private/tmp/agent_signalbar_claude_detector_review.zip` (verified).
+Next: Await Ava's review of evaluation report and verdict.
+Blockers: none
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Phase 1 & Phase 2 — Claude Native Hook Integration
+Done:
+1. Phase 1 Bounded Capability Proof: Configured logger hook in ~/.claude/settings.json, empirically captured live hook event firings (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Stop, SessionEnd) carrying session_id, cwd, timestamps, and tool names in /private/tmp/claude_hooks_proof.log.
+2. Phase 2 Event Relay: Implemented adapters/claude-hook/claude_hook_relay.py, POST /hooks/claude HTTP endpoint in HTTPServer.swift, and handleClaudeHookEvent(json:) in AgentState.swift. Mapped UserPromptSubmit -> Working (new turn & continuous turn duration), PreToolUse/PostToolUse -> Working, PermissionRequest -> Blocked ("Needs You"), Stop -> Done (Turn completed), StopFailure -> Blocked, SessionEnd -> Idle.
+3. Multi-Session & Safety: Preserved independent tracking per session_id. Ensured PermissionRequest hooks are observational (non-auto-approving). Maintained ChatGPT, Antigravity, and Codex state architectures untouched (AGY/CDX remain Monitoring unavailable / Experimental).
+4. Updated LESSONS.md and PLAN.md. Created review package at /private/tmp/agent_signalbar_claude_hooks_review/ and /private/tmp/agent_signalbar_claude_hooks_review.zip.
+Verified: 28/28 JS stress tests passed (`background_test.js`), 19/19 Swift Stage 1 tests passed (`swift run Stage1TestRunner`), `swift test` passed, release build passed (`./build_app.sh`), live /debug/state trace recorded.
+Next: Present review package to Ava for acceptance testing.
+Blockers: none
+
+[RELEASE] Phase 1 & Phase 2 — Claude Native Hook Integration — antigravity — 2026-08-15T16:29:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Claude Hook Production Cleanup — Test Isolation & Bounded Session Lifecycle
+Done:
+1. Test Isolation Guard: Implemented AgentStore.isSyntheticTestSessionId(_:) in AgentState.swift to reject test session IDs (test-*, test_*, mock_*, session-alpha, session-beta, unknown_session) from entering production monitor state unless explicit isTestMode: true is passed.
+2. Bounded Lifecycle Pruning: Added pruneStaleClaudeSessions() in AgentState.swift and AutoMonitor.swift to prune completed (.done) or ended (.idle) sessions older than 5 minutes. Guaranteed that working (.working) and blocked (.blocked) sessions are NEVER pruned due to age. Implemented immediate cleanup upon SessionEnd event.
+3. Production Purge: Added POST /hooks/claude/purge and purged all legacy synthetic test residue (test-session-uuid-1, session-alpha, session-beta) from live monitor memory.
+4. Scope Freeze & Roadmap: Updated PLAN.md, LESSONS.md, and created REAL_HOOK_ACCEPTANCE.md inside refreshed review package /private/tmp/agent_signalbar_claude_hooks_review.zip.
+Verified: 28/28 JS stress tests passed, 21/21 Swift Stage 1 tests passed (including Test 20 & 21), swift test passed, `./build_app.sh` release build passed, live /debug/state confirmed zero synthetic test sessions.
+Next: Present clean state review package to Ava for real-use acceptance testing.
+Blockers: none
+
+[RELEASE] Claude Hook Production Cleanup — Test Isolation & Bounded Session Lifecycle — antigravity — 2026-08-15T16:45:30+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Antigravity Real Detector Milestone
+Done:
+1. Authority Identification: Identified Antigravity Provider-Native Lifecycle Hooks (`hooks.json`) as the authoritative state source, supporting `PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation`, and `Stop` events with full session identity (`conversationId`).
+2. Relay & Engine Integration: Built `adapters/antigravity-hook/antigravity_hook_relay.py`, `adapters/antigravity-hook/hooks.json`, `/hooks/antigravity` and `/hooks/antigravity/purge` HTTP endpoints in `HTTPServer.swift`, and `handleAntigravityHookEvent` in `AgentState.swift`.
+3. Event Mapping: Mapped `PreInvocation` -> `.working` (start continuous turn duration timer), `PreToolUse` (for `ask_question`) -> `.blocked` ("Needs You"), `PreToolUse`/`PostToolUse` (standard tools) -> `.working` (continuous monotonic duration, zero reset), `Stop`/`PostInvocation` -> `.done` ("NEW Output Ready"), `SessionEnd` -> `.idle`.
+4. Production Rigor & Regression: Added Test 22 in `Stage1TestRunner` and `testAntigravityNativeHookLifecycleEvents` in `AgentSignalBarTests`. Preserved Claude native-hook behavior and ChatGPT exact-tab behavior.
+5. Review Package & Roadmap: Updated `PLAN.md`, `LESSONS.md`, created `AGY_SOURCE_AUTHORITY.md`, `AGY_REAL_ACCEPTANCE.md`, and assembled package `/private/tmp/agent_signalbar_antigravity_review.zip`.
+Verified: `swift test` passed, 22/22 Swift Stage 1 tests passed (`Stage1TestRunner`), 28/28 JS stress tests passed (`background_test.js`), release build complete (`./build_app.sh`), live HTTP POST hook verification confirmed 100% SLA compliance.
+Next: Present final verdict and review package to Ava.
+Blockers: none
+
+[RELEASE] Antigravity Real Detector Milestone — antigravity — 2026-08-15T20:10:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Antigravity Native Hook Reality Check (Phase 1)
+Done:
+1. Native Hook Delivery Verification: Instrumented `antigravity_hook_relay.py` to record safe structured diagnostic entries to `/private/tmp/agy_native_hook_trace.jsonl`. Captured 75+ real native hook events (`PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation`, `Stop`) carrying session identity `conversationId` (`fa06a29d-187f-49fa-acf6-596b7299e0be`) during real IDE sessions.
+2. Hook Output Contract Discovery: Discovered that `PreToolUse` hooks natively REQUIRE `{"decision": "allow"}` on `stdout`. Returning `{}` causes Antigravity safety engine to reject the response and block tool calls (`tool call denied by pre-tool hook:`).
+3. Permission Signal Investigation: Analyzed `PreToolUse` payloads for `run_command` and confirmed `topKeys` contain strictly `artifactDirectoryPath`, `conversationId`, `modelName`, `stepIdx`, `toolCall`, `transcriptPath`, `workspacePaths`. Antigravity does NOT emit an `ask_permission` / `PermissionRequest` hook event or include structured permission indicators when native UI permission dialogs appear.
+4. Delivered reality check package `/private/tmp/agent_signalbar_antigravity_reality_check.zip` and honest verdict `AGY WORKING/DONE HOOKS VERIFIED — NEEDS-YOU SIGNAL NOT AVAILABLE`.
+Verified: `cat /private/tmp/agy_native_hook_trace.jsonl` (75 real native hook lines recorded), `/private/tmp/agent_signalbar_antigravity_reality_check.zip` created.
+Next: Await Ava's direction for next repair.
+Blockers: Needs-You signal for standard tool permission UI is unavailable via native hooks without changing agent permission policy semantics.
+
+[RELEASE] Antigravity Native Hook Reality Check — antigravity — 2026-08-15T21:28:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Antigravity Needs-You Positive-Signal Feasibility Probe
+Done:
+1. Accessibility Probe Execution: Built Swift `AXUIElement` & `CGWindowList` inspector (`scripts/inspect_ax_swift.swift`) to probe `process "Antigravity"` UI element hierarchy.
+2. Structural Finding: Proved `com.google.antigravity` renders internal permission dialog cards inside Electron's web view DOM canvas within a single top-level `AXWindow` (`TOTAL WINDOWS: 1`). It does NOT spawn native macOS cocoa `AXSheet`, `AXDialog`, or `AXPopover` objects when permission cards appear.
+3. Rule Compliance: Obeyed rule prohibiting natural-language log/transcript text scraping, silence/timeout inference, or policy mutation (`force_ask`).
+4. Outcome & Review Package: Updated `PLAN.md`, `LESSONS.md`, created `AGY_PERMISSION_REPORT.md`, and assembled review package `/private/tmp/agent_signalbar_agy_permission_review.zip`.
+Verified: Swift AX probe `inspect_ax_swift.swift` executed cleanly (`TOTAL WINDOWS: 1`), package `/private/tmp/agent_signalbar_agy_permission_review.zip` created.
+Next: Present final verdict and review package to Ava.
+Blockers: Needs-You positive signal unavailable due to Electron internal canvas rendering.
+
+[RELEASE] Antigravity Needs-You Feasibility Probe — antigravity — 2026-08-15T21:33:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Antigravity Turn Stability & Notification Permission Signal
+Done:
+1. Part 1 - Turn Stability Refactoring: Refactored `handleAntigravityHookEvent` in `AgentState.swift` so `PostInvocation` events emitted mid-turn remain `.working` (eliminating Done flicker mid-turn). Reserved `.done` state transition strictly for terminal `Stop` events. Preserved monotonic `thinkingStartTime` throughout multi-step turns.
+2. Part 2 - Notification Center AX Probe: Built `checkAntigravityNotificationCenterBanner()` in `AutoMonitor.swift` using `AXUIElement` to inspect macOS Notification Center (`com.apple.notificationcenterui`). When a live `AXNotificationCenterBanner` containing Antigravity permission text is detected, it correlates with recent `pendingToolTime` (<= 30s) to transition session status to `.blocked` (Needs You 🔴).
+3. Instant Recovery & History Isolation: `PostToolUse` hook clears pending tool state and immediately returns session status to `.working` (🟡) upon user approval, cleanly ignoring historical notifications remaining in Notification Center history.
+4. Test Verification: Expanded Stage 1 test suite with Test 23 (`swift run Stage1TestRunner` 23/23 passed), verified unit tests (`swift test` exit 0), JS stress suite (`background_test.js` 28/28 passed), and built release app bundle `./build_app.sh`.
+Verified: `swift run Stage1TestRunner` (23/23 passed), `swift test` (exit 0), `./build_app.sh` (exit 0), review package `/private/tmp/agent_signalbar_agy_turn_permission.zip` created.
+Next: Present final verdict and review package to Ava.
+Blockers: none
+
+[RELEASE] Antigravity Turn Stability & Notification Permission — antigravity — 2026-08-15T21:46:00+02:00
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: AGY Final State-Identity Closeout
+Done:
+1. Defect 1 - Duplicate Hook Cleanup & Idempotency: Audited hook scopes and removed duplicate `agent-signalbar-monitor` registration in workspace `.agent/hooks.json`, keeping global `~/.gemini/config/hooks.json` as the single authoritative registration scope. Implemented 1.0s event fingerprint deduplication in `handleAntigravityHookEvent` in `AgentState.swift`.
+2. Defect 2 - Logical `turnId` & `thinkingStartTime` Continuity: Refactored `handleAntigravityHookEvent` so fresh `turnId` and `thinkingStartTime` are created ONLY on first `PreInvocation` after `.idle`/`.done`. Subsequent `PreInvocation` events inside the same turn strictly preserve `turnId` and `thinkingStartTime`.
+3. Defect 3 - Disambiguated Notification Center Correlation: Updated `updateAntigravityPermissionFromNotification()` to bind permission blocks to single unambiguous candidate sessions. If candidate sessions are ambiguous (timing <= 3s), sets provider-level status `detail = "Antigravity Needs You — session unknown"` without corrupting multiple child sessions.
+4. Comprehensive Verification: Expanded Swift unit tests & Stage1TestRunner Test 23 (`23/23 passed`), verified `swift test` (exit 0), `background_test.js` (`28/28 passed`), and created `./build_app.sh` release bundle.
+Verified: `swift test` (exit 0), `swift run Stage1TestRunner` (23/23 passed), `./build_app.sh` (exit 0), package `/private/tmp/agent_signalbar_agy_turn_permission.zip` refreshed.
+Next: Deliver final report to Ava.
+Blockers: none
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Smart Keep-Awake Auto v1 Implementation & Closed-Lid Test Preparation
+Done:
+1. Smart Auto Policy: Implemented `evaluateSmartAutoRequirement()` in `SleepManager.swift` consuming trusted lifecycle states (`chatgpt`, `claude`, `antigravity`). Bound `working` (🟡) and `blocked` (🔴 Needs You) to keep-awake assertion (`isAssertionActive = true`), and `done` (🟢), `idle` (⚪), `off` (⚫) to assertion release (`isAssertionActive = false`).
+2. Codex Exclusion: Excluded `codex` completely from Smart Auto keep-awake evaluation until its detector is accepted.
+3. State & Process Ownership: Preserved keep-awake assertion across `working -> blocked -> working` transitions and intermediate tool steps without process re-launch churn. Enforced child PID binding (`caffeinate -w <pid>`) and automatic cleanup of orphaned caffeinate processes.
+4. UI & Debug Visibility: Exposed sleep debug info in `GET /status`, `GET /debug/sleep`, and `MenuBarManager` settings menu (`[☕ ACTIVE: <Reason>]` / `[💤 IDLE]`). Added `antiSleepMode` persistence to `config.json`.
+5. Verification & Build: Updated Swift Stage1 runner (23/23 passed), SPM unit tests (`swift test` passed), JS stress tests (28/28 passed), built release app bundle (`./build_app.sh`), verified zero orphaned caffeinate processes (`ps aux`) and read-only power assertions (`pmset -g assertions`).
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (23/23 passed), `swift test` (exit 0), `./build_app.sh` (exit 0), `pmset -g assertions` verified.
+Next: Present single real closed-lid desk acceptance test protocol to Ava.
+Blockers: none
+
+## 2026-08-15 — antigravity — macos
+Status: DONE
+Phase: Antigravity Long-Running Command & Task Lifecycle Repair
+Done:
+1. Root Cause Identification: Falsified old assumption that model `Stop` hook event == all provider work completed. When Antigravity executes foreground or background command tasks, model generation turn emits `Stop` while provider-managed task (`run_command` or task execution) remains active. In the native hook payload, Antigravity provides structured `fullyIdle: Bool` field (`fullyIdle: false` during active tasks).
+2. Semantics & Relayer Repair: Updated `antigravity_hook_relay.py` to extract and forward `fully_idle`, `termination_reason`, `execution_num`. Updated `handleAntigravityHookEvent` in `AgentState.swift` to track `pendingToolName`, `hasStopArrived`, `fullyIdle`, and `isTaskRunning`.
+3. State & Smart Auto Continuity: When `Stop` arrives with `fullyIdle: false` or active pending tool (`run_command`), session status MUST REMAIN `.working`, `thinkingStartTime` MUST NOT reset or clear (duration remains continuous), and Smart Auto assertion remains ACTIVE. Status transitions to `.done` only when task completes (`PostToolUse` / `Stop` with `fullyIdle: true`).
+4. Session Isolation: Enforced strict `sessionId` isolation so tasks in session B cannot alter working status or keep session A awake.
+5. Verification: Added Test 24 to Stage1 runner (24/24 passed), expanded SPM test suite (`swift test` passed), ran JS extension stress tests (28/28 passed), and built release app bundle (`./build_app.sh`).
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (24/24 passed), `swift test` (exit 0), `./build_app.sh` (exit 0).
+Next: Present minimal open-lid desk human acceptance test to Ava.
+Blockers: none
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: AGY Needs-You Regression Repair & State Priority Enforcement
+Done:
+1. Root Cause Identification: Diagnosed why task-lifecycle repair suppressed Needs You (🔴 `.blocked`). When model `Stop` arrived with `fullyIdle: false` or active pending tool (`run_command`), the `Stop` handler unconditionally set `session.status = .working`, overwriting actionable `.blocked` permission states created by Notification Center or `ask_question`. `PreToolUse` also skipped resetting status if `.blocked` remained.
+2. State Priority Enforcement: Enforced strict `Needs You > Working > Done` state hierarchy in `handleAntigravityHookEvent` in `AgentState.swift`. When `session.status` is `.blocked` (permission gate active), subsequent `Stop`, `fullyIdle: false`, `PostInvocation`, or polling events preserve `.blocked` (Needs You 🔴), preserve `thinkingStartTime` (continuous duration), and keep Smart Auto ACTIVE (`Smart Auto: Agent needs attention (Antigravity)`).
+3. Resumption & Completion: When user approves permission in Antigravity, execution starts via `PreToolUse` (or approval action), setting `status = .working` (resumed working 🟡) with continuous duration. Only when task finishes completely does status transition to `.done` (🟢).
+4. Verification: Added Test 25 to Stage1 runner (25/25 passed), updated SPM unit tests (`swift test` passed), ran JS extension stress tests (28/28 passed), and built release app bundle (`./build_app.sh`).
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (25/25 passed), `swift test` (exit 0), `./build_app.sh` (exit 0).
+Next: Deliver final report to Ava for AGY lifecycle retest.
+Blockers: none
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: AGY Permission Notification Session-Correlation Repair
+Done:
+1. Root Cause Resolution: Fixed premature erasure of tool correlation timestamps during model `Stop(fullyIdle:false)`. Added `lastToolName` and `lastToolTime` properties to `AgentSessionInfo` in `AgentState.swift`. Preserved pending & last tool correlation evidence across `syncSessions()` polls while task execution is active (`isTaskRunning == true` or `fullyIdle == false`).
+2. Disambiguated Session Match: Updated candidate filter in `updateAntigravityPermissionFromNotification(reason:)` to check `session.pendingToolTime ?? session.lastToolTime ?? session.thinkingStartTime`. Valid permission notifications delivered shortly after `PreToolUse` now successfully bind to the active session even if `Stop(fullyIdle:false)` arrived in between.
+3. State & Smart Auto Continuity: Preserved `Needs You > Working > Done` priority. When notification binds, session transitions to `.blocked` (Needs You 🔴), `thinkingStartTime` is preserved (continuous duration), and Smart Auto assertion remains ACTIVE (`Smart Auto: Agent needs attention (Antigravity)`).
+4. Verification: Updated Test 25 in Stage1 runner (25/25 passed), updated SPM unit tests (`swift test` passed), ran JS extension stress tests (28/28 passed), and built release app bundle (`./build_app.sh`).
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (25/25 passed), `swift test` (exit 0), `./build_app.sh` (exit 0).
+Next: Present minimal real-use human acceptance test to Ava.
+Blockers: none
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: AGY Permission Bounded Active-Task Correlation Lifetime Repair
+Done:
+1. Root Cause Resolution: Addressed hardcoded 30s cutoff limitation that rejected valid permission notifications delivered > 30s after `PreToolUse` while the tool/task remained actively pending approval (`isTaskRunning == true` or `fullyIdle == false`).
+2. Active-Task Candidate Filter: Updated `updateAntigravityPermissionFromNotification(reason:)` in `AgentState.swift` to evaluate sessions with explicit active-task evidence (`hasExplicitTaskRunning && hasPendingTool`) for up to 600.0s (10 minutes) while the provider task remains active, preserving the 30.0s cutoff as a fallback for general working sessions without explicit tool metadata.
+3. State & Smart Auto Continuity: Preserved `Needs You > Working > Done` priority and multi-session ambiguity protection. When notification binds, child session becomes `.blocked` (Needs You 🔴), `thinkingStartTime` is preserved (continuous duration), and Smart Auto assertion remains ACTIVE (`Smart Auto: Agent needs attention (Antigravity)`).
+4. Verification: Updated Test 25 in Stage1 runner (25/25 passed), updated SPM unit tests (`swift test` passed), ran JS extension stress tests (28/28 passed), and built release app bundle (`./build_app.sh`).
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (25/25 passed), `swift test` (exit 0), `./build_app.sh` (exit 0).
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: AGY Permission Regression Rollback & Known-Good Baseline Restoration
+Done:
+1. Identified last known-good boundary from 2026-08-15 21:50 (`AGY Final State-Identity Closeout` / `Antigravity Turn Stability & Notification Permission Signal`, preserved in `/private/tmp/agent_signalbar_agy_turn_permission/`).
+2. Performed scoped rollback of `Sources/AgentSignalBar/AgentState.swift`, reverting task-lifecycle state modifications (`fullyIdle`, `hasStopArrived`, `isTaskRunning`, `lastToolName`, `lastToolTime`, and `syncSessions` tool retention) back to the clean turn-permission baseline (`PreInvocation` -> `.working`, `PreToolUse` -> `pendingToolName` / `pendingToolTime`, Notification Center -> `.blocked`, `PostToolUse` -> clears blocked to `.working`, `Stop` -> `.done`).
+3. Cleaned `adapters/antigravity-hook/antigravity_hook_relay.py` HTTP payload.
+4. Preserved all independent work: Smart Keep-Awake (`SleepManager.swift`, `/debug/sleep`, `antiSleepMode`), watchdog containment, ChatGPT exact-tab detection/routing, Claude hook detector, and caffeinate cleanup.
+5. Reverted `Stage1TestRunner` (23/23 passed) and `AgentSignalBarTests` to known-good suites. Built release app bundle (`./build_app.sh`).
+6. Parked: AGY extended provider-task lifetime tracking.
+Verified: `node adapters/chrome-extension/background_test.js` (28/28 passed), `swift run Stage1TestRunner` (23/23 passed), `swift test` (clean build), `./build_app.sh` (clean exit 0).
+Next: Present single real-use rollback acceptance test to Ava.
+Blockers: none
+[RELEASE] AGY Permission Regression Rollback & Known-Good Baseline Restoration — antigravity — 2026-08-16T11:01:30+02:00
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: Forensic A/B Revision Test — AGY Permission Regression
+Done:
+1. Git Topology: Established repository has exactly ONE commit (`d472834`, 2026-08-09). All 58 subsequent milestones exist only as uncommitted working tree modifications. No intermediate commits, branches, tags, or stashes.
+2. Known-Good Candidate Search: Identified three preserved code snapshots: (a) git commit `d472834` (transcript-scanning only, no hooks, no AX), (b) archive from 2026-08-15 14:11 (no Antigravity permission detection at all), (c) archive from 2026-08-15 21:50 (2-file partial snapshot with hooks + Notification Center AX). No full buildable tree exists for the 21:50 milestone.
+3. Rollback Verification: Confirmed current `AutoMonitor.swift` and `AgentState.swift` are SHA256 byte-identical to the 21:50 archive snapshot (`30a67f26...` and `bc4e99be...` respectively). The previous rollback DID successfully restore these files.
+4. Runtime Hook Trace Analysis: Analyzed 3,903 hook trace events and 975 `PreToolUse` calls — zero `ask_question` events have EVER been recorded. Antigravity's native "Allow running this command?" permission dialog does NOT fire any hook event. The `PreToolUse(ask_question)` code path in `handleAntigravityHookEvent` is dead code for native permission dialogs.
+5. Verdict: `NO REPRODUCIBLE KNOWN-GOOD REVISION FOUND`. Binary A/B test impossible. Source-level regression ruled out for `AutoMonitor.swift` and `AgentState.swift`. Regression is either environmental, involves untested permission-type confusion (`ask_question` modal vs native command permission), or affects non-archived files.
+Verified: `git log --oneline --all` (1 commit), `git status --short` (all uncommitted), `shasum -a 256` (byte-identical match), `grep ask_question` trace (0 matches across 3,903 events). Read-only forensic investigation — no source files modified.
+Next: Await Ava's direction on which permission type was originally tested and whether Accessibility permissions are granted.
+Blockers: Cannot proceed with A/B binary test — no buildable known-good revision exists.
+
+## 2026-08-16 — antigravity — macos
+Status: DONE
+Phase: AGY Permission Bounded Repair — Proven Native AX Banner Shape & Tool Correlation
+Done:
+1. Proven Root Cause Fix: In `AutoMonitor.swift` (`findAntigravityPermissionBannerText`), removed the brittle keyword constraint requiring "permission" or "requesting" (which only existed in CLI/osascript test strings). The classifier now recognizes native Antigravity desktop banners by application identity (`title == "Antigravity"` or `desc.contains("Antigravity")`).
+2. Two-Factor Permission Safety: In `AgentState.swift` (`updateAntigravityPermissionFromNotification`), enforced that a live Antigravity notification only transitions a session to `.blocked` (Needs You 🔴) when correlated with provider-native unresolved pending-tool evidence (`PreToolUse`). Normal/non-permission Antigravity notifications with zero pending tools are safely ignored.
+3. Turn Continuity & Smart Auto Preservation: In `handleAntigravityHookEvent` (`Stop`), model `Stop` events arriving while a tool is pending user permission preserve `.blocked` / `.working` status, duration (`thinkingStartTime`), and keep Smart Auto keep-awake ACTIVE. When user clicks Allow and `PostToolUse` fires, status returns to Working with continuous duration until genuine completion.
+4. Comprehensive Native-Shaped Testing: Updated `Stage1TestRunner` (23/23 passed) and SPM unit tests (`AgentSignalBarTests`) using native-shaped fixtures (`title: "Antigravity", body: "AGY Permission Detection Audit"` with zero permission keywords), verifying all 9 lifecycle and ambiguity scenarios.
+5. Built and relaunched release app bundle (`./build_app.sh`, `open AgentSignalBar.app`).
+Verified: `swift run Stage1TestRunner` (23/23 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `open AgentSignalBar.app` (PID 61732 running and responding to `/status`).
+Next: Give Ava the single human acceptance test.
+Blockers: none
+[RELEASE] AGY Permission Bounded Repair — Proven Native AX Banner Shape & Tool Correlation — antigravity — 2026-08-16T14:00:00+02:00

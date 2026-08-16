@@ -10,10 +10,85 @@ public final class AutoMonitor: @unchecked Sendable {
     private var lastAntigravityLSLogSize: UInt64 = 0
     private var lastCodexLogSize: UInt64 = 0
 
+    // File Modification Time Caching
+    private var lastClaudeTranscriptPath: String?
+    private var lastClaudeModDate: Date?
+    private var lastAntigravityTranscriptPath: String?
+    private var lastAntigravityTranscriptModDate: Date?
+
+
+    // Non-Overlapping Polling Guard
+    private var isCheckInProgress = false
+    private let checkLock = NSLock()
+
     // Anti-flicker Debounce Quiet Window
     private var lastClaudeActivityTime: Date = Date.distantPast
     private var lastAntigravityActivityTime: Date = Date.distantPast
     private var lastCodexActivityTime: Date = Date.distantPast
+
+    // Concurrency Tracking Metrics for Production Testing
+    public private(set) var activeCheckCount: Int = 0
+    public private(set) var peakConcurrentCheckCount: Int = 0
+    public private(set) var rejectedConcurrentCheckCount: Int = 0
+
+    // Poll Body Seam for Unit Testing
+    public var pollBodyHandler: (() -> Void)?
+
+    // File Content Read Counter for Testing Unchanged Suppression
+    public private(set) var readTailCallCount: Int = 0
+
+    // Cache Decision Seam: Returns true if path or mtime is new/changed, false if suppressed
+    public func shouldReadClaudeTranscript(info: ClaudeTranscriptInfo) -> Bool {
+        if info.path == lastClaudeTranscriptPath && info.modDate == lastClaudeModDate {
+            return false
+        }
+        lastClaudeTranscriptPath = info.path
+        lastClaudeModDate = info.modDate
+        return true
+    }
+
+    // Unreaped Process Lock & State Tracking
+    private let processLock = NSLock()
+    public private(set) var unresolvedProcessPID: pid_t? = nil
+    public private(set) var lastSubprocessPID: pid_t? = nil
+    public private(set) var lastSubprocessConfirmedReaped: Bool = false
+    public private(set) var processSpawnBlockedCount: Int = 0
+
+    // Injectable seams for testing timed-out process termination steps
+    public var overrideSigtermWaitTimeoutSeconds: TimeInterval? = nil
+    public var overrideFinalWaitTimeoutSeconds: TimeInterval? = nil
+    public var overrideFinalWaitResult: Bool? = nil
+
+    public func setUnresolvedProcessPIDForTesting(_ pid: pid_t?) {
+        processLock.lock()
+        unresolvedProcessPID = pid
+        processLock.unlock()
+    }
+
+    public func resetProcessTracking() {
+        processLock.lock()
+        unresolvedProcessPID = nil
+        lastSubprocessPID = nil
+        lastSubprocessConfirmedReaped = false
+        processSpawnBlockedCount = 0
+        overrideSigtermWaitTimeoutSeconds = nil
+        overrideFinalWaitTimeoutSeconds = nil
+        overrideFinalWaitResult = nil
+        processLock.unlock()
+    }
+
+    public func resetTestMetrics() {
+        checkLock.lock()
+        activeCheckCount = 0
+        peakConcurrentCheckCount = 0
+        rejectedConcurrentCheckCount = 0
+        readTailCallCount = 0
+        lastClaudeTranscriptPath = nil
+        lastClaudeModDate = nil
+        pollBodyHandler = nil
+        checkLock.unlock()
+        resetProcessTracking()
+    }
 
     public func start() {
         DispatchQueue.main.async { [weak self] in
@@ -26,7 +101,30 @@ public final class AutoMonitor: @unchecked Sendable {
         print("🔍 AutoMonitor background watcher active across all 4 agents.")
     }
 
-    private func checkAllAgents() {
+    public func checkAllAgents() {
+        checkLock.lock()
+        guard !isCheckInProgress else {
+            rejectedConcurrentCheckCount += 1
+            checkLock.unlock()
+            return
+        }
+        isCheckInProgress = true
+        activeCheckCount += 1
+        peakConcurrentCheckCount = max(peakConcurrentCheckCount, activeCheckCount)
+        checkLock.unlock()
+
+        defer {
+            checkLock.lock()
+            activeCheckCount -= 1
+            isCheckInProgress = false
+            checkLock.unlock()
+        }
+
+        if let customHandler = pollBodyHandler {
+            customHandler()
+            return
+        }
+
         let frontmostBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         AgentStore.shared.checkAutoInspect(frontmostBundleId: frontmostBundleId)
 
@@ -41,17 +139,136 @@ public final class AutoMonitor: @unchecked Sendable {
         updateAntigravityUsageFromLocalFiles()
     }
 
-    // Dynamic Antigravity Usage Sync from config.json and local state
+    // Helper: Bounded file tail reader (Max 64KB)
+    public func readTailOfFile(atPath path: String, maxBytes: UInt64 = 65536) -> String? {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let fileSize = attrs[.size] as? UInt64, fileSize > 0,
+              let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.closeFile() }
+
+        readTailCallCount += 1
+
+        let offset = fileSize > maxBytes ? fileSize - maxBytes : 0
+        handle.seek(toFileOffset: offset)
+        let data = handle.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
+    }
+
+    // Helper: Subprocess execution with bounded timeout, single-waiter reaping, PID verification, and unreaped containment
+    public func runProcessWithTimeout(executableURL: URL, arguments: [String], timeoutSeconds: TimeInterval = 1.0) -> String? {
+        processLock.lock()
+        if let unPID = unresolvedProcessPID {
+            // Check if previously unreaped process has now exited
+            if unPID > 0 && kill(unPID, 0) != 0 {
+                // Previously unreaped process has now exited! Clear unresolved state
+                unresolvedProcessPID = nil
+            } else {
+                // Previously spawned process remains unreaped/unconfirmed! Block new process launch
+                processSpawnBlockedCount += 1
+                processLock.unlock()
+                print("⚠️ Subprocess launch blocked: Previous PID \(unPID) remains unreaped.")
+                return nil
+            }
+        }
+        processLock.unlock()
+
+        let task = Process()
+        task.executableURL = executableURL
+        task.arguments = arguments
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        let pid = task.processIdentifier
+        processLock.lock()
+        lastSubprocessPID = pid
+        lastSubprocessConfirmedReaped = false
+        processLock.unlock()
+
+        let semaphore = DispatchSemaphore(value: 0)
+
+        // SINGLE background exit waiter
+        DispatchQueue.global(qos: .utility).async {
+            task.waitUntilExit()
+            semaphore.signal()
+        }
+
+        // 1. Initial bounded wait
+        if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+            task.terminate() // Send SIGTERM
+
+            let sigtermTimeout = overrideSigtermWaitTimeoutSeconds ?? 0.2
+            // 2. Bounded wait on the SAME semaphore
+            if semaphore.wait(timeout: .now() + sigtermTimeout) == .timedOut {
+                if pid > 0 {
+                    kill(pid, SIGKILL)
+                }
+
+                let finalTimeout = overrideFinalWaitTimeoutSeconds ?? 0.5
+                // 3. Final bounded wait on the SAME semaphore with EXPLICIT result handling
+                let reapWaitResult = semaphore.wait(timeout: .now() + finalTimeout)
+                let reapResult = (overrideFinalWaitResult == false) ? .timedOut : reapWaitResult
+                processLock.lock()
+                if reapResult == .success {
+                    lastSubprocessConfirmedReaped = true
+                    unresolvedProcessPID = nil
+                    processLock.unlock()
+                    print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and was confirmed terminated/reaped.")
+                } else {
+                    lastSubprocessConfirmedReaped = false
+                    unresolvedProcessPID = pid
+                    processLock.unlock()
+                    print("❌ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) failed to exit after SIGKILL (unresolved/unreaped).")
+                }
+            } else {
+                processLock.lock()
+                lastSubprocessConfirmedReaped = true
+                unresolvedProcessPID = nil
+                processLock.unlock()
+                print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and terminated gracefully upon SIGTERM.")
+            }
+
+            return nil
+        }
+
+
+        processLock.lock()
+        lastSubprocessConfirmedReaped = true
+        unresolvedProcessPID = nil
+        processLock.unlock()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+
+
+
+
+    // Dynamic Antigravity Usage Sync from config.json and local state (No fake hardcoded fallback percentages)
     private func updateAntigravityUsageFromLocalFiles() {
-        guard let q = ConfigManager.shared.config.quotas?["antigravity"] else { return }
+        let q = ConfigManager.shared.config.quotas?["antigravity"]
 
         var usage = AgentUsageStore.shared.getUsage(for: .antigravity) ?? AgentUsageData(agent: .antigravity)
-        usage.sessionLimitPercent = q.sessionPercent ?? 40.0
-        usage.sessionResetText = q.sessionResetText ?? "resets in 23m"
-        usage.weeklyLimitPercent = q.weeklyPercent ?? 67.0
-        usage.weeklyResetText = q.weeklyResetText ?? "resets in 5d 9h"
-        usage.extraMetricText = q.extraMetricText ?? "Claude & GPT: 5-Hr 100% · Weekly 100% left"
-        usage.isPercentUsed = q.isPercentUsed ?? false
+        usage.sessionLimitPercent = q?.sessionPercent
+        usage.sessionResetText = q?.sessionResetText
+        usage.weeklyLimitPercent = q?.weeklyPercent
+        usage.weeklyResetText = q?.weeklyResetText
+        usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
+        usage.isPercentUsed = q?.isPercentUsed ?? false
+        usage.isLiveSource = false
+        usage.quotaSource = "none"
+        usage.quotaTimestamp = nil
+        usage.parserDecision = "no_live_disk_file"
+        usage.freshness = "Unavailable"
         usage.lastUpdated = Date()
 
         AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
@@ -71,11 +288,14 @@ public final class AutoMonitor: @unchecked Sendable {
             return
         }
 
-        let fh = (uDict["fh"] as? NSNumber)?.doubleValue ?? 12.0 // 5-Hour % used
-        let sd = (uDict["sd"] as? NSNumber)?.doubleValue ?? 46.0 // Weekly % used
+        let fh = (uDict["fh"] as? NSNumber)?.doubleValue ?? 0.0 // 5-Hour % used
+        let sd = (uDict["sd"] as? NSNumber)?.doubleValue ?? 0.0 // Weekly % used
 
+        var sampleDate: Date? = nil
         var resetText = "resets in 3h 02m"
+
         if let lastTimestampMs = (lastSample["t"] as? NSNumber)?.doubleValue {
+            sampleDate = Date(timeIntervalSince1970: lastTimestampMs / 1000.0)
             let windowDurationMs: Double = 5.0 * 3600.0 * 1000.0
             let nowMs = Date().timeIntervalSince1970 * 1000.0
             
@@ -99,320 +319,343 @@ public final class AutoMonitor: @unchecked Sendable {
             }
         }
 
+        let isStale = sampleDate != nil && Date().timeIntervalSince(sampleDate!) > 86400
+
         var usage = AgentUsageStore.shared.getUsage(for: .claude) ?? AgentUsageData(agent: .claude)
         usage.sessionLimitPercent = fh
         usage.sessionResetText = resetText
         usage.weeklyLimitPercent = sd
         usage.weeklyResetText = "resets Mon 10:59 PM"
         usage.isPercentUsed = true
+        usage.isLiveSource = true
+        usage.quotaSource = "plan-usage-history.json"
+        usage.quotaTimestamp = sampleDate
+        usage.parserDecision = isStale ? "stale_sample_history" : "parsed_live_sample"
+        usage.freshness = isStale ? "Stale" : "Fresh"
         usage.lastUpdated = Date()
 
         AgentUsageStore.shared.updateUsage(for: .claude, data: usage)
     }
 
-    // Dynamic Codex Usage Calculator from config.json and local files
+    // Dynamic Codex Usage Calculator from config.json and local files (No fake hardcoded fallback percentages)
     private func updateCodexUsageFromLocalFiles() {
-        guard let q = ConfigManager.shared.config.quotas?["codex"] else { return }
+        let q = ConfigManager.shared.config.quotas?["codex"]
 
         var usage = AgentUsageStore.shared.getUsage(for: .codex) ?? AgentUsageData(agent: .codex)
-        usage.weeklyLimitPercent = q.weeklyPercent ?? 89.0
-        usage.weeklyResetText = q.weeklyResetText ?? "resets Aug 15"
-        usage.resetCardCount = q.resetCardCount ?? 1
-        usage.resetCardExpiryText = q.resetCardExpiryText ?? "Expires 8/12, 7:51 PM"
-        usage.isPercentUsed = q.isPercentUsed ?? false
+        usage.weeklyLimitPercent = q?.weeklyPercent
+        usage.weeklyResetText = q?.weeklyResetText
+        usage.resetCardCount = q?.resetCardCount
+        usage.resetCardExpiryText = q?.resetCardExpiryText
+        usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
+        usage.isPercentUsed = q?.isPercentUsed ?? false
+        usage.isLiveSource = false
+        usage.quotaSource = "none"
+        usage.quotaTimestamp = nil
+        usage.parserDecision = "no_live_disk_file"
+        usage.freshness = "Unavailable"
         usage.lastUpdated = Date()
 
         AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
     }
 
-    // Helper: Find active Claude session title from ~/.claude/projects/ using message timestamps
-    private func fetchClaudeSessionTitle() -> String? {
-        let projectsDir = NSString(string: "~/.claude/projects").expandingTildeInPath
+    private func parseISO8601Date(_ str: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = formatter.date(from: str) { return d }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: str)
+    }
+
+    private func parseClaudeLogDate(_ line: String) -> Date? {
+        let prefix = String(line.prefix(19))
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone.current
+        return formatter.date(from: prefix)
+    }
+
+    public struct ClaudeTranscriptInfo {
+        public let path: String
+        public let modDate: Date
+
+        public init(path: String, modDate: Date) {
+            self.path = path
+            self.modDate = modDate
+        }
+    }
+
+    public func findAllRecentClaudeTranscripts(withinSeconds: TimeInterval = 86400) -> [ClaudeTranscriptInfo] {
         let fm = FileManager.default
+        var results: [ClaudeTranscriptInfo] = []
+        var seenPaths = Set<String>()
 
-        guard let enumerator = fm.enumerator(atPath: projectsDir) else { return nil }
+        let historyPath = NSString(string: "~/.claude/history.jsonl").expandingTildeInPath
+        if fm.fileExists(atPath: historyPath),
+           let content = readTailOfFile(atPath: historyPath, maxBytes: 16384) {
+            let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            for line in lines.reversed() {
+                if let data = line.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let sessionId = json["sessionId"] as? String, !sessionId.isEmpty,
+                   let projectPath = json["project"] as? String, !projectPath.isEmpty {
 
-        var candidates: [(title: String, lastTime: Double)] = []
+                    let sanitizedFolder = projectPath.replacingOccurrences(of: "/", with: "-")
+                    let transcriptPath = NSString(string: "~/.claude/projects/\(sanitizedFolder)/\(sessionId).jsonl").expandingTildeInPath
 
-        while let file = enumerator.nextObject() as? String {
-            if file.hasSuffix(".jsonl") {
-                let fullPath = (projectsDir as NSString).appendingPathComponent(file)
-                if let content = try? String(contentsOfFile: fullPath, encoding: .utf8) {
-                    let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-                    var title: String?
-                    var maxTimestamp: Double = 0
-                    
-                    for line in lines {
-                        if let data = line.data(using: .utf8),
-                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                            if let custom = json["customTitle"] as? String, !custom.isEmpty {
-                                title = custom
-                            } else if let t = json["title"] as? String, !t.isEmpty {
-                                title = t
-                            }
-                            if let tsStr = json["timestamp"] as? String {
-                                let formatter = ISO8601DateFormatter()
-                                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                                if let date = formatter.date(from: tsStr) {
-                                    maxTimestamp = max(maxTimestamp, date.timeIntervalSince1970)
-                                } else {
-                                    let f2 = ISO8601DateFormatter()
-                                    if let date = f2.date(from: tsStr) {
-                                        maxTimestamp = max(maxTimestamp, date.timeIntervalSince1970)
-                                    }
-                                }
-                            } else if let tsNum = (json["timestamp"] as? NSNumber)?.doubleValue {
-                                maxTimestamp = max(maxTimestamp, tsNum > 1e11 ? tsNum / 1000.0 : tsNum)
-                            }
+                    if !seenPaths.contains(transcriptPath), fm.fileExists(atPath: transcriptPath),
+                       let attrs = try? fm.attributesOfItem(atPath: transcriptPath),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        if Date().timeIntervalSince(modDate) <= withinSeconds {
+                            seenPaths.insert(transcriptPath)
+                            results.append(ClaudeTranscriptInfo(path: transcriptPath, modDate: modDate))
                         }
-                    }
-
-                    if let foundTitle = title {
-                        candidates.append((foundTitle, maxTimestamp))
                     }
                 }
             }
         }
 
-        candidates.sort { $0.lastTime > $1.lastTime }
-        return candidates.first?.title
-    }
-
-    // 1. Comprehensive Claude Session Transcript & Log Lifecycle Parser
-    private func checkClaudeLog() {
-        let workspace = NSWorkspace.shared
-        let isAppRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName?.lowercased() == "claude" })
-
-        guard isAppRunning else {
-            let current = AgentStore.shared.getStatus(for: .claude)
-            if current.status != .off {
-                AgentStore.shared.updateStatus(for: .claude, status: .off, detail: "Claude Desktop closed")
-            }
-            return
-        }
-
         let projectsDir = NSString(string: "~/.claude/projects").expandingTildeInPath
-        let fm = FileManager.default
-
-        let parsedSessionTitle: String? = fetchClaudeSessionTitle()
-        var newestTranscriptFile: String?
-        var newestTranscriptDate: Date = Date.distantPast
-
         if let enumerator = fm.enumerator(atPath: projectsDir) {
             while let file = enumerator.nextObject() as? String {
                 if file.hasSuffix(".jsonl") {
                     let fullPath = (projectsDir as NSString).appendingPathComponent(file)
-                    if let attrs = try? fm.attributesOfItem(atPath: fullPath),
-                       let modDate = attrs[.modificationDate] as? Date, modDate > newestTranscriptDate {
-                        newestTranscriptDate = modDate
-                        newestTranscriptFile = fullPath
-                    }
-                }
-            }
-        }
-
-        var isTurnCompleted = false
-        var isWorking = false
-        var isPermissionNeeded = false
-
-        if let activeTranscript = newestTranscriptFile,
-           let content = try? String(contentsOfFile: activeTranscript, encoding: .utf8) {
-            let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            
-            // Inspect from newest messages backwards
-            for line in lines.reversed() {
-                if let data = line.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let type = json["type"] as? String {
-                    if type == "assistant" {
-                        if let msg = json["message"] as? [String: Any],
-                           let stopReason = msg["stop_reason"] as? String, stopReason == "end_turn" {
-                            isTurnCompleted = true
-                            break
-                        } else {
-                            isWorking = true
-                            break
+                    if !seenPaths.contains(fullPath), let attrs = try? fm.attributesOfItem(atPath: fullPath),
+                       let modDate = attrs[.modificationDate] as? Date {
+                        if Date().timeIntervalSince(modDate) <= withinSeconds {
+                            seenPaths.insert(fullPath)
+                            results.append(ClaudeTranscriptInfo(path: fullPath, modDate: modDate))
                         }
-                    } else if type == "user" {
-                        isWorking = true
-                        break
                     }
                 }
             }
         }
 
-        let mainLogPath = NSString(string: "~/Library/Logs/Claude/main.log").expandingTildeInPath
-        if let attrs = try? fm.attributesOfItem(atPath: mainLogPath),
-           let fileSize = attrs[.size] as? UInt64, fileSize > 0,
-           let fileHandle = FileHandle(forReadingAtPath: mainLogPath) {
-            let offset = fileSize > 8192 ? fileSize - 8192 : 0
-            fileHandle.seek(toFileOffset: offset)
-            let data = fileHandle.readDataToEndOfFile()
-            fileHandle.closeFile()
-            if let content = String(data: data, encoding: .utf8)?.lowercased() {
-                if content.contains("waiting for confirmation") || content.contains("user_approval_required") {
-                    isPermissionNeeded = true
-                }
-            }
+        results.sort(by: { $0.modDate > $1.modDate })
+        return Array(results.prefix(5))
+    }
+
+    public func findActiveClaudeTranscriptInfo() -> ClaudeTranscriptInfo? {
+        return findAllRecentClaudeTranscripts().first
+    }
+
+    // 1. Claude Process Watcher (Session automation disabled for baseline recovery)
+    public func checkClaudeLog() {
+        let workspace = NSWorkspace.shared
+        let isAppRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName?.lowercased() == "claude" })
+
+        guard isAppRunning else {
+            AgentStore.shared.updateStatus(for: .claude, status: .off, detail: "Claude Code closed")
+            AgentStore.shared.syncSessions(for: .claude, activeSessions: [], processRunning: false)
+            return
         }
 
-        if isPermissionNeeded {
-            AgentStore.shared.updateStatus(for: .claude, status: .blocked, detail: "🔴 Waiting for Claude user permission / approval", sessionTitle: parsedSessionTitle)
-        } else if isWorking {
-            let current = AgentStore.shared.getStatus(for: .claude)
-            var durationStr = ""
-            if let start = current.thinkingStartTime {
-                let elapsed = Int(Date().timeIntervalSince(start))
-                let mins = elapsed / 60
-                let secs = elapsed % 60
-                durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
-            }
-            AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude active/thinking...\(durationStr)", sessionTitle: parsedSessionTitle)
-        } else {
-            let current = AgentStore.shared.getStatus(for: .claude)
-            if current.status == .working || current.status == .blocked {
-                AgentStore.shared.updateStatus(for: .claude, status: .done, detail: "Claude turn completed", sessionTitle: parsedSessionTitle)
-            } else if current.status == .off {
-                AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Claude running", sessionTitle: parsedSessionTitle)
-            }
+        AgentStore.shared.pruneStaleClaudeSessions()
+
+        let currentClaudeSessions = AgentStore.shared.getSessions(for: .claude)
+        if currentClaudeSessions.isEmpty {
+            AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Monitoring via Claude Native Hooks (Ready)")
+            AgentStore.shared.syncSessions(for: .claude, activeSessions: [], processRunning: true)
         }
     }
 
-    // 2. Comprehensive Antigravity Log & Transcript Trajectory Engine
+    // 2. Antigravity Process Watcher (Provider-Native Lifecycle Hooks)
     private func checkAntigravityLog() {
         let workspace = NSWorkspace.shared
         let isAppRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.antigravity" || $0.localizedName?.lowercased() == "antigravity" })
 
         guard isAppRunning else {
-            let current = AgentStore.shared.getStatus(for: .antigravity)
-            if current.status != .off {
-                AgentStore.shared.updateStatus(for: .antigravity, status: .off, detail: "Antigravity closed")
-            }
+            AgentStore.shared.updateStatus(for: .antigravity, status: .off, detail: "Antigravity closed")
+            AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: false)
             return
         }
 
-        let fm = FileManager.default
+        checkAntigravityNotificationCenterBanner()
 
-        var isWaitingPermission = false
-        var isTurnActive = false
-        let sessionTitle = "Agent-webchat monitor"
-
-        let brainDir = NSString(string: "~/.gemini/antigravity/brain").expandingTildeInPath
-        if let brainEnum = fm.enumerator(atPath: brainDir) {
-            var newestTranscript: String?
-            var newestDate: Date = Date.distantPast
-            while let file = brainEnum.nextObject() as? String {
-                if file.hasSuffix("transcript.jsonl") {
-                    let fullPath = (brainDir as NSString).appendingPathComponent(file)
-                    if let attrs = try? fm.attributesOfItem(atPath: fullPath),
-                       let modDate = attrs[.modificationDate] as? Date {
-                        if modDate > newestDate {
-                            newestDate = modDate
-                            newestTranscript = fullPath
-                        }
-                    }
-                }
-            }
-
-            if let activeTranscript = newestTranscript,
-               let content = try? String(contentsOfFile: activeTranscript, encoding: .utf8) {
-                let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-
-                // 1. Find index of last USER_INPUT step in transcript
-                var lastUserIndex = -1
-                for (idx, line) in lines.enumerated() {
-                    if line.contains("\"type\":\"USER_INPUT\"") {
-                        lastUserIndex = idx
-                    }
-                }
-
-                let currentTurnLines = lastUserIndex >= 0 ? Array(lines[lastUserIndex...]) : lines
-
-                // 2. Check if ask_question or RequestFeedback is present in current turn
-                var hasAskQuestion = false
-                var hasSubsequentResponse = false
-
-                for line in currentTurnLines {
-                    if line.contains("\"name\":\"ask_question\"") || line.contains("ask_question") || line.contains("\"RequestFeedback\":true") {
-                        hasAskQuestion = true
-                    } else if hasAskQuestion {
-                        if line.contains("RUN_COMMAND") || line.contains("CODE_ACTION") || line.contains("TOOL_RESULT") || line.contains("\"type\":\"USER_INPUT\"") {
-                            hasSubsequentResponse = true
-                        }
-                    }
-                }
-
-                if hasAskQuestion && !hasSubsequentResponse {
-                    isWaitingPermission = true
-                } else {
-                    // Check if latest planner response in current turn had active tool calls
-                    for line in currentTurnLines.reversed() {
-                        if line.contains("\"type\":\"PLANNER_RESPONSE\"") {
-                            if line.contains("\"tool_calls\"") {
-                                isTurnActive = true
-                            }
-                            break
-                        }
-                    }
-                }
-            }
-        }
-
-        if isWaitingPermission {
-            AgentStore.shared.updateStatus(for: .antigravity, status: .blocked, detail: "🔴 Waiting for user permission / modal response", sessionTitle: sessionTitle)
-        } else if isTurnActive {
-            let current = AgentStore.shared.getStatus(for: .antigravity)
-            var durationStr = ""
-            if let start = current.thinkingStartTime {
-                let elapsed = Int(Date().timeIntervalSince(start))
-                let mins = elapsed / 60
-                let secs = elapsed % 60
-                durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
-            }
-            AgentStore.shared.updateStatus(for: .antigravity, status: .working, detail: "Antigravity active/executing...\(durationStr)", sessionTitle: sessionTitle)
-        } else {
-            let current = AgentStore.shared.getStatus(for: .antigravity)
-            if current.status == .working || current.status == .blocked {
-                AgentStore.shared.updateStatus(for: .antigravity, status: .done, detail: "Antigravity task completed!", sessionTitle: sessionTitle)
-            } else if current.status == .off {
-                AgentStore.shared.updateStatus(for: .antigravity, status: .idle, detail: "Antigravity ready", sessionTitle: sessionTitle)
-            }
+        let currentAntigravitySessions = AgentStore.shared.getSessions(for: .antigravity)
+        if currentAntigravitySessions.isEmpty {
+            AgentStore.shared.updateStatus(for: .antigravity, status: .idle, detail: "Monitoring via Antigravity Native Hooks (Ready)")
+            AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
         }
     }
 
-    // 3. Robust Codex Process & Multi-Log Detector
-    private func checkCodexLogAndProcess() {
+    // Bounded macOS Notification Center AX Probe for Antigravity Permission Notifications
+    private func checkAntigravityNotificationCenterBanner() {
         let workspace = NSWorkspace.shared
-        let codexApp = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.openai.codex" || $0.localizedName?.lowercased() == "codex" || $0.localizedName?.lowercased() == "chatgpt" })
-
-        guard codexApp != nil else {
-            let current = AgentStore.shared.getStatus(for: .codex)
-            if current.status != .off {
-                AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
-            }
+        guard let ncApp = workspace.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.apple.notificationcenterui" || ($0.localizedName ?? "").lowercased().contains("notification center")
+        }) else {
             return
         }
 
-        let logDirectories = [
-            NSString(string: "~/Library/Logs/com.openai.codex").expandingTildeInPath,
-            NSString(string: "~/Library/Logs/Codex").expandingTildeInPath,
-            NSString(string: "~/Library/Application Support/Codex/logs").expandingTildeInPath,
-            NSString(string: "~/.codex/logs").expandingTildeInPath
-        ]
+        let appRef = AXUIElementCreateApplication(ncApp.processIdentifier)
+        if let bannerText = findAntigravityPermissionBannerText(element: appRef) {
+            AgentStore.shared.updateAntigravityPermissionFromNotification(reason: bannerText)
+        }
+    }
+
+    private func findAntigravityPermissionBannerText(element: AXUIElement, depth: Int = 0, maxDepth: Int = 6) -> String? {
+        if depth > maxDepth { return nil }
+
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
+           let subrole = value as? String, subrole == "AXNotificationCenterBanner" {
+
+            var titleStr = ""
+            var bodyStr = ""
+            var descStr = ""
+            if AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &value) == .success,
+               let desc = value as? String {
+                descStr = desc
+            }
+
+            var childrenVal: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenVal) == .success,
+               let children = childrenVal as? [AXUIElement] {
+                for child in children {
+                    var idVal: CFTypeRef?
+                    var textVal: CFTypeRef?
+                    _ = AXUIElementCopyAttributeValue(child, "AXIdentifier" as CFString, &idVal)
+                    _ = AXUIElementCopyAttributeValue(child, kAXValueAttribute as CFString, &textVal)
+                    let cId = idVal as? String ?? ""
+                    let cText = textVal as? String ?? ""
+                    if cId == "title" { titleStr = cText }
+                    else if cId == "body" { bodyStr = cText }
+                }
+            }
+
+            let combined = "\(titleStr) \(bodyStr) \(descStr)".lowercased()
+            let isAntigravity = titleStr.lowercased() == "antigravity" ||
+                                titleStr.lowercased().contains("antigravity") ||
+                                descStr.lowercased().contains("antigravity") ||
+                                combined.contains("antigravity") ||
+                                combined.contains("terminal")
+            if isAntigravity {
+                return bodyStr.isEmpty ? (titleStr.isEmpty ? "Antigravity prompt" : titleStr) : bodyStr
+            }
+        }
+
+        var childrenVal: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenVal) == .success,
+           let children = childrenVal as? [AXUIElement] {
+            for child in children {
+                if let found = findAntigravityPermissionBannerText(element: child, depth: depth + 1, maxDepth: maxDepth) {
+                    return found
+                }
+            }
+        }
+        return nil
+    }
+
+    public struct CodexSessionInfo {
+        public let path: String
+        public let modDate: Date
+
+        public init(path: String, modDate: Date) {
+            self.path = path
+            self.modDate = modDate
+        }
+    }
+
+    public struct CodexThreadInfo {
+        public let id: String
+        public let title: String
+        public let rolloutPath: String
+        public let updatedAtMs: Int64
+
+        public init(id: String, title: String, rolloutPath: String, updatedAtMs: Int64) {
+            self.id = id
+            self.title = title
+            self.rolloutPath = rolloutPath
+            self.updatedAtMs = updatedAtMs
+        }
+    }
+
+    public func fetchCodexThreads(limit: Int = 5) -> [CodexThreadInfo] {
         let fm = FileManager.default
+        let dbPath = NSString(string: "~/.codex/state_5.sqlite").expandingTildeInPath
+        let globalStatePath = NSString(string: "~/.codex/.codex-global-state.json").expandingTildeInPath
 
-        var newestFile: String?
-        var newestDate: Date = Date.distantPast
+        var targetThreadId: String? = nil
 
-        for baseDir in logDirectories {
-            if let enumerator = fm.enumerator(atPath: baseDir) {
-                while let file = enumerator.nextObject() as? String {
-                    if file.hasSuffix(".sqlite") || file.hasSuffix(".db") || file.contains("storage") || file.contains("telemetry") || file.contains("analytics") {
-                        continue
+        if fm.fileExists(atPath: globalStatePath),
+           let data = try? Data(contentsOf: URL(fileURLWithPath: globalStatePath)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let selProj = json["selected-project"] as? [String: Any],
+           let projId = selProj["projectId"] as? String,
+           let orders = json["sidebar-project-thread-orders"] as? [String: Any],
+           let projOrder = orders[projId] as? [String: Any],
+           let threadIds = projOrder["threadIds"] as? [String],
+           let topId = threadIds.first, !topId.isEmpty {
+            targetThreadId = topId
+        }
+
+        if targetThreadId == nil {
+            let locksDir = NSString(string: "~/.codex/thread-writer-locks").expandingTildeInPath
+            if let lockFiles = try? fm.contentsOfDirectory(atPath: locksDir) {
+                let activeLocks = lockFiles.filter { $0.hasSuffix(".lock") && !$0.hasPrefix(".") && $0 != ".coordination.lock" }
+                if let newestLock = activeLocks.first {
+                    targetThreadId = newestLock.replacingOccurrences(of: ".lock", with: "")
+                }
+            }
+        }
+
+        var results: [CodexThreadInfo] = []
+        var seenIds = Set<String>()
+
+        if fm.fileExists(atPath: dbPath) {
+            if let tid = targetThreadId {
+                let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || updated_at_ms FROM threads WHERE id='\(tid)';"
+                if let output = runProcessWithTimeout(
+                    executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+                    arguments: [dbPath, query],
+                    timeoutSeconds: 1.0
+                ) {
+                    let parts = output.components(separatedBy: "|||")
+                    if parts.count >= 4 {
+                        let tidStr = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        if !tidStr.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) {
+                            seenIds.insert(tidStr)
+                            results.append(CodexThreadInfo(id: tidStr, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, updatedAtMs: updated))
+                        }
                     }
+                }
+            }
 
-                    if file.hasSuffix(".log") {
-                        let fullPath = (baseDir as NSString).appendingPathComponent(file)
+            let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
+            if let output = runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+                arguments: [dbPath, query],
+                timeoutSeconds: 1.0
+            ) {
+                let lines = output.components(separatedBy: "\n")
+                for line in lines {
+                    let parts = line.components(separatedBy: "|||")
+                    if parts.count >= 4 {
+                        let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
+                            seenIds.insert(tid)
+                            results.append(CodexThreadInfo(id: tid, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, updatedAtMs: updated))
+                        }
+                    }
+                }
+            }
+        }
+
+        if results.isEmpty {
+            let sessionsDir = NSString(string: "~/.codex/sessions").expandingTildeInPath
+            if let enumerator = fm.enumerator(atPath: sessionsDir) {
+                var newestFile: String?
+                var newestDate: Date = Date.distantPast
+
+                while let file = enumerator.nextObject() as? String {
+                    if file.hasSuffix(".jsonl") {
+                        let fullPath = (sessionsDir as NSString).appendingPathComponent(file)
                         if let attrs = try? fm.attributesOfItem(atPath: fullPath),
                            let modDate = attrs[.modificationDate] as? Date {
                             if modDate > newestDate {
@@ -422,82 +665,89 @@ public final class AutoMonitor: @unchecked Sendable {
                         }
                     }
                 }
+
+                if let activeFile = newestFile {
+                    let filename = (activeFile as NSString).lastPathComponent
+                    results.append(CodexThreadInfo(id: filename, title: "Codex Session", rolloutPath: activeFile, updatedAtMs: Int64(newestDate.timeIntervalSince1970 * 1000.0)))
+                }
             }
         }
 
-        let secondsSinceMod = Date().timeIntervalSince(newestDate)
-        let codexSessionTitle = fetchCodexSessionTitle() ?? "Codex Session"
-        var isActivelyGenerating = false
-        var isApprovalNeeded = false
+        return Array(results.prefix(limit))
+    }
 
-        if let activeLog = newestFile, secondsSinceMod < 4.0 {
-            if let fileHandle = FileHandle(forReadingAtPath: activeLog) {
-                let attrs = (try? fm.attributesOfItem(atPath: activeLog)) ?? [:]
-                let fileSize = (attrs[.size] as? UInt64) ?? 0
-                let offset = fileSize > 4096 ? fileSize - 4096 : 0
-                fileHandle.seek(toFileOffset: offset)
-                let data = fileHandle.readDataToEndOfFile()
-                fileHandle.closeFile()
+    public func fetchCodexThreadInfo() -> CodexThreadInfo? {
+        return fetchCodexThreads(limit: 1).first
+    }
 
-                if let content = String(data: data, encoding: .utf8)?.lowercased() {
-                    if content.contains("approval_required") || content.contains("confirmation_pending") {
-                        isApprovalNeeded = true
-                    } else if content.contains("executing") || content.contains("tool_call") || content.contains("streaming") || content.contains("model_request") || content.contains("active_task") {
-                        isActivelyGenerating = true
+    public func findActiveCodexSessionInfo() -> CodexSessionInfo? {
+        if let info = fetchCodexThreadInfo() {
+            return CodexSessionInfo(path: info.rolloutPath, modDate: Date(timeIntervalSince1970: Double(info.updatedAtMs) / 1000.0))
+        }
+        return nil
+    }
+
+    // Helper: Bounded Backward-Chunk Turn Reader for Large Codex Rollouts (>128 KB)
+    public func readTurnFromRollout(atPath path: String, maxBytesToScan: UInt64 = 2097152) -> (turnLines: [String], turnId: String?)? {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let fileSize = attrs[.size] as? UInt64, fileSize > 0,
+              let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.closeFile() }
+
+        readTailCallCount += 1
+
+        let bytesToRead = min(fileSize, maxBytesToScan)
+        let startOffset = fileSize - bytesToRead
+
+        handle.seek(toFileOffset: startOffset)
+        let data = handle.readDataToEndOfFile()
+        guard let content = String(data: data, encoding: .utf8) else { return nil }
+
+        let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+        var lastTaskStartIdx = -1
+        var extractedTurnId: String? = nil
+
+        for (idx, line) in lines.enumerated() {
+            if line.contains("task_started") || line.contains("user_message") {
+                lastTaskStartIdx = idx
+                if let data = line.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let payload = json["payload"] as? [String: Any] {
+                        if let tid = payload["turn_id"] as? String { extractedTurnId = tid }
+                        else if let id = payload["id"] as? String { extractedTurnId = id }
                     }
                 }
             }
         }
 
-        if isActivelyGenerating {
-            lastCodexActivityTime = Date()
-        }
-        let secondsSinceCodexWorking = Date().timeIntervalSince(lastCodexActivityTime)
-
-        if isApprovalNeeded {
-            AgentStore.shared.updateStatus(for: .codex, status: .blocked, detail: "🔴 Waiting for Codex user approval", sessionTitle: codexSessionTitle)
-        } else if isActivelyGenerating && secondsSinceCodexWorking < 4.0 {
-            let current = AgentStore.shared.getStatus(for: .codex)
-            var durationStr = ""
-            if let start = current.thinkingStartTime {
-                let elapsed = Int(Date().timeIntervalSince(start))
-                let mins = elapsed / 60
-                let secs = elapsed % 60
-                durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
-            }
-            AgentStore.shared.updateStatus(for: .codex, status: .working, detail: "Codex Desktop active/generating...\(durationStr)", sessionTitle: codexSessionTitle)
+        if lastTaskStartIdx >= 0 {
+            let turnLines = Array(lines[lastTaskStartIdx...])
+            return (turnLines, extractedTurnId ?? "\(lastTaskStartIdx)")
         } else {
-            let current = AgentStore.shared.getStatus(for: .codex)
-            if current.status == .working || current.status == .blocked {
-                AgentStore.shared.updateStatus(for: .codex, status: .done, detail: "Codex task completed", sessionTitle: codexSessionTitle)
-            } else if current.status == .done {
-                if secondsSinceMod > 30.0 {
-                    AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop running", sessionTitle: codexSessionTitle)
-                }
-            } else if current.status == .off {
-                AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop running", sessionTitle: codexSessionTitle)
-            }
+            return (lines, nil)
         }
     }
 
-    private func fetchCodexSessionTitle() -> String? {
-        let indexPath = NSString(string: "~/.codex/session_index.jsonl").expandingTildeInPath
-        let fm = FileManager.default
+    // 3. Codex Process Watcher (Session automation disabled for baseline recovery)
+    private func checkCodexLogAndProcess() {
+        let workspace = NSWorkspace.shared
+        let codexApp = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.openai.codex" || $0.localizedName?.lowercased() == "codex" || $0.localizedName?.lowercased() == "chatgpt" })
 
-        if fm.fileExists(atPath: indexPath),
-           let content = try? String(contentsOfFile: indexPath, encoding: .utf8) {
-            let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            
-            for line in lines.reversed() {
-                if let data = line.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let threadName = json["thread_name"] as? String, !threadName.isEmpty {
-                    return threadName
-                }
-            }
+        guard codexApp != nil else {
+            AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
+            AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: false)
+            return
         }
 
-        return nil
+        AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Monitoring unavailable / Experimental")
+        AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    }
+
+
+    private func fetchCodexSessionTitle() -> String? {
+        return fetchCodexThreadInfo()?.title
     }
 
     // 4. ChatGPT Expiry check

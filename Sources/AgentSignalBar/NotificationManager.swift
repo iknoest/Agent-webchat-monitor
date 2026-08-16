@@ -17,6 +17,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
     }
 
     private func setupNotifications() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -27,6 +28,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
             }
         }
     }
+
 
     // Foreground notification display delegate (Guarantees pop-ups even when app is active!)
     public func userNotificationCenter(
@@ -62,7 +64,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
 
         // Dispatch Banner Notification if enabled
         let isBannerEnabled = ConfigManager.shared.config.notificationsEnabled ?? true
-        if isBannerEnabled {
+        if isBannerEnabled && Bundle.main.bundleIdentifier != nil {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
@@ -79,6 +81,8 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
                     print("Failed to dispatch UNUserNotification: \(error)")
                 }
             }
+        }
+
 
             // 100% Guaranteed macOS System Notification via Process /usr/bin/osascript
             DispatchQueue.global(qos: .userInitiated).async {
@@ -91,7 +95,6 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
                 task.arguments = ["-e", script]
                 try? task.run()
             }
-        }
 
         // Audio Alert with 3.0s Anti-Beeping Cooldown Protection
         let now = Date()
@@ -101,6 +104,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
             playSound(named: defaultSoundName)
         }
     }
+
 
     public func playSound(named soundName: String) {
         guard soundName != "Mute (No Sound)" else { return }

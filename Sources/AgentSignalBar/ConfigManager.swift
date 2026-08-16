@@ -68,6 +68,7 @@ public struct AppConfig: Codable {
     public var notificationsEnabled: Bool? // default true
     public var doneSoundName: String? // default "Glass"
     public var attentionSoundName: String? // default "Basso"
+    public var antiSleepMode: String? // default "smartAuto"
     public var customMainIconPath: String?
     public var agents: [String: AgentCustomConfig]
     public var quotas: [String: AgentQuotaConfig]?
@@ -81,6 +82,7 @@ public struct AppConfig: Codable {
             notificationsEnabled: true,
             doneSoundName: "Glass",
             attentionSoundName: "Basso",
+            antiSleepMode: "smartAuto",
             customMainIconPath: nil,
             agents: [
                 "chatgpt": AgentCustomConfig(displayName: "ChatGPT Web", symbol: "💬", shortTag: "GPT", customIconPath: "~/.config/AgentSignalBar/icons/chatgpt.png"),

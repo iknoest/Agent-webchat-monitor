@@ -1,36 +1,38 @@
-# Agent Signal Bar (macOS Status Monitor) Plan
+# Agent Signal Bar (macOS Status Monitor) Plan & Product Roadmap
 
-## Problem (Y)
-Prevent wasted developer context-switching & focus loss caused by not knowing when long-running AI agent tasks (ChatGPT Web, Codex Desktop, Claude Code Desktop, Antigravity) complete, encounter errors, or wait for input.
+## North Star
+`Run multiple AI agents, walk away, and only come back when something actually needs you.`
 
-## Objective (v1)
-Build a native macOS Menu Bar application in Swift (`AgentSignalBar`) listening on `127.0.0.1:18888` for agent status signals, rendering visual status indicators (Working/Done/Blocked), playing togglable audio alerts and macOS notifications, and providing quick window focus for Chrome (ChatGPT Web) and desktop agents.
+## Primary SLA
+* Needs You ≤ 30s
+* Finished ≤ 30s
 
-## Build Verdict
-BUILD — Custom lightweight Swift macOS Menu Bar app + Network framework HTTP listener + Tampermonkey/MV3 Chrome adapter & CLI log adapters.
+## Product Roadmap Status Summary
 
-## Definition of Done (MVP & Extensions)
-Measurable — each line names its verification command (literal paths):
-  - [x] Swift executable & app bundle builds cleanly — verify: `swift build -c release && ./build_app.sh`
-  - [x] HTTP Server receives and updates agent status — verify: `curl -s -X POST http://127.0.0.1:18888/status -H "Content-Type: application/json" -d '{"agent":"chatgpt","status":"working"}'`
-  - [x] Status retrieval API returns current state — verify: `curl -s http://127.0.0.1:18888/status`
-Experiential — each line names its artifact + producing command:
-  - [x] Menu Bar updates status & plays sound / notification when agent state changes — artifact: `AgentSignalBar.app` — serve: `open AgentSignalBar.app`
-  - [x] Native Chrome Extension tracks multi-session ChatGPT Web state — artifact: `adapters/chrome-extension/`
-  - [x] Bi-directional Relay engine transfers output between ChatGPT Web and Desktop agents — artifact: `Sources/AgentSignalBar/OutputRelayManager.swift`
-  - [x] Smart Clamshell Anti-Sleep Engine prevents sleep during active turns — artifact: `Sources/AgentSignalBar/SleepManager.swift`
+### DONE
+- [x] **ChatGPT**: Exact-tab session detector & multi-tab state aggregation (`[x] Implemented & Verified`)
+- [x] **Claude**: Provider-native lifecycle hooks (`[x] Implemented & Verified`)
+- [x] **Antigravity**: Native hooks + Notification Center AX probe support Working (🟡) + Finished (🟢) + Needs-You (🔴) permission detection + Multi-Session Identity (`[x] Implemented & Verified`)
+- [x] **Runtime resource containment**: Zero-leak event loops, bounded tail reading, and subprocess reaping (`[x] Implemented & Verified`)
+- [x] **Watchdog protection**: Non-overlapping poll execution lock (`[x] Implemented & Verified`)
+- [x] **Caffeinate orphan/lifecycle repair**: Ownership auditing and clean process termination (`[x] Implemented & Verified`)
 
-## Boundaries
-- macOS AppKit / NSStatusItem API
-- Local HTTP socket binding on `127.0.0.1:18888`
-- Chrome DOM (ChatGPT Web) via Manifest V3 Chrome Extension
-- macOS Accessibility & AppleScript for window focus (`osascript`)
-- IOKit Power Management (`IOPMAssertion`) & `caffeinate` CLI
+### ACCEPTED
+- [x] **ChatGPT**: Exact Chrome return routing (`[x] Ava accepted`: exact Chrome tabId activation without opening new tabs/windows)
 
-## Phases
-- [x] Phase 1: Native Swift Menu Bar App & HTTP Core (`Package.swift`, `AgentState`, `HTTPServer`, `MenuBarManager`)
-- [x] Phase 2: Notifications, Audio Control & Window Focus (NSSound toggle, UserNotifications, AppleScript focus)
-- [x] Phase 3: Adapters Integration (ChatGPT Web Chrome Extension, Claude Code, Codex, Antigravity adapters)
-- [x] Phase 4: Verification & Walkthrough (End-to-End simulation & user walkthrough guide)
-- [x] Phase 5: Bi-Directional Output Relay & Multi-Session ChatGPT Support (`OutputRelayManager`, Chrome MV3 Background Worker)
-- [x] Phase 6: Smart Clamshell Anti-Sleep Engine & Comprehensive Handover Protocol (`SleepManager`, `CHATGPT_COOPERATION_HANDOVER.md`)
+### TESTING
+- [ ] **Claude**: Provider-native hooks undergoing final Ava real-use acceptance
+- [ ] **Antigravity**: Native hooks + Notification Center probe undergoing final Ava real-use acceptance
+
+### OPEN
+- [ ] **Codex**: Codex Desktop session detector
+- [ ] **Smart Keep-Awake**: Open-Lid validation across multi-agent active turns
+- [ ] **Telegram mobile notification**: Remote attention push notifications
+- [ ] **Quota tracking**: Live quota sources for Codex and Antigravity
+
+### PARKED
+- [ ] **AGY extended provider-task lifetime tracking**: Parked to prioritize reliable Needs You (🔴) permission detection
+- [ ] **Closed-lid / clamshell**: Closed-lid desk test (Safety restricted on battery power without external display)
+- [ ] **Relay**: Clean AI output relay enhancements
+- [ ] **Desktop exact-session navigation**: Parked until native accessibility / URL schemes exist
+- [ ] **Multi-agent autonomous turn orchestration**: Parked for future milestone

@@ -40,28 +40,135 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             self.updateTitleAndMenu()
 
             self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.updateTitleAndMenu()
-                }
+                self?.scheduleTitleAndMenuUpdate()
             }
 
-            AgentStore.shared.onStateChanged = { [weak self] agent, oldStatus, newStatus, detail in
+            AgentStore.shared.addObserver(id: "MenuBarManager") { [weak self] agent, oldStatus, newStatus, detail in
                 NotificationManager.shared.notify(agent: agent, oldStatus: oldStatus, newStatus: newStatus, detail: detail)
-                DispatchQueue.main.async {
-                    self?.updateTitleAndMenu()
+                self?.scheduleTitleAndMenuUpdate()
+            }
+        }
+    }
+
+    private var isUpdateScheduled = false
+    private var imageCache: [AgentStatus: NSImage] = [:]
+    private var lastRenderedSignature: String = ""
+    private var lastRebuildTime: Date = Date.distantPast
+    private var pendingThrottledTimer: Timer?
+
+    private func cachedStatusDotImage(for status: AgentStatus) -> NSImage {
+        if let cached = imageCache[status] {
+            return cached
+        }
+        let img = status.statusDotImage()
+        imageCache[status] = img
+        return img
+    }
+
+    public private(set) var renderExecutionCount: Int = 0
+    public private(set) var activePendingTimerCount: Int = 0
+    public var onPerformUpdateTitleAndMenu: (() -> Void)?
+
+    public func resetTestMetrics() {
+        lastRenderedSignature = ""
+        lastRebuildTime = Date.distantPast
+        renderExecutionCount = 0
+        activePendingTimerCount = 0
+        pendingThrottledTimer?.invalidate()
+        pendingThrottledTimer = nil
+        onPerformUpdateTitleAndMenu = nil
+    }
+
+    public func scheduleTitleAndMenuUpdate() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            let now = Date()
+            let timeSinceLast = now.timeIntervalSince(self.lastRebuildTime)
+            let minInterval: TimeInterval = 0.25 // 250ms rate-bound for spaced triggers
+
+            if timeSinceLast >= minInterval {
+                if self.pendingThrottledTimer != nil {
+                    self.pendingThrottledTimer?.invalidate()
+                    self.pendingThrottledTimer = nil
+                    self.activePendingTimerCount = 0
+                }
+                self.performUpdateTitleAndMenu()
+            } else {
+                guard self.pendingThrottledTimer == nil else { return }
+                let remaining = minInterval - timeSinceLast
+                self.activePendingTimerCount = 1
+                self.pendingThrottledTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+                    self?.pendingThrottledTimer = nil
+                    self?.activePendingTimerCount = 0
+                    self?.performUpdateTitleAndMenu()
                 }
             }
         }
     }
 
     public func updateTitleAndMenu() {
+        scheduleTitleAndMenuUpdate()
+    }
+
+    public func performUpdateTitleAndMenu() {
+        lastRebuildTime = Date()
+        renderExecutionCount += 1
+        onPerformUpdateTitleAndMenu?()
+
         guard let item = statusItem, let button = item.button else { return }
 
         let summary = AgentStore.shared.overallSummary()
         button.title = "[\(summary)]"
 
+        let currentSignature = computeRenderSignature()
+        if currentSignature == lastRenderedSignature {
+            return // Suppress redundant menu rebuild when render-affecting state is identical
+        }
+        lastRenderedSignature = currentSignature
+
         rebuildMenu()
     }
+
+
+    public func computeRenderSignature() -> String {
+        let summary = AgentStore.shared.overallSummary()
+        let theme = AgentStore.shared.currentTheme.rawValue
+        let overwork = AgentStore.shared.overworkThresholdMinutes
+
+        let cfg = ConfigManager.shared.config
+        let notifyEnabled = cfg.notificationsEnabled ?? true
+        let soundEnabled = NotificationManager.shared.soundEnabled
+        let doneSound = cfg.doneSoundName ?? "Glass"
+        let attentionSound = cfg.attentionSoundName ?? "Basso"
+        let sleepMode = "\(SleepManager.shared.mode.rawValue):\(SleepManager.shared.isAssertionActive):\(SleepManager.shared.currentReason ?? "")"
+        let autoRelay = OutputRelayManager.shared.isAutoRelayEnabled
+        let usageRefreshTs = lastUsageRefreshTime.timeIntervalSince1970
+
+        var sessionsStr = ""
+        for s in AgentStore.shared.getAllSessions() {
+            sessionsStr += "\(s.provider.rawValue):\(s.sessionId):\(s.status.rawValue):\(s.title); "
+        }
+
+        var stateDetails = ""
+        for agent in AgentID.allCases {
+            let info = AgentStore.shared.getStatus(for: agent)
+            let usage = AgentUsageStore.shared.getUsage(for: agent)
+
+            var openTabsStr = ""
+            for tab in info.openTabs {
+                openTabsStr.append("\(tab.title):\(tab.url):\(tab.status):\(tab.active ?? false);")
+            }
+
+
+
+            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false);"
+        }
+        return "\(summary)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
+    }
+
+
+
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
     private func makeCompactBar(percent: Double, totalBlocks: Int = 10) -> String {
@@ -166,6 +273,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let allStates = AgentStore.shared.getAllStates()
         for agent in AgentID.allCases {
             let info = allStates[agent] ?? AgentInfo(id: agent)
+            let providerSessions = AgentStore.shared.getSessions(for: agent)
             
             var durationTag = ""
             if info.status == .working, let start = info.thinkingStartTime {
@@ -181,56 +289,84 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 durationTag = " [\(info.lastUpdated.relativeString())]"
             }
 
-            let sessionStr = info.activeSessionCount > 1 ? " (\(info.activeSessionCount) sessions)" : ""
-            let nameTag = (info.sessionTitle?.isEmpty == false) ? " — \(info.sessionTitle!)" : ""
+            let sessionStr = providerSessions.count > 1 ? " (\(providerSessions.count) sessions)" : ""
+            let rawTitle = info.sessionTitle ?? ""
+            let nameTag = (!rawTitle.isEmpty) ? " — \(rawTitle.prefix(25))\(rawTitle.count > 25 ? "..." : "")" : ""
 
             let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
             let badge = info.status.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
-            let statusLabel = info.status.statusTitle
+            let isUnavailable = (info.detail?.contains("Monitoring unavailable") == true || info.detail?.contains("Experimental") == true)
+            let statusLabel = isUnavailable ? "Monitoring unavailable / Experimental" : info.status.statusTitle
             let title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(statusLabel)]\(durationTag)"
 
             let item = NSMenuItem(title: title, action: #selector(agentItemClicked(_:)), keyEquivalent: "")
+            item.image = cachedStatusDotImage(for: info.status)
             item.target = self
             item.representedObject = agent
 
-            // Submenu for Detailed Info & Open Tabs
+            // Submenu for Detailed Info & Tracked Sessions
             let submenu = NSMenu()
 
             if let sessionTitle = info.sessionTitle, !sessionTitle.isEmpty {
-                let titleItem = NSMenuItem(title: "Active Session: \(sessionTitle)", action: nil, keyEquivalent: "")
+                let compactTitle = sessionTitle.count > 45 ? String(sessionTitle.prefix(42)) + "..." : sessionTitle
+                let titleItem = NSMenuItem(title: "Active Session: \(compactTitle)", action: nil, keyEquivalent: "")
                 titleItem.isEnabled = false
                 submenu.addItem(titleItem)
             }
 
-            // List ALL Open ChatGPT Tabs in Submenu
+            // List ALL Tracked Sessions in Submenu
             if agent == .chatgpt && !info.openTabs.isEmpty {
-                let tabsHeader = NSMenuItem(title: "Open ChatGPT Tabs (\(info.openTabs.count)):", action: nil, keyEquivalent: "")
+                let revTag = info.revision != nil ? " [rev: \(info.revision!)]" : ""
+                let tabsHeader = NSMenuItem(title: "Open ChatGPT Tabs (\(info.openTabs.count))\(revTag):", action: nil, keyEquivalent: "")
                 tabsHeader.isEnabled = false
                 submenu.addItem(tabsHeader)
 
                 for (idx, tab) in info.openTabs.enumerated() {
-                    let tabTitle = "   \(idx + 1). \(tab.title)"
+                    let tabStatus = AgentStatus(rawValue: tab.status) ?? .idle
+                    let activeTag = (tab.active ?? false) ? " [Active Tab]" : ""
+                    let rawTabTitle = tab.title
+                    let compactTabTitle = rawTabTitle.count > 35 ? String(rawTabTitle.prefix(32)) + "..." : rawTabTitle
+                    let tabTitle = " \(idx + 1). \(compactTabTitle)\(activeTag)"
                     let tabItem = NSMenuItem(title: tabTitle, action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                    tabItem.image = cachedStatusDotImage(for: tabStatus)
+
                     tabItem.target = self
-                    if let url = URL(string: tab.url) {
-                        tabItem.representedObject = url
-                    }
+                    let repDict: [String: Any] = ["url": tab.url, "tabId": tab.tabId as Any]
+                    tabItem.representedObject = repDict
                     submenu.addItem(tabItem)
                 }
                 submenu.addItem(NSMenuItem.separator())
+            } else if !providerSessions.isEmpty {
+                let sessHeader = NSMenuItem(title: "Tracked Sessions (\(providerSessions.count)):", action: nil, keyEquivalent: "")
+                sessHeader.isEnabled = false
+                submenu.addItem(sessHeader)
+
+                for (idx, s) in providerSessions.enumerated() {
+                    let compactTitle = s.title.count > 35 ? String(s.title.prefix(32)) + "..." : s.title
+                    let ackTag = s.isAcknowledged ? " (Inspected)" : ""
+                    let sTitle = " \(idx + 1). \(compactTitle) [\(s.status.statusTitle)\(ackTag)]"
+                    let sItem = NSMenuItem(title: sTitle, action: #selector(sessionItemClicked(_:)), keyEquivalent: "")
+                    sItem.image = cachedStatusDotImage(for: s.status)
+                    sItem.target = self
+                    sItem.representedObject = s
+                    submenu.addItem(sItem)
+                }
+                submenu.addItem(NSMenuItem.separator())
             } else if let webLink = info.webLink, let url = URL(string: webLink), !webLink.isEmpty {
-                let linkItem = NSMenuItem(title: "Open Web Link: \(webLink)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                let compactWebLink = webLink.count > 50 ? String(webLink.prefix(47)) + "..." : webLink
+                let linkItem = NSMenuItem(title: "Open Web Link: \(compactWebLink)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
                 linkItem.target = self
                 linkItem.representedObject = url
                 submenu.addItem(linkItem)
             }
 
             let detailText = (info.detail?.isEmpty == false) ? info.detail! : "No recent activity"
-            let detailItem = NSMenuItem(title: "Detail: \(detailText)", action: nil, keyEquivalent: "")
+            let compactDetail = detailText.count > 45 ? String(detailText.prefix(42)) + "..." : detailText
+            let detailItem = NSMenuItem(title: "Detail: \(compactDetail)", action: nil, keyEquivalent: "")
             detailItem.isEnabled = false
             submenu.addItem(detailItem)
 
-            let sessionItem = NSMenuItem(title: "Active Sessions: \(info.activeSessionCount)", action: nil, keyEquivalent: "")
+            let sessionItem = NSMenuItem(title: "Tracked Sessions: \(providerSessions.count)", action: nil, keyEquivalent: "")
             sessionItem.isEnabled = false
             submenu.addItem(sessionItem)
 
@@ -310,46 +446,51 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            let sPct = claudeUsage.sessionLimitPercent ?? 0.0
-            let sBar = makeCompactBar(percent: sPct)
-            let sReset = claudeUsage.sessionResetText ?? "resets in 4h 55m"
-            let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sPct))% used · \(sReset)", action: nil, keyEquivalent: "")
-            row1.isEnabled = false
-            menu.addItem(row1)
+            let isStale = Date().timeIntervalSince(claudeUsage.lastUpdated) > 86400 || !claudeUsage.isLiveSource
+            let freshnessTag = isStale ? " [Stale Data]" : ""
 
-            let wPct = claudeUsage.weeklyLimitPercent ?? 45.0
-            let wBar = makeCompactBar(percent: wPct)
-            let wReset = claudeUsage.weeklyResetText ?? "resets Mon 11:00 PM"
-            let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wPct))% used · \(wReset)", action: nil, keyEquivalent: "")
-            row2.isEnabled = false
-            menu.addItem(row2)
+            if let sPct = claudeUsage.sessionLimitPercent {
+                let sBar = makeCompactBar(percent: sPct)
+                let sReset = claudeUsage.sessionResetText ?? ""
+                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sPct))% used · \(sReset)\(freshnessTag)", action: nil, keyEquivalent: "")
+                row1.isEnabled = false
+                menu.addItem(row1)
+            } else {
+                let unavail1 = NSMenuItem(title: "     5-Hour: [Unavailable]", action: nil, keyEquivalent: "")
+                unavail1.isEnabled = false
+                menu.addItem(unavail1)
+            }
+
+            if let wPct = claudeUsage.weeklyLimitPercent {
+                let wBar = makeCompactBar(percent: wPct)
+                let wReset = claudeUsage.weeklyResetText ?? ""
+                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wPct))% used · \(wReset)\(freshnessTag)", action: nil, keyEquivalent: "")
+                row2.isEnabled = false
+                menu.addItem(row2)
+            } else {
+                let unavail2 = NSMenuItem(title: "     Weekly: [Unavailable]", action: nil, keyEquivalent: "")
+                unavail2.isEnabled = false
+                menu.addItem(unavail2)
+            }
         }
 
-        // 3B. Antigravity Usage Rows (Both Gemini Models & Claude/GPT Models)
+        // 3B. Antigravity Usage Rows
         if let agyUsage = allUsage[.antigravity] {
             let hdr = NSMenuItem(title: "  Antigravity", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if let sPct = agyUsage.sessionLimitPercent {
+            if agyUsage.isLiveSource, let sPct = agyUsage.sessionLimitPercent {
                 let bar = makeCompactBar(percent: sPct)
-                let resetTag = agyUsage.sessionResetText ?? "resets in 23m"
+                let resetTag = agyUsage.sessionResetText ?? ""
                 let row = NSMenuItem(title: "     Gemini 5-Hr:   \(bar) \(Int(sPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
                 row.isEnabled = false
                 menu.addItem(row)
+            } else {
+                let unavailRow = NSMenuItem(title: "     Quota: [Live disk quota unavailable]", action: nil, keyEquivalent: "")
+                unavailRow.isEnabled = false
+                menu.addItem(unavailRow)
             }
-
-            if let wPct = agyUsage.weeklyLimitPercent {
-                let bar = makeCompactBar(percent: wPct)
-                let resetTag = agyUsage.weeklyResetText ?? "resets in 5d 9h"
-                let row = NSMenuItem(title: "     Gemini Wkly:  \(bar) \(Int(wPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
-                row.isEnabled = false
-                menu.addItem(row)
-            }
-
-            let extraRow = NSMenuItem(title: "     Claude & GPT: 5-Hr 100% · Weekly 100% left", action: nil, keyEquivalent: "")
-            extraRow.isEnabled = false
-            menu.addItem(extraRow)
         }
 
         // 3C. Codex Desktop Usage Rows
@@ -358,19 +499,17 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if let wPct = cdxUsage.weeklyLimitPercent {
+            if cdxUsage.isLiveSource, let wPct = cdxUsage.weeklyLimitPercent {
                 let bar = makeCompactBar(percent: wPct)
-                let resetTag = cdxUsage.weeklyResetText ?? "resets Aug 15"
+                let resetTag = cdxUsage.weeklyResetText ?? ""
                 let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
                 row.isEnabled = false
                 menu.addItem(row)
+            } else {
+                let unavailRow = NSMenuItem(title: "     Quota: [Live disk quota unavailable]", action: nil, keyEquivalent: "")
+                unavailRow.isEnabled = false
+                menu.addItem(unavailRow)
             }
-
-            let cardCount = cdxUsage.resetCardCount ?? 1
-            let cardExpiry = cdxUsage.resetCardExpiryText ?? "Expires 8/12 7:51pm"
-            let cardRow = NSMenuItem(title: "     \(cardCount) Reset Card (\(cardExpiry))", action: nil, keyEquivalent: "")
-            cardRow.isEnabled = false
-            menu.addItem(cardRow)
         }
 
         // 3D. Interactive Refresh Button (Updated Xm ago)
@@ -405,10 +544,20 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // Mac Clamshell Anti-Sleep Controls
         let currentSleepMode = SleepManager.shared.mode
-        let sleepMainItem = NSMenuItem(title: "Mac Anti-Sleep Mode (\(currentSleepMode.displayName))...", action: nil, keyEquivalent: "")
+        let sleepStateTag = SleepManager.shared.isAssertionActive ? " [☕ ACTIVE]" : " [💤 IDLE]"
+        let sleepMainItem = NSMenuItem(title: "Mac Anti-Sleep Mode (\(currentSleepMode.displayName))\(sleepStateTag)...", action: nil, keyEquivalent: "")
         let sleepSubmenu = NSMenu()
         for modeOption in AntiSleepMode.allCases {
-            let item = NSMenuItem(title: modeOption.displayName, action: #selector(selectAntiSleepModeClicked(_:)), keyEquivalent: "")
+            var optionTitle = modeOption.displayName
+            if modeOption == .smartAuto && currentSleepMode == .smartAuto {
+                if SleepManager.shared.isAssertionActive {
+                    let reasonStr = SleepManager.shared.currentReason ?? "Active"
+                    optionTitle = "Smart Auto — ☕ \(reasonStr)"
+                } else {
+                    optionTitle = "Smart Auto — 💤 Idle (Releasing Sleep)"
+                }
+            }
+            let item = NSMenuItem(title: optionTitle, action: #selector(selectAntiSleepModeClicked(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = modeOption
             if modeOption == currentSleepMode {
@@ -534,7 +683,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             } else {
                 SleepManager.shared.mode = modeOption
             }
-            print("☕ Anti-Sleep Mode changed to: \(modeOption.displayName)")
+            var cfg = ConfigManager.shared.config
+            cfg.antiSleepMode = SleepManager.shared.mode.rawValue
+            ConfigManager.shared.saveConfig(cfg)
+            print("☕ Anti-Sleep Mode changed to: \(modeOption.displayName) and saved to config.json")
             updateTitleAndMenu()
         }
     }
@@ -562,20 +714,38 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
     @objc private func topActionClicked(_ sender: NSMenuItem) {
         if let agentInfo = sender.representedObject as? AgentInfo {
-            perform1ClickSwitch(for: agentInfo.id)
+            perform1ClickSwitch(for: agentInfo.id, targetURL: agentInfo.webLink)
         }
     }
 
     @objc private func agentItemClicked(_ sender: NSMenuItem) {
         if let agent = sender.representedObject as? AgentID {
-            perform1ClickSwitch(for: agent)
+            let agentInfo = AgentStore.shared.getStatus(for: agent)
+            perform1ClickSwitch(for: agent, targetURL: agentInfo.webLink)
         }
     }
 
-    private func perform1ClickSwitch(for agent: AgentID) {
+    private func perform1ClickSwitch(for agent: AgentID, targetURL: String? = nil) {
         print("⚡ 1-Click Switch requested for \(agent.displayName)")
 
-        WindowFocuser.focusAgent(agent)
+        if agent == .chatgpt {
+            let info = AgentStore.shared.getStatus(for: .chatgpt)
+            if let targetTabId = info.targetTabId {
+                print("🎯 1-Click Switch using exact targetTabId=\(targetTabId)")
+                HTTPServer.shared.requestTabFocus(tabId: targetTabId)
+                WindowFocuser.focusAppOnly("com.google.Chrome")
+            } else if let firstTabId = info.openTabs.first(where: { $0.tabId != nil })?.tabId {
+                print("🎯 1-Click Switch using first open tabId=\(firstTabId)")
+                HTTPServer.shared.requestTabFocus(tabId: firstTabId)
+                WindowFocuser.focusAppOnly("com.google.Chrome")
+            } else {
+                print("⚠️ 1-Click Switch: No ChatGPT tabId available, using fallback")
+                WindowFocuser.focusAgent(agent, targetURL: targetURL)
+            }
+        } else {
+            WindowFocuser.focusAgent(agent, targetURL: targetURL)
+        }
+
         AgentStore.shared.markChecked(for: agent)
         NotificationManager.shared.stopCurrentSound()
         updateTitleAndMenu()
@@ -590,12 +760,16 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
     @objc private func relayToSpecificTabClicked(_ sender: NSMenuItem) {
         if let dict = sender.representedObject as? [String: Any],
-           let agent = dict["agent"] as? AgentID,
-           let urlStr = dict["url"] as? String,
-           let url = URL(string: urlStr) {
+           let agent = dict["agent"] as? AgentID {
+            let urlStr = dict["url"] as? String ?? ""
             print("🎯 Specific Tab Relay requested for \(agent.displayName) -> \(urlStr)")
             OutputRelayManager.shared.relayToChatGPT(from: agent)
-            NSWorkspace.shared.open(url)
+            if let tabId = dict["tabId"] as? Int {
+                HTTPServer.shared.requestTabFocus(tabId: tabId)
+                WindowFocuser.focusAppOnly("com.google.Chrome")
+            } else if !urlStr.isEmpty {
+                WindowFocuser.focusURL(urlStr)
+            }
         }
     }
 
@@ -612,10 +786,33 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         updateTitleAndMenu()
     }
 
+    @objc private func sessionItemClicked(_ sender: NSMenuItem) {
+        if let session = sender.representedObject as? AgentSessionInfo {
+            print("⚡ Session item clicked for \(session.provider.displayName) (sessionId: \(session.sessionId))")
+            AgentStore.shared.markSessionChecked(provider: session.provider, sessionId: session.sessionId, turnId: session.turnId)
+            WindowFocuser.focusAgent(session.provider, targetURL: session.webLink)
+            NotificationManager.shared.stopCurrentSound()
+            updateTitleAndMenu()
+        }
+    }
+
     @objc private func openWebLinkClicked(_ sender: NSMenuItem) {
-        if let url = sender.representedObject as? URL {
-            print("🌐 Opening URL in Browser: \(url)")
-            NSWorkspace.shared.open(url)
+        if let dict = sender.representedObject as? [String: Any] {
+            let urlStr = dict["url"] as? String ?? ""
+            if let tabId = dict["tabId"] as? Int {
+                print("🎯 Extension Tab Focus requested for tabId=\(tabId), url=\(urlStr)")
+                AgentStore.shared.markSessionChecked(provider: .chatgpt, sessionId: "\(tabId)")
+                HTTPServer.shared.requestTabFocus(tabId: tabId)
+                WindowFocuser.focusAppOnly("com.google.Chrome")
+            } else if !urlStr.isEmpty {
+                WindowFocuser.focusURL(urlStr)
+            }
+        } else if let url = sender.representedObject as? URL {
+            print("🌐 Opening URL in Browser: \(url.absoluteString)")
+            WindowFocuser.focusURL(url.absoluteString)
+        } else if let urlStr = sender.representedObject as? String {
+            print("🌐 Opening URL in Browser: \(urlStr)")
+            WindowFocuser.focusURL(urlStr)
         }
     }
 

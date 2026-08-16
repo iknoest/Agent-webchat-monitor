@@ -1,4 +1,5 @@
 import AppKit
+import AgentSignalBarCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {

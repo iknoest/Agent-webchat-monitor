@@ -2,16 +2,33 @@ import Foundation
 import AppKit
 
 public struct WindowFocuser {
-    public static func focusAgent(_ agent: AgentID) {
+    public static func focusAgent(_ agent: AgentID, targetURL: String? = nil) {
         switch agent {
         case .chatgpt:
-            focusChromeChatGPT()
+            focusChromeChatGPT(targetURL: targetURL)
         case .codex:
             focusByBundleIdentifier("com.openai.codex", fallbackNames: ["ChatGPT", "Codex"])
         case .claude:
             focusByBundleIdentifier("com.anthropic.claudefordesktop", fallbackNames: ["Claude"])
         case .antigravity:
             focusByBundleIdentifier("com.google.antigravity", fallbackNames: ["Antigravity"])
+        }
+    }
+
+    public static func focusURL(_ urlString: String) {
+        if urlString.contains("chatgpt.com") || urlString.contains("chat.openai.com") {
+            focusChromeChatGPT(targetURL: urlString)
+        } else {
+            if let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    public static func focusAppOnly(_ bundleID: String) {
+        let workspace = NSWorkspace.shared
+        if let targetApp = workspace.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+            targetApp.activate(options: [.activateIgnoringOtherApps])
         }
     }
 
@@ -40,15 +57,59 @@ public struct WindowFocuser {
         }
     }
 
-    private static func focusChromeChatGPT() {
+    public static func focusChromeChatGPT(targetURL: String? = nil) {
+        let cleanTarget = targetURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        var convId = ""
+        if let cRange = cleanTarget.range(of: "/c/") {
+            let afterC = String(cleanTarget[cRange.upperBound...])
+            convId = afterC.components(separatedBy: "?").first?.components(separatedBy: "/").first ?? ""
+        }
+
         let scriptSource = """
         tell application "Google Chrome"
             activate
             if (count of windows) > 0 then
+                set targetURL to "\(cleanTarget)"
+                set convId to "\(convId)"
+
+                -- Strategy 1: Match by Conversation ID
+                if convId is not "" then
+                    repeat with w in windows
+                        set tabIndex to 1
+                        repeat with t in tabs of w
+                            if (URL of t) contains ("/c/" & convId) then
+                                set active tab index of w to tabIndex
+                                set index of w to 1
+                                return true
+                            end if
+                            set tabIndex to tabIndex + 1
+                        end repeat
+                    end repeat
+                end if
+
+                -- Strategy 2: Match by full URL substring
+                if targetURL is not "" then
+                    repeat with w in windows
+                        set tabIndex to 1
+                        repeat with t in tabs of w
+                            set tURL to URL of t
+                            if (tURL is targetURL) or (tURL contains targetURL) or (targetURL contains tURL) then
+                                set active tab index of w to tabIndex
+                                set index of w to 1
+                                return true
+                            end if
+                            set tabIndex to tabIndex + 1
+                        end repeat
+                    end repeat
+                end if
+
+                -- Strategy 3: Fallback to any ChatGPT tab
                 repeat with w in windows
                     set tabIndex to 1
                     repeat with t in tabs of w
-                        if (URL of t contains "chatgpt.com") or (URL of t contains "chat.openai.com") then
+                        set tURL to URL of t
+                        if (tURL contains "chatgpt.com") or (tURL contains "chat.openai.com") then
                             set active tab index of w to tabIndex
                             set index of w to 1
                             return true
@@ -61,7 +122,11 @@ public struct WindowFocuser {
         """
 
         if !runAppleScript(scriptSource) {
-            focusByBundleIdentifier("com.google.Chrome", fallbackNames: ["Google Chrome"])
+            if !cleanTarget.isEmpty, let url = URL(string: cleanTarget) {
+                NSWorkspace.shared.open(url)
+            } else {
+                focusByBundleIdentifier("com.google.Chrome", fallbackNames: ["Google Chrome"])
+            }
         }
     }
 
@@ -69,11 +134,11 @@ public struct WindowFocuser {
     private static func runAppleScript(_ source: String) -> Bool {
         var error: NSDictionary?
         if let scriptObject = NSAppleScript(source: source) {
-            scriptObject.executeAndReturnError(&error)
+            let res = scriptObject.executeAndReturnError(&error)
             if error != nil {
                 return false
             }
-            return true
+            return res.booleanValue
         }
         return false
     }

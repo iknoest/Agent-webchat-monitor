@@ -7,12 +7,29 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "AgentSignalBar", targets: ["AgentSignalBar"])
+        .executable(name: "AgentSignalBar", targets: ["AgentSignalBar"]),
+        .library(name: "AgentSignalBarCore", targets: ["AgentSignalBarCore"]),
+        .executable(name: "Stage1TestRunner", targets: ["Stage1TestRunner"])
     ],
     targets: [
+        .target(
+            name: "AgentSignalBarCore",
+            path: "Sources/AgentSignalBar"
+        ),
         .executableTarget(
             name: "AgentSignalBar",
-            path: "Sources/AgentSignalBar"
+            dependencies: ["AgentSignalBarCore"],
+            path: "Sources/AgentSignalBarApp"
+        ),
+        .executableTarget(
+            name: "Stage1TestRunner",
+            dependencies: ["AgentSignalBarCore"],
+            path: "Sources/Stage1TestRunner"
+        ),
+        .testTarget(
+            name: "AgentSignalBarTests",
+            dependencies: ["AgentSignalBarCore"],
+            path: "Tests/AgentSignalBarTests"
         )
     ]
 )

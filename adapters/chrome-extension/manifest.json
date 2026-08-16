@@ -4,6 +4,8 @@
   "version": "1.1",
   "description": "Monitors ChatGPT Web status and reports to AgentSignalBar macOS Menu Bar App",
   "permissions": [
+    "scripting",
+    "tabs",
     "activeTab"
   ],
   "host_permissions": [

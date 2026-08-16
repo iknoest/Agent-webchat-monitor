@@ -1,0 +1,54 @@
+{
+  "GET_STATUS": {
+    "chatgpt": {
+      "isLiveQuota": false,
+      "parserDecision": "loaded_from_config",
+      "badge": "\ud83d\udfe2",
+      "quotaSource": "config.json",
+      "status": "done",
+      "detail": "3 ChatGPT tab(s) (0 generating)",
+      "lastUpdated": "2026-08-13T13:28:11Z",
+      "quotaTimestamp": null,
+      "name": "ChatGPT Web",
+      "freshness": "Unavailable"
+    },
+    "claude": {
+      "detail": "Claude running",
+      "parserDecision": "parsed_live_sample",
+      "isLiveQuota": true,
+      "freshness": "Fresh",
+      "name": "Claude Code",
+      "lastUpdated": "2026-08-13T13:28:11Z",
+      "badge": "\u26aa",
+      "quotaTimestamp": "2026-08-13T13:26:53Z",
+      "quotaSource": "plan-usage-history.json",
+      "status": "idle"
+    },
+    "codex": {
+      "lastUpdated": "2026-08-13T13:28:11Z",
+      "status": "idle",
+      "name": "Codex Desktop",
+      "quotaSource": "none",
+      "freshness": "Unavailable",
+      "detail": "Codex Desktop running",
+      "isLiveQuota": false,
+      "badge": "\u26aa",
+      "quotaTimestamp": null,
+      "parserDecision": "no_live_disk_file"
+    },
+    "antigravity": {
+      "lastUpdated": "2026-08-13T13:28:11Z",
+      "freshness": "Unavailable",
+      "badge": "\ud83d\udfe1",
+      "isLiveQuota": false,
+      "quotaTimestamp": null,
+      "parserDecision": "no_live_disk_file",
+      "status": "working",
+      "name": "Antigravity",
+      "detail": "Antigravity active/executing...",
+      "quotaSource": "none"
+    }
+  },
+  "BURST_TEST": "10/10 passed",
+  "POST_SOUND_TOGGLE": "{\"soundEnabled\":false}"
+}

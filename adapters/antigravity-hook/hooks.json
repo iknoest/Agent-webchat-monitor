@@ -1,0 +1,45 @@
+{
+  "agent-signalbar-monitor": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "\"/Users/ava/Projects/Agent-webchat monitor/adapters/antigravity-hook/antigravity_hook_relay.py\" PreInvocation"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/ava/Projects/Agent-webchat monitor/adapters/antigravity-hook/antigravity_hook_relay.py\" PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/ava/Projects/Agent-webchat monitor/adapters/antigravity-hook/antigravity_hook_relay.py\" PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "\"/Users/ava/Projects/Agent-webchat monitor/adapters/antigravity-hook/antigravity_hook_relay.py\" PostInvocation"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "\"/Users/ava/Projects/Agent-webchat monitor/adapters/antigravity-hook/antigravity_hook_relay.py\" Stop"
+      }
+    ]
+  }
+}
