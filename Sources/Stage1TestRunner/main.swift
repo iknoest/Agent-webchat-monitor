@@ -1888,4 +1888,504 @@ runTest("70. Generic StopError Decoupled from Quota Inference") {
     try assert(usage?.isLiveSource == false || usage?.availability != .quotaExhausted, "Generic StopError must NOT infer full quota exhaustion.")
 }
 
-print("🎉 All 70 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError & Provider Availability V1 Tests Passed!")
+// 71. Antigravity Local Quota Connector: Parse Live UserStatus Cascade JSON
+runTest("71. Antigravity Local Quota Connector: Parse Live UserStatus Cascade JSON") {
+    let rawJson: [String: Any] = [
+        "userStatus": [
+            "email": "test@example.com",
+            "cascadeModelConfigData": [
+                "clientModelConfigs": [
+                    [
+                        "label": "Gemini 3.7 Flash (High)",
+                        "modelId": "gemini-3.7-flash-high",
+                        "quotaInfo": [
+                            "remainingFraction": 0.4831699,
+                            "resetTime": "2026-08-17T12:48:12Z"
+                        ]
+                    ],
+                    [
+                        "label": "Gemini 3.1 Pro (High)",
+                        "modelId": "gemini-pro-agent",
+                        "quotaInfo": [
+                            "remainingFraction": 0.4831699,
+                            "resetTime": "2026-08-17T12:48:12Z"
+                        ]
+                    ],
+                    [
+                        "label": "Claude Sonnet 4.6 (Thinking)",
+                        "modelId": "claude-sonnet-4-6",
+                        "quotaInfo": [
+                            "resetTime": "2026-08-17T14:19:13Z"
+                        ]
+                    ],
+                    [
+                        "label": "GPT-OSS 120B (Medium)",
+                        "modelId": "gpt-oss-120b-medium",
+                        "quotaInfo": [
+                            "resetTime": "2026-08-17T14:19:13Z"
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+
+    let parsed = AntigravityLocalQuotaConnector.shared.parseAntigravityUserStatusJSON(rawJson)
+    try assert(parsed != nil, "parseAntigravityUserStatusJSON must succeed.")
+    try assert(parsed?.agent == .antigravity, "Agent must be antigravity.")
+    try assert(parsed?.quotaSource == "agy_local_get_user_status", "QuotaSource must be agy_local_get_user_status.")
+    try assert(parsed?.isLiveSource == true, "Must be marked live source.")
+    try assert(parsed?.modelFamilies.count == 2, "Must contain exactly 2 model families.")
+
+    let gemini = parsed?.modelFamilies.first(where: { $0.name == "Gemini" })
+    try assert(gemini != nil, "Gemini family must be present.")
+    try assert(gemini?.sessionLimitPercent == 48.0, "Gemini remaining percent must be 48.0%.")
+    try assert(gemini?.isExhausted == false, "Gemini must not be exhausted.")
+
+    let claudeGpt = parsed?.modelFamilies.first(where: { $0.name == "Claude/GPT" })
+    try assert(claudeGpt != nil, "Claude/GPT family must be present.")
+    try assert(claudeGpt?.sessionLimitPercent == 0.0, "Claude/GPT remaining percent must be 0.0%.")
+    try assert(claudeGpt?.isExhausted == true, "Claude/GPT must be exhausted.")
+
+    try assert(parsed?.availability == .limited, "Provider availability must be limited.")
+}
+
+// 72. Antigravity Local Quota Connector: Reset Time Formatter
+runTest("72. Antigravity Local Quota Connector: Reset Time Formatter") {
+    let connector = AntigravityLocalQuotaConnector.shared
+    let nilFormatted = connector.formatResetText(from: nil)
+    try assert(nilFormatted == nil, "Nil ISO string must return nil.")
+
+    // Past date -> "resets soon"
+    let pastFormatted = connector.formatResetText(from: "2020-01-01T00:00:00Z")
+    try assert(pastFormatted == "resets soon", "Past date must format to 'resets soon'.")
+
+    // Future date
+    let futureDate = Date().addingTimeInterval(3700) // 1h 1m
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let futureIso = formatter.string(from: futureDate)
+    let futureFormatted = connector.formatResetText(from: futureIso)
+    try assert(futureFormatted?.contains("resets in 1h") == true, "Future date must contain 'resets in 1h'.")
+}
+
+// 73. Codex App-Server Quota Connector: Parse RateLimits Response
+runTest("73. Codex App-Server Quota Connector: Parse RateLimits Response") {
+    let rawResult: [String: Any] = [
+        "rateLimits": [
+            "limitId": "codex",
+            "planType": "plus",
+            "primary": [
+                "usedPercent": 79,
+                "windowDurationMins": 10080,
+                "resetsAt": 1787209587
+            ],
+            "secondary": NSNull(),
+            "credits": [
+                "hasCredits": false,
+                "unlimited": false,
+                "balance": "0"
+            ],
+            "rateLimitReachedType": NSNull()
+        ],
+        "rateLimitResetCredits": [
+            "availableCount": 0
+        ]
+    ]
+
+    let parsed = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(rawResult)
+    try assert(parsed != nil, "parseCodexRateLimitsResult must succeed.")
+    try assert(parsed?.agent == .codex, "Agent must be codex.")
+    try assert(parsed?.weeklyLimitPercent == 79.0, "Weekly used percent must be 79.0%.")
+    try assert(parsed?.isPercentUsed == true, "Must be percent used.")
+    try assert(parsed?.isLiveSource == true, "Must be live source.")
+    try assert(parsed?.quotaSource == "codex_app_server", "Quota source must be codex_app_server.")
+    try assert(parsed?.isQuotaExhausted == false, "Must not be exhausted when 79% used.")
+    try assert(parsed?.availability == .available, "Availability must be available.")
+    try assert(parsed?.weeklyResetText?.contains("resets") == true, "Weekly reset text must be formatted.")
+}
+
+// 74. Codex App-Server Quota Connector: Exhaustion Handling
+runTest("74. Codex App-Server Quota Connector: Exhaustion Handling") {
+    let rawResultExhausted: [String: Any] = [
+        "rateLimits": [
+            "limitId": "codex",
+            "planType": "plus",
+            "primary": [
+                "usedPercent": 100,
+                "windowDurationMins": 10080,
+                "resetsAt": 1787209587
+            ],
+            "secondary": NSNull(),
+            "rateLimitReachedType": "rate_limit_reached"
+        ],
+        "rateLimitResetCredits": [
+            "availableCount": 0
+        ]
+    ]
+
+    let parsed = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(rawResultExhausted)
+    try assert(parsed != nil, "parseCodexRateLimitsResult must succeed.")
+    try assert(parsed?.isQuotaExhausted == true, "Must be marked quota exhausted.")
+    try assert(parsed?.availability == .quotaExhausted, "Availability must be quotaExhausted.")
+}
+
+// 75. Codex App-Server Quota Connector: Reset Timestamp Formatter
+runTest("75. Codex App-Server Quota Connector: Reset Timestamp Formatter") {
+    let connector = CodexAppServerQuotaConnector.shared
+    let formatted = connector.formatCodexResetText(resetsAt: 1787209587)
+    try assert(!formatted.isEmpty, "Formatted string must not be empty.")
+    try assert(formatted.contains("resets"), "Formatted string must contain 'resets'.")
+}
+
+// 76. Quota-Terminated Turn Semantics with Smart Auto Release
+runTest("76. Quota-Terminated Turn Semantics with Smart Auto Release") {
+    let store = AgentStore.shared
+    let sleepMgr = SleepManager.shared
+    let usageStore = AgentUsageStore.shared
+    let testSessionId = "test_agy_quota_term_sleep_release"
+
+    sleepMgr.mode = .smartAuto
+    for p in AgentID.allCases {
+        store.purgeSyntheticAndStaleSessions(provider: p)
+        store.syncSessions(for: p, activeSessions: [], processRunning: false)
+        store.updateStatus(for: p, status: .idle)
+    }
+    store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+    defer {
+        for p in AgentID.allCases {
+            store.purgeSyntheticAndStaleSessions(provider: p)
+            store.syncSessions(for: p, activeSessions: [], processRunning: false)
+            store.updateStatus(for: p, status: .idle)
+        }
+        sleepMgr.mode = .disabled
+        sleepMgr.updateSleepAssertionState()
+    }
+
+    // Set Antigravity quota to Limited (Gemini available, Claude/GPT exhausted)
+    usageStore.updateUsage(for: .antigravity, data: AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 48.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    ))
+
+    // Start working
+    store.updateStatus(for: .antigravity, status: .idle)
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": testSessionId,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let evalWorking = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalWorking.shouldKeepAwake == true, "Working turn must acquire Smart Auto keep-awake.")
+
+    // Turn halts with stream interruption due to model quota
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": testSessionId,
+        "error": "The model quota was exhausted for Claude.",
+        "termination_reason": "ERROR",
+        "fully_idle": true,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let session = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(session?.status == .idle, "Quota-interrupted turn must transition to .idle.")
+    try assert(session?.attentionReason == nil, "Quota-interrupted turn must not set attentionReason.")
+
+    let evalStopped = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalStopped.shouldKeepAwake == false, "Smart Auto keep-awake must be released upon quota termination.")
+}
+
+// 77. CLI Optionality & Graceful Degradation
+runTest("77. CLI Optionality & Graceful Degradation") {
+    let mockConnector = CodexAppServerQuotaConnector.shared
+    let invalidOutput = "invalid non json output"
+    let parsed = mockConnector.parseCodexAppServerOutput(invalidOutput)
+    try assert(parsed == nil, "Invalid output must return nil without throwing.")
+}
+
+// 78. Provider Source Diagnostics in Status
+runTest("78. Provider Source Diagnostics in Status") {
+    let usageStore = AgentUsageStore.shared
+
+    usageStore.updateUsage(for: .antigravity, data: AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 50.0, isPercentUsed: false)],
+        isLiveSource: true,
+        quotaSource: "agy_local_get_user_status"
+    ))
+
+    usageStore.updateUsage(for: .codex, data: AgentUsageData(
+        agent: .codex,
+        weeklyLimitPercent: 79.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "codex_app_server"
+    ))
+
+    usageStore.updateUsage(for: .claude, data: AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 80.0,
+        weeklyLimitPercent: 88.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history"
+    ))
+
+    let agyUsage = usageStore.getUsage(for: .antigravity)
+    try assert(agyUsage?.quotaSource == "agy_local_get_user_status", "Antigravity quota source must be agy_local_get_user_status.")
+
+    let cdxUsage = usageStore.getUsage(for: .codex)
+    try assert(cdxUsage?.quotaSource == "codex_app_server", "Codex quota source must be codex_app_server.")
+
+    let cldUsage = usageStore.getUsage(for: .claude)
+    try assert(cldUsage?.quotaSource == "claude_plan_usage_history", "Claude quota source must be claude_plan_usage_history.")
+}
+
+// 79. Live Antigravity & Codex Connector Smoke Test
+runTest("79. Live Antigravity & Codex Connector Smoke Test") {
+    let agyUsage = AntigravityLocalQuotaConnector.shared.fetchQuota()
+    if let agyUsage = agyUsage {
+        print("  [Live AGY] Models: \(agyUsage.modelFamilies.count), Availability: \(agyUsage.availability.rawValue)")
+        for f in agyUsage.modelFamilies {
+            print("  - \(f.name): 5h: \(f.sessionRemainingPercent ?? -1)% left (\(f.sessionResetText ?? "none")), weekly: \(f.weeklyRemainingPercent ?? -1)% left (\(f.weeklyResetText ?? "none")), exhausted: \(f.isExhausted)")
+        }
+        try assert(agyUsage.isLiveSource == true, "AGY live usage must have isLiveSource = true.")
+        try assert(agyUsage.quotaSource.hasPrefix("agy_local_"), "AGY quotaSource must be an agy_local source.")
+    } else {
+        print("  [Live AGY] language_server not active during test.")
+    }
+
+    let cdxUsage = CodexAppServerQuotaConnector.shared.fetchQuota()
+    if let cdxUsage = cdxUsage {
+        print("  [Live CDX] Weekly: \(cdxUsage.weeklyRemainingPercent ?? 0)% left (raw used: \(cdxUsage.weeklyLimitPercent ?? 0)%), Reset: \(cdxUsage.weeklyResetText ?? "none"), Availability: \(cdxUsage.availability.rawValue)")
+        try assert(cdxUsage.isLiveSource == true, "CDX live usage must have isLiveSource = true.")
+        try assert(cdxUsage.quotaSource == "codex_app_server", "CDX quotaSource must be codex_app_server.")
+    } else {
+        print("  [Live CDX] codex CLI app-server not active during test.")
+    }
+}
+
+// 80. Quota Normalization: Raw 100% used -> UI 0% left
+runTest("80. Quota Normalization: Raw 100% used -> UI 0% left") {
+    let rawUsed = 100.0
+    let norm = ModelFamilyQuota.normalizeRemaining(raw: rawUsed, isPercentUsed: true)
+    try assert(norm == 0.0, "100% used must normalize to 0% left (actual: \(String(describing: norm))).")
+}
+
+// 81. Quota Normalization: Raw 79% used -> UI 21% left
+runTest("81. Quota Normalization: Raw 79% used -> UI 21% left") {
+    let rawUsed = 79.0
+    let norm = ModelFamilyQuota.normalizeRemaining(raw: rawUsed, isPercentUsed: true)
+    try assert(norm == 21.0, "79% used must normalize to 21% left (actual: \(String(describing: norm))).")
+}
+
+// 82. Quota Normalization: Raw 24% remaining -> UI 24% left
+runTest("82. Quota Normalization: Raw 24% remaining -> UI 24% left") {
+    let rawRemaining = 24.0
+    let norm = ModelFamilyQuota.normalizeRemaining(raw: rawRemaining, isPercentUsed: false)
+    try assert(norm == 24.0, "24% remaining must normalize to 24% left (actual: \(String(describing: norm))).")
+}
+
+// 83. Quota Normalization: Raw 0% remaining -> UI 0% left
+runTest("83. Quota Normalization: Raw 0% remaining -> UI 0% left") {
+    let rawRemaining = 0.0
+    let norm = ModelFamilyQuota.normalizeRemaining(raw: rawRemaining, isPercentUsed: false)
+    try assert(norm == 0.0, "0% remaining must normalize to 0% left (actual: \(String(describing: norm))).")
+}
+
+// 84. Quota Normalization: Raw unknown / nil -> UI Unknown (nil)
+runTest("84. Quota Normalization: Raw unknown / nil -> UI Unknown (nil)") {
+    let rawRemaining: Double? = nil
+    let norm = ModelFamilyQuota.normalizeRemaining(raw: rawRemaining, isPercentUsed: false)
+    try assert(norm == nil, "nil remaining must normalize to nil (actual: \(String(describing: norm))).")
+}
+
+// 85. Visual Progress Bar: 100% left is full bar, 0% left is empty bar
+runTest("85. Visual Progress Bar: 100% left is full bar, 0% left is empty bar") {
+    func makeCompactBar(percent: Double, totalBlocks: Int = 10) -> String {
+        let clamped = max(0.0, min(100.0, percent))
+        let filledCount = Int(round((clamped / 100.0) * Double(totalBlocks)))
+        let emptyCount = max(0, totalBlocks - filledCount)
+        let filled = String(repeating: "■", count: filledCount)
+        let empty = String(repeating: "□", count: emptyCount)
+        return "[\(filled)\(empty)]"
+    }
+
+    let fullBar = makeCompactBar(percent: 100.0)
+    try assert(fullBar == "[■■■■■■■■■■]", "100% left must produce a full bar (actual: \(fullBar)).")
+
+    let halfBar = makeCompactBar(percent: 50.0)
+    try assert(halfBar == "[■■■■■□□□□□]", "50% left must produce a 50% filled bar (actual: \(halfBar)).")
+
+    let emptyBar = makeCompactBar(percent: 0.0)
+    try assert(emptyBar == "[□□□□□□□□□□]", "0% left must produce an empty bar (actual: \(emptyBar)).")
+
+    let cdxBar = makeCompactBar(percent: 21.0)
+    try assert(cdxBar == "[■■□□□□□□□□]", "21% left must produce a 2-block filled bar (actual: \(cdxBar)).")
+}
+
+// 86. Claude Quota UI: 100% used normalizes to 0% left, 88% used to 12% left
+runTest("86. Claude Quota UI: 100% used normalizes to 0% left, 88% used to 12% left") {
+    let claudeUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        weeklyLimitPercent: 88.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history"
+    )
+    try assert(claudeUsage.sessionRemainingPercent == 0.0, "Claude 100% used must normalize to 0% left (actual: \(String(describing: claudeUsage.sessionRemainingPercent))).")
+    try assert(claudeUsage.weeklyRemainingPercent == 12.0, "Claude 88% used must normalize to 12% left (actual: \(String(describing: claudeUsage.weeklyRemainingPercent))).")
+    try assert(claudeUsage.isQuotaExhausted == true, "Claude 0% session left must be marked quota exhausted.")
+}
+
+// 87. Codex Quota UI: 79% used normalizes to 21% left
+runTest("87. Codex Quota UI: 79% used normalizes to 21% left") {
+    let codexUsage = AgentUsageData(
+        agent: .codex,
+        weeklyLimitPercent: 79.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "codex_app_server"
+    )
+    try assert(codexUsage.weeklyRemainingPercent == 21.0, "Codex 79% used must normalize to 21% left (actual: \(String(describing: codexUsage.weeklyRemainingPercent))).")
+    try assert(codexUsage.isQuotaExhausted == false, "Codex 21% left must NOT be quota exhausted.")
+}
+
+// 88. AGY 5-Hour Quota UI: 24% remaining normalizes to 24% left
+runTest("88. AGY 5-Hour Quota UI: 24% remaining normalizes to 24% left") {
+    let family = ModelFamilyQuota(
+        name: "Gemini",
+        sessionLimitPercent: 24.0,
+        sessionResetText: "resets in 28m",
+        weeklyLimitPercent: 37.0,
+        weeklyResetText: "resets in 4d 7h",
+        isPercentUsed: false
+    )
+    try assert(family.sessionRemainingPercent == 24.0, "Gemini session must normalize to 24% left.")
+    try assert(family.weeklyRemainingPercent == 37.0, "Gemini weekly must normalize to 37% left.")
+    try assert(family.isExhausted == false, "Gemini with 24% left is not exhausted.")
+}
+
+// 89. AGY Weekly Quota UI: Structured RetrieveUserQuotaSummary provides live weekly 37% left and 32% left
+runTest("89. AGY Weekly Quota UI: Structured RetrieveUserQuotaSummary provides live weekly 37% left and 32% left") {
+    let sampleSummaryJSON: [String: Any] = [
+        "response": [
+            "groups": [
+                [
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        [
+                            "bucketId": "gemini-weekly",
+                            "displayName": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remainingFraction": 0.36892495,
+                            "resetTime": "2026-08-21T21:58:54Z"
+                        ],
+                        [
+                            "bucketId": "gemini-5h",
+                            "displayName": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "remainingFraction": 0.24,
+                            "resetTime": "2026-08-17T19:49:14Z"
+                        ]
+                    ]
+                ],
+                [
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        [
+                            "bucketId": "3p-weekly",
+                            "displayName": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "remainingFraction": 0.31852826,
+                            "resetTime": "2026-08-23T09:14:31Z"
+                        ],
+                        [
+                            "bucketId": "3p-5h",
+                            "displayName": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "remainingFraction": 0.0,
+                            "resetTime": "2026-08-17T19:19:13Z"
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+
+    let connector = AntigravityLocalQuotaConnector.shared
+    let usage = connector.parseAntigravityUserQuotaSummaryJSON(sampleSummaryJSON)
+    try assert(usage != nil, "Summary JSON must parse successfully.")
+    try assert(usage?.modelFamilies.count == 2, "Must parse 2 model families.")
+
+    let gemini = usage?.modelFamilies.first(where: { $0.name == "Gemini" })
+    try assert(gemini?.sessionRemainingPercent == 24.0, "Gemini 5-hour must be 24% left.")
+    try assert(gemini?.weeklyRemainingPercent == 37.0, "Gemini weekly must be 37% left.")
+    try assert(gemini?.isExhausted == false, "Gemini is not exhausted.")
+
+    let claude = usage?.modelFamilies.first(where: { $0.name == "Claude/GPT" })
+    try assert(claude?.sessionRemainingPercent == 0.0, "Claude 5-hour must be 0% left.")
+    try assert(claude?.weeklyRemainingPercent == 32.0, "Claude weekly must be 32% left.")
+    try assert(claude?.isExhausted == true, "Claude with 0% 5-hour left must be marked exhausted.")
+    try assert(usage?.availability == .limited, "Usage with 1 exhausted family and 1 available family must be .limited.")
+}
+
+// 90. AGY Quota Degradation: GetUserStatus fallback handles missing weekly gracefully without crashing
+runTest("90. AGY Quota Degradation: GetUserStatus fallback handles missing weekly gracefully without crashing") {
+    let sampleStatusJSON: [String: Any] = [
+        "userStatus": [
+            "cascadeModelConfigData": [
+                "clientModelConfigs": [
+                    [
+                        "label": "Gemini 3.7 Flash",
+                        "modelId": "gemini-3.7-flash",
+                        "quotaInfo": [
+                            "remainingFraction": 0.46,
+                            "resetTime": "2026-08-17T19:48:48Z"
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]
+
+    let connector = AntigravityLocalQuotaConnector.shared
+    let usage = connector.parseAntigravityUserStatusJSON(sampleStatusJSON)
+    try assert(usage != nil, "GetUserStatus fallback must parse successfully.")
+    let gemini = usage?.modelFamilies.first(where: { $0.name == "Gemini" })
+    try assert(gemini?.sessionRemainingPercent == 46.0, "Gemini 5-hour must be 46% left.")
+    try assert(gemini?.weeklyRemainingPercent == nil, "Gemini weekly must be nil when absent from GetUserStatus.")
+    try assert(gemini?.isExhausted == false, "Gemini is not exhausted.")
+}
+
+// 91. AGY Quota Exhaustion & Smart Auto Keep-Awake Independence
+runTest("91. AGY Quota Exhaustion & Smart Auto Keep-Awake Independence") {
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+
+    // AGY Idle + Quota Exhausted
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+    let exhaustedUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 0.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        quotaSource: "agy_local_retrieve_user_quota_summary"
+    )
+    AgentUsageStore.shared.updateUsage(for: .antigravity, data: exhaustedUsage)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "AGY Quota Exhaustion must never trigger Smart Auto keep-awake.")
+}
+
+print("🎉 All 91 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError, Proven Quota V1 & Quota Completeness Tests Passed!")

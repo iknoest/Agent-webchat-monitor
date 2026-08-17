@@ -1059,6 +1059,135 @@ final class AgentSignalBarTests: XCTestCase {
         let eval = sleepMgr.evaluateSmartAutoRequirement()
         XCTAssertFalse(eval.shouldKeepAwake, "Smart Auto must NOT keep awake when all agents are idle even if quota is exhausted.")
     }
+
+    func testProviderNativeQuotaConnectorsAndQuotaStopSemantics() throws {
+        // 1. Test Antigravity local JSON parser
+        let rawAgyJson: [String: Any] = [
+            "userStatus": [
+                "cascadeModelConfigData": [
+                    "clientModelConfigs": [
+                        [
+                            "label": "Gemini 3.7 Flash",
+                            "modelId": "gemini-3.7-flash",
+                            "quotaInfo": [
+                                "remainingFraction": 0.4831699,
+                                "resetTime": "2026-08-17T12:48:12Z"
+                            ]
+                        ],
+                        [
+                            "label": "Claude Sonnet 4.6",
+                            "modelId": "claude-sonnet-4-6",
+                            "quotaInfo": [
+                                "resetTime": "2026-08-17T14:19:13Z"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let agyUsage = AntigravityLocalQuotaConnector.shared.parseAntigravityUserStatusJSON(rawAgyJson)
+        XCTAssertNotNil(agyUsage)
+        XCTAssertEqual(agyUsage?.quotaSource, "agy_local_get_user_status")
+        XCTAssertEqual(agyUsage?.availability, .limited)
+        XCTAssertEqual(agyUsage?.modelFamilies.count, 2)
+
+        // 2. Test Codex app-server JSON-RPC parser
+        let rawCdxResult: [String: Any] = [
+            "rateLimits": [
+                "primary": [
+                    "usedPercent": 79,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1787209587
+                ],
+                "secondary": NSNull(),
+                "rateLimitReachedType": NSNull()
+            ],
+            "rateLimitResetCredits": [
+                "availableCount": 0
+            ]
+        ]
+
+        let cdxUsage = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(rawCdxResult)
+        XCTAssertNotNil(cdxUsage)
+        XCTAssertEqual(cdxUsage?.quotaSource, "codex_app_server")
+        XCTAssertEqual(cdxUsage?.weeklyLimitPercent, 79.0)
+        XCTAssertEqual(cdxUsage?.weeklyRemainingPercent, 21.0)
+        XCTAssertEqual(cdxUsage?.availability, .available)
+        XCTAssertFalse(cdxUsage?.isQuotaExhausted ?? true)
+    }
+
+    func testQuotaDisplayNormalizationAndCompleteness() throws {
+        // 1. Raw % used -> % left normalization
+        XCTAssertEqual(ModelFamilyQuota.normalizeRemaining(raw: 100.0, isPercentUsed: true), 0.0)
+        XCTAssertEqual(ModelFamilyQuota.normalizeRemaining(raw: 79.0, isPercentUsed: true), 21.0)
+        XCTAssertEqual(ModelFamilyQuota.normalizeRemaining(raw: 24.0, isPercentUsed: false), 24.0)
+        XCTAssertEqual(ModelFamilyQuota.normalizeRemaining(raw: 0.0, isPercentUsed: false), 0.0)
+        XCTAssertNil(ModelFamilyQuota.normalizeRemaining(raw: nil, isPercentUsed: true))
+
+        // 2. Structured RetrieveUserQuotaSummary Connect-RPC parser
+        let sampleSummaryJSON: [String: Any] = [
+            "response": [
+                "groups": [
+                    [
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            [
+                                "bucketId": "gemini-weekly",
+                                "displayName": "Weekly Limit Remaining",
+                                "window": "weekly",
+                                "remainingFraction": 0.36892495,
+                                "resetTime": "2026-08-21T21:58:54Z"
+                            ],
+                            [
+                                "bucketId": "gemini-5h",
+                                "displayName": "Five Hour Limit Remaining",
+                                "window": "5h",
+                                "remainingFraction": 0.9652436,
+                                "resetTime": "2026-08-17T19:49:14Z"
+                            ]
+                        ]
+                    ],
+                    [
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            [
+                                "bucketId": "3p-weekly",
+                                "displayName": "Weekly Limit Remaining",
+                                "window": "weekly",
+                                "remainingFraction": 0.31852826,
+                                "resetTime": "2026-08-23T09:14:31Z"
+                            ],
+                            [
+                                "bucketId": "3p-5h",
+                                "displayName": "Five Hour Limit Remaining",
+                                "window": "5h",
+                                "remainingFraction": 0.0,
+                                "resetTime": "2026-08-17T19:19:13Z"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let connector = AntigravityLocalQuotaConnector.shared
+        let usage = connector.parseAntigravityUserQuotaSummaryJSON(sampleSummaryJSON)
+        XCTAssertNotNil(usage)
+        XCTAssertEqual(usage?.quotaSource, "agy_local_retrieve_user_quota_summary")
+        XCTAssertEqual(usage?.modelFamilies.count, 2)
+
+        let gemini = usage?.modelFamilies.first(where: { $0.name == "Gemini" })
+        XCTAssertEqual(gemini?.sessionRemainingPercent, 97.0)
+        XCTAssertEqual(gemini?.weeklyRemainingPercent, 37.0)
+        XCTAssertFalse(gemini?.isExhausted ?? true)
+
+        let claude = usage?.modelFamilies.first(where: { $0.name == "Claude/GPT" })
+        XCTAssertEqual(claude?.sessionRemainingPercent, 0.0)
+        XCTAssertEqual(claude?.weeklyRemainingPercent, 32.0)
+        XCTAssertTrue(claude?.isExhausted ?? false)
+        XCTAssertEqual(usage?.availability, .limited)
+    }
 }
 #endif
 

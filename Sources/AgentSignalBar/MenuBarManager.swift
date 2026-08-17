@@ -313,8 +313,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             var durationTag = ""
             if isQuotaExhausted {
                 if agent == .claude {
-                    let pct = Int(AgentUsageStore.shared.getUsage(for: .claude)?.sessionLimitPercent ?? 100.0)
-                    durationTag = " [5-hour usage: \(pct)%]"
+                    let pct = Int(AgentUsageStore.shared.getUsage(for: .claude)?.sessionRemainingPercent ?? 0.0)
+                    durationTag = " [5-hour: \(pct)% left]"
                 } else {
                     durationTag = " [\(info.lastUpdated.relativeString())]"
                 }
@@ -351,7 +351,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let usage = AgentUsageStore.shared.getUsage(for: agent)
             let effAvail = usage?.availability ?? info.availability
             if effAvail != .available && effAvail != .unknown {
-                let extraTag = (effAvail == .quotaExhausted && agent == .claude) ? " (5-hour usage: \(Int(usage?.sessionLimitPercent ?? 100))%)" : ""
+                let extraTag = (effAvail == .quotaExhausted && agent == .claude) ? " (5-hour: \(Int(usage?.sessionRemainingPercent ?? 0))% left)" : ""
                 let availItem = NSMenuItem(title: "Availability: \(effAvail.displayName)\(extraTag)", action: nil, keyEquivalent: "")
                 availItem.isEnabled = false
                 submenu.addItem(availItem)
@@ -483,10 +483,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 3. SLEEK COMPACT AGENT USAGE & LIMITS DASHBOARD
-        let usageHeaderItem = NSMenuItem(title: "AGENT USAGE & LIMITS DASHBOARD", action: nil, keyEquivalent: "")
-        usageHeaderItem.isEnabled = false
-        menu.addItem(usageHeaderItem)
+        // 3. Provider Quota & Limits Section (Live disk / source)
+        let quotaHeader = NSMenuItem(title: "Provider Usage Limits & Reset Windows:", action: nil, keyEquivalent: "")
+        quotaHeader.isEnabled = false
+        menu.addItem(quotaHeader)
 
         let allUsage = AgentUsageStore.shared.getAllUsage()
 
@@ -500,11 +500,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let isStale = Date().timeIntervalSince(claudeUsage.lastUpdated) > 86400 || !claudeUsage.isLiveSource
             let freshnessTag = isStale ? " [Stale Data]" : ""
 
-            if let sPct = claudeUsage.sessionLimitPercent {
-                let sBar = makeCompactBar(percent: sPct)
+            if let sRemaining = claudeUsage.sessionRemainingPercent {
+                let sBar = makeCompactBar(percent: sRemaining)
                 let sReset = claudeUsage.sessionResetText ?? ""
                 let resetTag = sReset.isEmpty ? "" : " · \(sReset)"
-                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sPct))% used\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sRemaining))% left\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
                 row1.isEnabled = false
                 menu.addItem(row1)
             } else {
@@ -513,11 +513,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 menu.addItem(unavail1)
             }
 
-            if let wPct = claudeUsage.weeklyLimitPercent {
-                let wBar = makeCompactBar(percent: wPct)
+            if let wRemaining = claudeUsage.weeklyRemainingPercent {
+                let wBar = makeCompactBar(percent: wRemaining)
                 let wReset = claudeUsage.weeklyResetText ?? ""
                 let resetTag = wReset.isEmpty ? "" : " · \(wReset)"
-                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wPct))% used\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wRemaining))% left\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
                 row2.isEnabled = false
                 menu.addItem(row2)
             } else {
@@ -541,30 +541,37 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     fHdr.isEnabled = false
                     menu.addItem(fHdr)
 
-                    if let sPct = family.sessionLimitPercent {
-                        let bar = makeCompactBar(percent: sPct)
-                        let unit = family.isPercentUsed ? "% used" : "% left"
+                    if let sRemaining = family.sessionRemainingPercent {
+                        let bar = makeCompactBar(percent: sRemaining)
                         let resetTag = (family.sessionResetText?.isEmpty == false) ? " · \(family.sessionResetText!)" : ""
-                        let row = NSMenuItem(title: "       5-Hour: \(bar) \(Int(sPct))\(unit)\(resetTag)", action: nil, keyEquivalent: "")
+                        let row = NSMenuItem(title: "       5-Hour: \(bar) \(Int(sRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
                         row.isEnabled = false
                         menu.addItem(row)
                     }
 
-                    if let wPct = family.weeklyLimitPercent {
-                        let bar = makeCompactBar(percent: wPct)
-                        let unit = family.isPercentUsed ? "% used" : "% left"
+                    if let wRemaining = family.weeklyRemainingPercent {
+                        let bar = makeCompactBar(percent: wRemaining)
                         let resetTag = (family.weeklyResetText?.isEmpty == false) ? " · \(family.weeklyResetText!)" : ""
-                        let row = NSMenuItem(title: "       Weekly: \(bar) \(Int(wPct))\(unit)\(resetTag)", action: nil, keyEquivalent: "")
+                        let row = NSMenuItem(title: "       Weekly: \(bar) \(Int(wRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
                         row.isEnabled = false
                         menu.addItem(row)
                     }
                 }
-            } else if agyUsage.isLiveSource, let sPct = agyUsage.sessionLimitPercent {
-                let bar = makeCompactBar(percent: sPct)
+            } else if agyUsage.isLiveSource, let sRemaining = agyUsage.sessionRemainingPercent {
+                let bar = makeCompactBar(percent: sRemaining)
                 let resetTag = agyUsage.sessionResetText ?? ""
-                let row = NSMenuItem(title: "     Gemini 5-Hr:   \(bar) \(Int(sPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
+                let resetSuffix = resetTag.isEmpty ? "" : " · \(resetTag)"
+                let row = NSMenuItem(title: "     Gemini 5-Hr:   \(bar) \(Int(sRemaining))% left\(resetSuffix)", action: nil, keyEquivalent: "")
                 row.isEnabled = false
                 menu.addItem(row)
+                if let wRemaining = agyUsage.weeklyRemainingPercent {
+                    let wBar = makeCompactBar(percent: wRemaining)
+                    let wReset = agyUsage.weeklyResetText ?? ""
+                    let wResetSuffix = wReset.isEmpty ? "" : " · \(wReset)"
+                    let wRow = NSMenuItem(title: "     Gemini Weekly: \(wBar) \(Int(wRemaining))% left\(wResetSuffix)", action: nil, keyEquivalent: "")
+                    wRow.isEnabled = false
+                    menu.addItem(wRow)
+                }
             } else {
                 let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false
@@ -579,10 +586,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if cdxUsage.isLiveSource, let wPct = cdxUsage.weeklyLimitPercent {
-                let bar = makeCompactBar(percent: wPct)
+            if cdxUsage.isLiveSource, let wRemaining = cdxUsage.weeklyRemainingPercent {
+                let bar = makeCompactBar(percent: wRemaining)
                 let resetTag = cdxUsage.weeklyResetText ?? ""
-                let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
+                let resetPrefix = resetTag.isEmpty ? "" : " · \(resetTag)"
+                let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wRemaining))% left\(resetPrefix)", action: nil, keyEquivalent: "")
                 row.isEnabled = false
                 menu.addItem(row)
             } else {

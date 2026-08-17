@@ -19,6 +19,23 @@ public struct ModelFamilyQuota: Codable, Sendable, Equatable {
         return false
     }
 
+    public var sessionRemainingPercent: Double? {
+        ModelFamilyQuota.normalizeRemaining(raw: sessionLimitPercent, isPercentUsed: isPercentUsed)
+    }
+
+    public var weeklyRemainingPercent: Double? {
+        ModelFamilyQuota.normalizeRemaining(raw: weeklyLimitPercent, isPercentUsed: isPercentUsed)
+    }
+
+    public static func normalizeRemaining(raw: Double?, isPercentUsed: Bool) -> Double? {
+        guard let raw = raw else { return nil }
+        if isPercentUsed {
+            return max(0.0, min(100.0, 100.0 - raw))
+        } else {
+            return max(0.0, min(100.0, raw))
+        }
+    }
+
     public init(
         name: String,
         sessionLimitPercent: Double? = nil,
@@ -51,8 +68,17 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
     public var quotaSource: String              // e.g. "plan-usage-history.json", "manual_config", "none"
     public var quotaTimestamp: Date?            // Actual sample timestamp from log/file (NOT agent-status lastUpdated)
     public var parserDecision: String           // e.g. "parsed_live_sample", "no_live_disk_file", "user_config"
+    public var sourceAuthority: String?         // "live_first_party", "injected_test", "loaded_from_config"
     public var freshness: String                // "Fresh", "Stale", or "Unavailable"
     public var lastUpdated: Date
+
+    public var sessionRemainingPercent: Double? {
+        ModelFamilyQuota.normalizeRemaining(raw: sessionLimitPercent, isPercentUsed: isPercentUsed)
+    }
+
+    public var weeklyRemainingPercent: Double? {
+        ModelFamilyQuota.normalizeRemaining(raw: weeklyLimitPercent, isPercentUsed: isPercentUsed)
+    }
 
     public init(
         agent: AgentID,
@@ -67,6 +93,7 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
         isPercentUsed: Bool = true,
         isLiveSource: Bool = false,
         quotaSource: String = "none",
+        sourceAuthority: String? = nil,
         quotaTimestamp: Date? = nil,
         parserDecision: String = "no_live_disk_file",
         freshness: String? = nil,
@@ -84,6 +111,7 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
         self.isPercentUsed = isPercentUsed
         self.isLiveSource = isLiveSource
         self.quotaSource = quotaSource
+        self.sourceAuthority = sourceAuthority ?? (isLiveSource ? "live_first_party" : "loaded_from_config")
         self.quotaTimestamp = quotaTimestamp
         self.parserDecision = parserDecision
         self.lastUpdated = lastUpdated
@@ -156,7 +184,7 @@ public final class AgentUsageStore: @unchecked Sendable {
         for agent in AgentID.allCases {
             let q = cfgQuotas[agent.rawValue]
             var families: [ModelFamilyQuota] = []
-            if let cfgFamilies = q?.modelFamilies {
+            if agent != .antigravity, let cfgFamilies = q?.modelFamilies {
                 for cf in cfgFamilies {
                     families.append(ModelFamilyQuota(
                         name: cf.name,
@@ -170,19 +198,20 @@ public final class AgentUsageStore: @unchecked Sendable {
             }
             usageData[agent] = AgentUsageData(
                 agent: agent,
-                sessionLimitPercent: q?.sessionPercent,
-                sessionResetText: q?.sessionResetText,
-                weeklyLimitPercent: q?.weeklyPercent,
-                weeklyResetText: q?.weeklyResetText,
+                sessionLimitPercent: agent == .antigravity ? nil : q?.sessionPercent,
+                sessionResetText: agent == .antigravity ? nil : q?.sessionResetText,
+                weeklyLimitPercent: agent == .antigravity ? nil : q?.weeklyPercent,
+                weeklyResetText: agent == .antigravity ? nil : q?.weeklyResetText,
                 resetCardCount: q?.resetCardCount,
                 resetCardExpiryText: q?.resetCardExpiryText,
-                extraMetricText: q?.extraMetricText,
+                extraMetricText: agent == .antigravity ? "Live source unavailable" : q?.extraMetricText,
                 modelFamilies: families,
                 isPercentUsed: q?.isPercentUsed ?? true,
                 isLiveSource: false,
-                quotaSource: "config.json",
+                quotaSource: "none",
+                sourceAuthority: "loaded_from_config",
                 quotaTimestamp: nil,
-                parserDecision: "loaded_from_config",
+                parserDecision: "no_live_disk_file",
                 freshness: "Unavailable",
                 lastUpdated: Date()
             )

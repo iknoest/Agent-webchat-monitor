@@ -255,24 +255,37 @@ public final class AutoMonitor: @unchecked Sendable {
 
 
 
-    // Dynamic Antigravity Usage Sync from config.json and local state (No fake hardcoded fallback percentages)
+    private var lastAgyQuotaFetch: Date = .distantPast
+    private var lastCodexQuotaFetch: Date = .distantPast
+
+    // Dynamic Antigravity Usage Sync from local language_server Connect RPC
     private func updateAntigravityUsageFromLocalFiles() {
-        let q = ConfigManager.shared.config.quotas?["antigravity"]
+        let now = Date()
+        if now.timeIntervalSince(lastAgyQuotaFetch) >= 10.0 {
+            lastAgyQuotaFetch = now
+            if let liveUsage = AntigravityLocalQuotaConnector.shared.fetchQuota() {
+                AgentUsageStore.shared.updateUsage(for: .antigravity, data: liveUsage)
+                AgentStore.shared.updateAvailability(for: .antigravity, availability: liveUsage.availability)
+                return
+            }
+        }
 
         var usage = AgentUsageStore.shared.getUsage(for: .antigravity) ?? AgentUsageData(agent: .antigravity)
         if !usage.isLiveSource {
-            usage.sessionLimitPercent = q?.sessionPercent
-            usage.sessionResetText = q?.sessionResetText
-            usage.weeklyLimitPercent = q?.weeklyPercent
-            usage.weeklyResetText = q?.weeklyResetText
-            usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
-            usage.isPercentUsed = q?.isPercentUsed ?? false
+            usage.sessionLimitPercent = nil
+            usage.sessionResetText = nil
+            usage.weeklyLimitPercent = nil
+            usage.weeklyResetText = nil
+            usage.extraMetricText = "Live source unavailable"
+            usage.modelFamilies = []
+            usage.isPercentUsed = false
             usage.isLiveSource = false
             usage.quotaSource = "none"
+            usage.sourceAuthority = "loaded_from_config"
             usage.quotaTimestamp = nil
             usage.parserDecision = "no_live_disk_file"
             usage.freshness = "Unavailable"
-            usage.lastUpdated = Date()
+            usage.lastUpdated = now
             AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
         }
         AgentStore.shared.updateAvailability(for: .antigravity, availability: usage.availability)
@@ -309,7 +322,8 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.weeklyResetText = nil
         usage.isPercentUsed = true
         usage.isLiveSource = true
-        usage.quotaSource = "plan-usage-history.json"
+        usage.sourceAuthority = "live_first_party"
+        usage.quotaSource = "claude_plan_usage_history"
         usage.quotaTimestamp = sampleDate
         usage.parserDecision = isStale ? "stale_sample_history" : "parsed_live_sample"
         usage.freshness = isStale ? "Stale" : "Fresh"
@@ -319,12 +333,21 @@ public final class AutoMonitor: @unchecked Sendable {
         AgentStore.shared.updateAvailability(for: .claude, availability: usage.availability)
     }
 
-    // Dynamic Codex Usage Calculator from config.json and local files (No fake hardcoded fallback percentages)
+    // Dynamic Codex Usage Calculator from codex app-server --stdio
     private func updateCodexUsageFromLocalFiles() {
-        let q = ConfigManager.shared.config.quotas?["codex"]
+        let now = Date()
+        if now.timeIntervalSince(lastCodexQuotaFetch) >= 30.0 {
+            lastCodexQuotaFetch = now
+            if let liveUsage = CodexAppServerQuotaConnector.shared.fetchQuota() {
+                AgentUsageStore.shared.updateUsage(for: .codex, data: liveUsage)
+                AgentStore.shared.updateAvailability(for: .codex, availability: liveUsage.availability)
+                return
+            }
+        }
 
         var usage = AgentUsageStore.shared.getUsage(for: .codex) ?? AgentUsageData(agent: .codex)
         if !usage.isLiveSource {
+            let q = ConfigManager.shared.config.quotas?["codex"]
             usage.weeklyLimitPercent = q?.weeklyPercent
             usage.weeklyResetText = q?.weeklyResetText
             usage.resetCardCount = q?.resetCardCount
@@ -336,7 +359,7 @@ public final class AutoMonitor: @unchecked Sendable {
             usage.quotaTimestamp = nil
             usage.parserDecision = "no_live_disk_file"
             usage.freshness = "Unavailable"
-            usage.lastUpdated = Date()
+            usage.lastUpdated = now
             AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
         }
         AgentStore.shared.updateAvailability(for: .codex, availability: usage.availability)
@@ -773,6 +796,559 @@ public final class AutoMonitor: @unchecked Sendable {
             if current.status == .off {
                 AgentStore.shared.updateStatus(for: .chatgpt, status: .idle, detail: "Google Chrome running")
             }
+        }
+    }
+}
+
+// MARK: - Antigravity Local Language Server Connect RPC Quota Connector
+public final class AntigravityLocalQuotaConnector: NSObject, URLSessionDelegate, @unchecked Sendable {
+    public static let shared = AntigravityLocalQuotaConnector()
+
+    private override init() {
+        super.init()
+    }
+
+    public func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+           let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    public struct LanguageServerProcessInfo: Sendable {
+        public let pid: Int32
+        public let csrfToken: String?
+    }
+
+    public func detectLanguageServerProcess() -> LanguageServerProcessInfo? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-eo", "pid,command"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return nil }
+            for line in output.components(separatedBy: "\n") {
+                let lower = line.lowercased()
+                if lower.contains("antigravity") && (lower.contains("language_server") || lower.contains("--csrf_token")) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                    guard parts.count >= 2, let pid = Int32(parts[0]) else { continue }
+                    let cmdLine = String(parts[1])
+                    var token: String? = nil
+                    if let range = cmdLine.range(of: "--csrf_token=") {
+                        let sub = cmdLine[range.upperBound...]
+                        token = String(sub.prefix(while: { $0 != " " && $0 != "\"" && $0 != "'" }))
+                    } else if let range = cmdLine.range(of: "--csrf_token ") {
+                        let sub = cmdLine[range.upperBound...].trimmingCharacters(in: .whitespaces)
+                        token = String(sub.prefix(while: { $0 != " " && $0 != "\"" && $0 != "'" }))
+                    }
+                    return LanguageServerProcessInfo(pid: pid, csrfToken: token)
+                }
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    public func discoverListeningPorts(pid: Int32) -> [Int] {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        task.arguments = ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", "\(pid)"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return [] }
+            var ports: [Int] = []
+            for line in output.components(separatedBy: "\n") {
+                if let range = line.range(of: ":") {
+                    let sub = line[range.upperBound...]
+                    let portStr = String(sub.prefix(while: { $0.isNumber }))
+                    if let port = Int(portStr), !ports.contains(port) {
+                        ports.append(port)
+                    }
+                }
+            }
+            return ports
+        } catch {
+            return []
+        }
+    }
+
+    public func fetchQuota() -> AgentUsageData? {
+        guard let proc = detectLanguageServerProcess() else { return nil }
+        let ports = discoverListeningPorts(pid: proc.pid)
+        guard !ports.isEmpty else { return nil }
+
+        for port in ports {
+            // 1. First attempt first-party RetrieveUserQuotaSummary Connect-RPC
+            if let usage = queryRetrieveUserQuotaSummary(port: port, csrfToken: proc.csrfToken) {
+                return usage
+            }
+            // 2. Fallback to GetUserStatus Connect-RPC
+            if let usage = queryGetUserStatus(port: port, csrfToken: proc.csrfToken) {
+                return usage
+            }
+        }
+        return nil
+    }
+
+    public func queryRetrieveUserQuotaSummary(port: Int, csrfToken: String?) -> AgentUsageData? {
+        guard let url = URL(string: "https://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary") else { return nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2.0
+        config.timeoutIntervalForResource = 2.0
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        if let token = csrfToken, !token.isEmpty {
+            req.setValue(token, forHTTPHeaderField: "X-Codeium-Csrf-Token")
+        }
+        req.httpBody = "{\"forceRefresh\":true}".data(using: .utf8)
+
+        let sema = DispatchSemaphore(value: 0)
+        var fetchedData: Data? = nil
+
+        session.dataTask(with: req) { data, resp, err in
+            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200, let data = data {
+                fetchedData = data
+            }
+            sema.signal()
+        }.resume()
+
+        _ = sema.wait(timeout: .now() + 1.5)
+        session.finishTasksAndInvalidate()
+
+        guard let data = fetchedData,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        return parseAntigravityUserQuotaSummaryJSON(json)
+    }
+
+    public func parseAntigravityUserQuotaSummaryJSON(_ json: [String: Any]) -> AgentUsageData? {
+        let resp = (json["response"] as? [String: Any]) ?? json
+        let groups = (resp["groups"] as? [[String: Any]]) ?? []
+        if groups.isEmpty { return nil }
+
+        var families: [ModelFamilyQuota] = []
+
+        for g in groups {
+            let gName = (g["displayName"] as? String) ?? ""
+            let lowerName = gName.lowercased()
+            let familyName: String
+            if lowerName.contains("gemini") {
+                familyName = "Gemini"
+            } else if lowerName.contains("claude") || lowerName.contains("gpt") || lowerName.contains("3p") {
+                familyName = "Claude/GPT"
+            } else {
+                familyName = gName
+            }
+
+            var sPct: Double? = nil
+            var sReset: String? = nil
+            var wPct: Double? = nil
+            var wReset: String? = nil
+
+            let buckets = (g["buckets"] as? [[String: Any]]) ?? []
+            for b in buckets {
+                let bId = ((b["bucketId"] as? String) ?? "").lowercased()
+                let bWindow = ((b["window"] as? String) ?? "").lowercased()
+                let bDisplay = ((b["displayName"] as? String) ?? "").lowercased()
+                let rem = (b["remainingFraction"] as? NSNumber)?.doubleValue
+                let reset = b["resetTime"] as? String
+
+                let is5h = bWindow == "5h" || bId.contains("5h") || bDisplay.contains("five hour")
+                let isWeekly = bWindow == "weekly" || bId.contains("weekly") || bDisplay.contains("weekly")
+
+                if is5h {
+                    if let rem = rem {
+                        sPct = Double(Int(round(rem * 100.0)))
+                    }
+                    sReset = formatResetText(from: reset)
+                } else if isWeekly {
+                    if let rem = rem {
+                        wPct = Double(Int(round(rem * 100.0)))
+                    }
+                    wReset = formatResetText(from: reset)
+                }
+            }
+
+            if sPct != nil || wPct != nil {
+                families.append(ModelFamilyQuota(
+                    name: familyName,
+                    sessionLimitPercent: sPct,
+                    sessionResetText: sReset,
+                    weeklyLimitPercent: wPct,
+                    weeklyResetText: wReset,
+                    isPercentUsed: false
+                ))
+            }
+        }
+
+        if families.isEmpty { return nil }
+
+        var usage = AgentUsageData(agent: .antigravity, modelFamilies: families)
+        usage.isLiveSource = true
+        usage.sourceAuthority = "live_first_party"
+        usage.quotaSource = "agy_local_retrieve_user_quota_summary"
+        usage.freshness = "Fresh"
+        usage.quotaTimestamp = Date()
+        usage.parserDecision = "parsed_live_retrieve_user_quota_summary"
+        usage.lastUpdated = Date()
+        return usage
+    }
+
+    public func queryGetUserStatus(port: Int, csrfToken: String?) -> AgentUsageData? {
+        guard let url = URL(string: "https://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/GetUserStatus") else { return nil }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2.0
+        config.timeoutIntervalForResource = 2.0
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        if let token = csrfToken, !token.isEmpty {
+            req.setValue(token, forHTTPHeaderField: "X-Codeium-Csrf-Token")
+        }
+        req.httpBody = "{\"metadata\":{\"ideName\":\"antigravity\",\"extensionName\":\"antigravity\",\"locale\":\"en\"}}".data(using: .utf8)
+
+        let sema = DispatchSemaphore(value: 0)
+        var fetchedData: Data? = nil
+
+        session.dataTask(with: req) { data, resp, err in
+            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200, let data = data {
+                fetchedData = data
+            }
+            sema.signal()
+        }.resume()
+
+        _ = sema.wait(timeout: .now() + 1.5)
+        session.finishTasksAndInvalidate()
+
+        guard let data = fetchedData,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        return parseAntigravityUserStatusJSON(json)
+    }
+
+    public func parseAntigravityUserStatusJSON(_ json: [String: Any]) -> AgentUsageData? {
+        let userStatus = (json["userStatus"] as? [String: Any]) ?? json
+        let cascadeCfg = userStatus["cascadeModelConfigData"] as? [String: Any]
+        let rawConfigs = (cascadeCfg?["clientModelConfigs"] as? [[String: Any]])
+            ?? ((userStatus["clientModelConfig"] as? [String: Any])?["models"] as? [[String: Any]])
+            ?? []
+
+        if rawConfigs.isEmpty { return nil }
+
+        var geminiFractions: [Double] = []
+        var geminiResets: [String] = []
+        var claudeGptFractions: [Double] = []
+        var claudeGptResets: [String] = []
+
+        for m in rawConfigs {
+            let label = (m["label"] as? String) ?? ""
+            let modelId = (m["modelId"] as? String) ?? ""
+            let qInfo = m["quotaInfo"] as? [String: Any]
+            let rem = (qInfo?["remainingFraction"] as? NSNumber)?.doubleValue
+            let reset = qInfo?["resetTime"] as? String
+
+            let combined = (label + " " + modelId).lowercased()
+            if combined.contains("gemini") {
+                if let rem = rem {
+                    geminiFractions.append(rem)
+                } else if reset != nil && !reset!.isEmpty {
+                    geminiFractions.append(0.0)
+                }
+                if let reset = reset, !reset.isEmpty {
+                    geminiResets.append(reset)
+                }
+            } else if combined.contains("claude") || combined.contains("gpt") || combined.contains("sonnet") || combined.contains("opus") {
+                if let rem = rem {
+                    claudeGptFractions.append(rem)
+                } else if reset != nil && !reset!.isEmpty {
+                    claudeGptFractions.append(0.0)
+                }
+                if let reset = reset, !reset.isEmpty {
+                    claudeGptResets.append(reset)
+                }
+            }
+        }
+
+        var families: [ModelFamilyQuota] = []
+
+        if !geminiFractions.isEmpty || !geminiResets.isEmpty {
+            let minFraction = geminiFractions.min() ?? 0.0
+            let percentLeft = Double(Int(round(minFraction * 100.0)))
+            let resetText = formatResetText(from: geminiResets.first)
+            families.append(ModelFamilyQuota(
+                name: "Gemini",
+                sessionLimitPercent: percentLeft,
+                sessionResetText: resetText,
+                weeklyLimitPercent: nil,
+                weeklyResetText: nil,
+                isPercentUsed: false
+            ))
+        }
+
+        if !claudeGptFractions.isEmpty || !claudeGptResets.isEmpty {
+            let minFraction = claudeGptFractions.min() ?? 0.0
+            let percentLeft = Double(Int(round(minFraction * 100.0)))
+            let resetText = formatResetText(from: claudeGptResets.first)
+            families.append(ModelFamilyQuota(
+                name: "Claude/GPT",
+                sessionLimitPercent: percentLeft,
+                sessionResetText: resetText,
+                weeklyLimitPercent: nil,
+                weeklyResetText: nil,
+                isPercentUsed: false
+            ))
+        }
+
+        var usage = AgentUsageData(agent: .antigravity, modelFamilies: families)
+        usage.isLiveSource = true
+        usage.sourceAuthority = "live_first_party"
+        usage.quotaSource = "agy_local_get_user_status"
+        usage.freshness = "Fresh"
+        usage.quotaTimestamp = Date()
+        usage.parserDecision = "parsed_live_get_user_status"
+        usage.lastUpdated = Date()
+        return usage
+    }
+
+    public func formatResetText(from isoString: String?) -> String? {
+        guard let isoString = isoString, !isoString.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var date = formatter.date(from: isoString)
+        if date == nil {
+            formatter.formatOptions = [.withInternetDateTime]
+            date = formatter.date(from: isoString)
+        }
+        guard let targetDate = date else { return isoString }
+        let diff = targetDate.timeIntervalSince(Date())
+        if diff <= 0 {
+            return "resets soon"
+        }
+        if diff > 86400 {
+            let days = Int(diff / 86400)
+            let hours = Int((diff.truncatingRemainder(dividingBy: 86400)) / 3600)
+            return "resets in \(days)d \(hours)h"
+        }
+        let minutes = (Int(diff) / 60) % 60
+        let hours = Int(diff) / 3600
+        if hours > 0 {
+            return "resets in \(hours)h \(minutes)m"
+        } else {
+            return "resets in \(minutes)m"
+        }
+    }
+}
+
+// MARK: - Codex App-Server JSON-RPC Quota Connector
+public final class CodexAppServerQuotaConnector: @unchecked Sendable {
+    public static let shared = CodexAppServerQuotaConnector()
+
+    private init() {}
+
+    public func findCodexBinary() -> String? {
+        let candidates = [
+            "/Users/ava/.local/bin/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "/usr/bin/codex"
+        ]
+        let fm = FileManager.default
+        for path in candidates {
+            if fm.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        task.arguments = ["codex"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        if (try? task.run()) != nil {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty, fm.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    public func fetchQuota() -> AgentUsageData? {
+        guard let codexPath = findCodexBinary() else { return nil }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: codexPath)
+        task.arguments = ["app-server", "--stdio"]
+
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.standardInput = inPipe
+        task.standardOutput = outPipe
+        task.standardError = errPipe
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+
+        let initReq = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"AgentSignalBar\",\"version\":\"1.0\"}}}\n"
+        let notifReq = "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n"
+        let rateReq = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}\n"
+
+        if let d1 = initReq.data(using: .utf8) { inPipe.fileHandleForWriting.write(d1) }
+        if let dN = notifReq.data(using: .utf8) { inPipe.fileHandleForWriting.write(dN) }
+        if let d2 = rateReq.data(using: .utf8) { inPipe.fileHandleForWriting.write(d2) }
+
+        let sema = DispatchSemaphore(value: 0)
+        var receivedOutput = ""
+        let outHandle = outPipe.fileHandleForReading
+
+        outHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { return }
+            if let str = String(data: chunk, encoding: .utf8) {
+                receivedOutput += str
+                if receivedOutput.contains("\"id\":2") || receivedOutput.contains("\"id\": 2") {
+                    outHandle.readabilityHandler = nil
+                    sema.signal()
+                }
+            }
+        }
+
+        if sema.wait(timeout: .now() + 2.0) == .timedOut {
+            outHandle.readabilityHandler = nil
+            task.terminate()
+            task.waitUntilExit()
+        } else {
+            outHandle.readabilityHandler = nil
+            task.terminate()
+            task.waitUntilExit()
+        }
+
+        return parseCodexAppServerOutput(receivedOutput)
+    }
+
+    public func parseCodexAppServerOutput(_ output: String) -> AgentUsageData? {
+        for line in output.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = json["id"] as? Int, id == 2,
+                  let result = json["result"] as? [String: Any] else {
+                continue
+            }
+
+            return parseCodexRateLimitsResult(result)
+        }
+        return nil
+    }
+
+    public func parseCodexRateLimitsResult(_ result: [String: Any]) -> AgentUsageData? {
+        guard let rateLimits = result["rateLimits"] as? [String: Any] else { return nil }
+
+        let primary = rateLimits["primary"] as? [String: Any]
+        let secondary = rateLimits["secondary"] as? [String: Any]
+        let creditsSummary = result["rateLimitResetCredits"] as? [String: Any]
+        let availableResetCredits = creditsSummary?["availableCount"] as? Int
+
+        let rateLimitReachedType = rateLimits["rateLimitReachedType"] as? String
+        var isExhausted = rateLimitReachedType != nil
+
+        var weeklyPercent: Double? = nil
+        var sessionPercent: Double? = nil
+        var weeklyResetText: String? = nil
+        var sessionResetText: String? = nil
+
+        func processWindow(_ win: [String: Any]?) {
+            guard let win = win else { return }
+            let used = (win["usedPercent"] as? NSNumber)?.doubleValue ?? 0.0
+            let durationMins = (win["windowDurationMins"] as? NSNumber)?.int64Value ?? 0
+            let resetsAt = (win["resetsAt"] as? NSNumber)?.int64Value
+
+            if used >= 100.0 {
+                isExhausted = true
+            }
+
+            if durationMins >= 1440 { // Daily or Weekly
+                weeklyPercent = used
+                if let resetsAt = resetsAt {
+                    weeklyResetText = formatCodexResetText(resetsAt: resetsAt)
+                }
+            } else { // 5-Hour or shorter
+                sessionPercent = used
+                if let resetsAt = resetsAt {
+                    sessionResetText = formatCodexResetText(resetsAt: resetsAt)
+                }
+            }
+        }
+
+        processWindow(primary)
+        processWindow(secondary)
+
+        var usage = AgentUsageData(agent: .codex)
+        usage.weeklyLimitPercent = isExhausted ? max(weeklyPercent ?? 100.0, 100.0) : weeklyPercent
+        usage.weeklyResetText = weeklyResetText
+        usage.sessionLimitPercent = sessionPercent
+        usage.sessionResetText = sessionResetText
+        usage.resetCardCount = availableResetCredits
+        usage.isPercentUsed = true
+        usage.isLiveSource = true
+        usage.sourceAuthority = "live_first_party"
+        usage.quotaSource = "codex_app_server"
+        usage.freshness = "Fresh"
+        usage.quotaTimestamp = Date()
+        usage.parserDecision = "parsed_live_codex_app_server"
+        usage.lastUpdated = Date()
+        return usage
+    }
+
+    public func formatCodexResetText(resetsAt: Int64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
+        let diff = date.timeIntervalSince(Date())
+        let df = DateFormatter()
+        df.dateFormat = "MMM d, h:mm a"
+        let formattedDate = df.string(from: date)
+        if diff > 86400 {
+            let days = Int(diff / 86400)
+            let hours = Int((diff.truncatingRemainder(dividingBy: 86400)) / 3600)
+            return "resets \(formattedDate) (in \(days)d \(hours)h)"
+        } else if diff > 0 {
+            let hours = Int(diff / 3600)
+            let minutes = Int((diff.truncatingRemainder(dividingBy: 3600)) / 60)
+            return "resets in \(hours)h \(minutes)m"
+        } else {
+            return "resets soon"
         }
     }
 }

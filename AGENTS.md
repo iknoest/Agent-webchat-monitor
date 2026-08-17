@@ -691,3 +691,18 @@ Next: Commit and push `feat: unify provider availability and quota monitoring` t
 Blockers: none
 
 [RELEASE] Provider Availability & Quota V1 Implementation — antigravity — 2026-08-17T13:00:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Quota Completeness & Display Normalization Closeout
+Done:
+1. First-Party Antigravity Weekly Quota Source: Discovered and integrated native Connect-RPC endpoint `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary` (falling back to `/GetUserStatus`). Successfully parses both live 5-Hour and Weekly limits for both model families (`Gemini Models`: 92% 5-hour left, 36% weekly left; `Claude and GPT models`: 100% 5-hour left, 32% weekly left).
+2. Universal Display Normalization to "% Left": Normalized all user-facing quota displays (Claude Code, Antigravity, Codex Desktop) to `% left` (e.g. Claude 100% used -> 0% left, Codex 79% used -> 21% left, AGY 24% remaining -> 24% left).
+3. Visual Progress Bar Remaining Semantics: Standardized progress bars across all providers to represent remaining capacity (100% left = full bar, 50% left = half bar, 0% left = empty bar).
+4. Menu Bar & Dropdown UI: Updated Antigravity dropdown rows to cleanly render both 5-Hour and Weekly lines per model family (`5-Hour: [bar] XX% left · resets in ... | Weekly: [bar] XX% left · resets in ...`).
+5. Comprehensive Test Suite: Added Tests 80–91 to `Stage1TestRunner` (91/91 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` validation.
+Verified: `swift run Stage1TestRunner` (91/91 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `fix: complete AGY weekly quota and normalize quota display` to origin/main.
+Blockers: none
+
+[RELEASE] Quota Completeness & Display Normalization Closeout — antigravity — 2026-08-17T17:00:00+02:00

@@ -132,6 +132,7 @@ public final class HTTPServer: @unchecked Sendable {
                         "detail": info.detail ?? "",
                         "lastUpdated": isoFormatter.string(from: info.lastUpdated),
                         "isLiveQuota": usage?.isLiveSource ?? false,
+                        "sourceAuthority": usage?.sourceAuthority ?? (usage?.isLiveSource == true ? "live_first_party" : "loaded_from_config"),
                         "quotaSource": usage?.quotaSource ?? "none",
                         "quotaTimestamp": quotaTsStr as Any,
                         "parserDecision": usage?.parserDecision ?? "no_live_disk_file",
@@ -356,6 +357,9 @@ public final class HTTPServer: @unchecked Sendable {
                     }
 
                     usage.isLiveSource = true
+                    usage.sourceAuthority = "injected_test"
+                    usage.quotaSource = "post_usage_injected"
+                    usage.parserDecision = "injected_test_fixture"
                     usage.freshness = "Fresh"
                     usage.lastUpdated = Date()
 

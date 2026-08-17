@@ -456,6 +456,7 @@ public final class SleepManager: @unchecked Sendable {
         if let proc = caffeinateProcess {
             if proc.isRunning {
                 proc.terminate()
+                kill(proc.processIdentifier, SIGKILL)
                 proc.waitUntilExit()
             }
             caffeinateProcess = nil
