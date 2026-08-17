@@ -1457,4 +1457,230 @@ runTest("54. Unified Display Status: All 6 states derive identical top-level, co
     try assert(blockedInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🥶", "Fun blocked badge must be '🥶'.")
 }
 
-print("🎉 All 54 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability & Unified Display Tests Passed!")
+// 55. AGY StopError: Generic Stop with error + fullyIdle transitions to .idle (NOT .blocked, NOT .done)
+runTest("55. AGY StopError: Generic Stop with error + fullyIdle transitions to .idle (NOT .blocked, NOT .done)") {
+    let store = AgentStore.shared
+    let testSessionId = "test_agy_stoperror_1"
+    store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+    defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
+
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": testSessionId,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: true)
+
+    let workingSession = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(workingSession?.status == .working, "Session must be working before stop.")
+
+    // Generic Stop with stream interruption error
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": testSessionId,
+        "error": "The stream was interrupted. Please continue the task you were working on.",
+        "termination_reason": "ERROR",
+        "fully_idle": true,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: true)
+
+    let stoppedSession = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(stoppedSession?.status == .idle, "Generic StopError must transition to .idle (actual: \(String(describing: stoppedSession?.status))).")
+    try assert(stoppedSession?.attentionReason == nil, "attentionReason must be nil for generic StopError.")
+    try assert(stoppedSession?.sourceEvidence.contains("Generation stopped") == true, "sourceEvidence must reflect generation stopped.")
+    try assert(store.getStatus(for: .antigravity).status == .idle, "Parent status must be .idle when sole session is stopped.")
+}
+
+// 56. AGY StopError: Non-actionable StopError releases Smart Auto keep-awake
+runTest("56. AGY StopError: Non-actionable StopError releases Smart Auto keep-awake") {
+    let store = AgentStore.shared
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+    let testSessionId = "test_agy_stoperror_smartauto"
+    store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+    defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
+
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": testSessionId,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    try assert(sleepMgr.evaluateSmartAutoRequirement().shouldKeepAwake == true, "Smart Auto must be active while AGY is working.")
+
+    // Non-actionable StopError
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": testSessionId,
+        "error": "The stream was interrupted.",
+        "termination_reason": "ERROR",
+        "fully_idle": true,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let evalAfter = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalAfter.shouldKeepAwake == false, "Smart Auto MUST release keep-awake when session halts with non-actionable StopError.")
+}
+
+// 57. AGY Permission Gate: Positively verified blocked state survives Stop event
+runTest("57. AGY Permission Gate: Positively verified blocked state survives Stop event") {
+    let store = AgentStore.shared
+    let testSessionId = "test_agy_perm_survives_stop"
+    defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
+
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": testSessionId,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreToolUse",
+        "session_id": testSessionId,
+        "tool_name": "ask_question",
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let blockedSession = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(blockedSession?.status == .blocked, "ask_question must produce .blocked.")
+
+    // Stop arriving while blocked must preserve .blocked
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": testSessionId,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let afterStop = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(afterStop?.status == .blocked, "Positively verified .blocked state MUST survive Stop event.")
+}
+
+// 58. AGY Subagent Filtering: Subagents without annotations do NOT create persistent menu rows
+runTest("58. AGY Subagent Filtering: Subagents without annotations do NOT create persistent menu rows") {
+    let store = AgentStore.shared
+    let fm = FileManager.default
+    let mainUserCid = "00000000-0000-0000-0000-000000000001"
+    let subagentCid = "00000000-0000-0000-0000-000000000002"
+    defer {
+        store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+        let annoPath = NSString(string: "~/.gemini/antigravity/annotations/\(mainUserCid).pbtxt").expandingTildeInPath
+        let brainSubPath = NSString(string: "~/.gemini/antigravity/brain/\(subagentCid)").expandingTildeInPath
+        try? fm.removeItem(atPath: annoPath)
+        try? fm.removeItem(atPath: brainSubPath)
+    }
+
+    // Create real user-facing annotation file on disk
+    let annoDir = NSString(string: "~/.gemini/antigravity/annotations").expandingTildeInPath
+    try? fm.createDirectory(atPath: annoDir, withIntermediateDirectories: true)
+    let annoPath = "\(annoDir)/\(mainUserCid).pbtxt"
+    try "last_user_view_time: {}".write(toFile: annoPath, atomically: true, encoding: .utf8)
+
+    // Create subagent brain directory without annotation file
+    let brainDir = NSString(string: "~/.gemini/antigravity/brain").expandingTildeInPath
+    let brainSubPath = "\(brainDir)/\(subagentCid)"
+    try? fm.createDirectory(atPath: brainSubPath, withIntermediateDirectories: true)
+
+    try assert(AgentStore.isUserFacingAntigravitySession(mainUserCid, isTestMode: false) == true, "Session with annotation must be user-facing.")
+    try assert(AgentStore.isUserFacingAntigravitySession(subagentCid, isTestMode: false) == false, "Subagent with brain but no annotation must NOT be user-facing.")
+
+    // Fire hook event for main user conversation
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": mainUserCid,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: false)
+
+    // Fire hook event for internal subagent
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": subagentCid,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: false)
+
+    let activeSessions = store.getSessions(for: .antigravity)
+    try assert(activeSessions.contains(where: { $0.sessionId == mainUserCid }), "Main user session must appear in tracked sessions.")
+    try assert(!activeSessions.contains(where: { $0.sessionId == subagentCid }), "Internal subagent must NOT appear in tracked sessions.")
+}
+
+// 59. AGY Subagent Isolation: Subagent Stop cannot mutate user-facing session
+runTest("59. AGY Subagent Isolation: Subagent Stop cannot mutate user-facing session") {
+    let store = AgentStore.shared
+    let fm = FileManager.default
+    let mainUserCid = "00000000-0000-0000-0000-000000000011"
+    let subagentCid = "00000000-0000-0000-0000-000000000012"
+    defer {
+        store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+        let annoPath = NSString(string: "~/.gemini/antigravity/annotations/\(mainUserCid).pbtxt").expandingTildeInPath
+        let brainSubPath = NSString(string: "~/.gemini/antigravity/brain/\(subagentCid)").expandingTildeInPath
+        try? fm.removeItem(atPath: annoPath)
+        try? fm.removeItem(atPath: brainSubPath)
+    }
+
+    let annoDir = NSString(string: "~/.gemini/antigravity/annotations").expandingTildeInPath
+    try? fm.createDirectory(atPath: annoDir, withIntermediateDirectories: true)
+    let annoPath = "\(annoDir)/\(mainUserCid).pbtxt"
+    try "last_user_view_time: {}".write(toFile: annoPath, atomically: true, encoding: .utf8)
+
+    let brainDir = NSString(string: "~/.gemini/antigravity/brain").expandingTildeInPath
+    let brainSubPath = "\(brainDir)/\(subagentCid)"
+    try? fm.createDirectory(atPath: brainSubPath, withIntermediateDirectories: true)
+
+    // Start main user session
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": mainUserCid,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: false)
+
+    // Subagent finishes and emits Stop
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": subagentCid,
+        "cwd": "/Users/ava/Projects/NooBoss-MV3"
+    ], isTestMode: false)
+
+    // Main user session must still be working!
+    let mainSession = store.getSessions(for: .antigravity).first(where: { $0.sessionId == mainUserCid })
+    try assert(mainSession?.status == .working, "Subagent Stop must not mutate main user session from working to done.")
+}
+
+// 60. AGY Reconciliation: Stale subagent rows are purged during session reconciliation
+runTest("60. AGY Reconciliation: Stale subagent rows are purged during session reconciliation") {
+    let store = AgentStore.shared
+    let fm = FileManager.default
+    let staleSubagentCid = "00000000-0000-0000-0000-000000000021"
+    defer {
+        store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+        let brainSubPath = NSString(string: "~/.gemini/antigravity/brain/\(staleSubagentCid)").expandingTildeInPath
+        try? fm.removeItem(atPath: brainSubPath)
+    }
+
+    let brainDir = NSString(string: "~/.gemini/antigravity/brain").expandingTildeInPath
+    let brainSubPath = "\(brainDir)/\(staleSubagentCid)"
+    try? fm.createDirectory(atPath: brainSubPath, withIntermediateDirectories: true)
+
+    // Artificially inject session into trackedSessions
+    var cur = store.getSessions(for: .antigravity)
+    cur.append(AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: staleSubagentCid,
+        title: "[NooBoss-MV3]",
+        status: .done,
+        turnId: "turn_sub_stale",
+        sourceEvidence: "Injected",
+        lastUpdated: Date()
+    ))
+    store.syncSessions(for: .antigravity, activeSessions: cur, processRunning: true)
+
+    try assert(store.getSessions(for: .antigravity).contains(where: { $0.sessionId == staleSubagentCid }), "Injected subagent must exist before reconcile.")
+
+    // Reconcile
+    store.reconcileAntigravitySessions(isTestMode: false)
+
+    try assert(!store.getSessions(for: .antigravity).contains(where: { $0.sessionId == staleSubagentCid }), "Reconcile must purge internal subagent without annotation.")
+}
+
+print("🎉 All 60 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display & AGY StopError/Subagent Tests Passed!")

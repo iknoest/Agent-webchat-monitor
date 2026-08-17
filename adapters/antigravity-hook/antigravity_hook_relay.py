@@ -67,7 +67,9 @@ def main():
         "tool_call": tool_call,
         "step_idx": step_idx,
         "reason": data.get("reason"),
-        "error": data.get("error")
+        "error": data.get("error"),
+        "termination_reason": data.get("terminationReason"),
+        "fully_idle": data.get("fullyIdle")
     }
 
     try:

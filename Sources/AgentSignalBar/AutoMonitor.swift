@@ -451,6 +451,7 @@ public final class AutoMonitor: @unchecked Sendable {
             return
         }
 
+        AgentStore.shared.reconcileAntigravitySessions()
         checkAntigravityNotificationCenterBanner()
 
         let currentAntigravitySessions = AgentStore.shared.getSessions(for: .antigravity)

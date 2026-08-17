@@ -662,3 +662,17 @@ Next: Push stable checkpoint to origin.
 Blockers: none
 
 [RELEASE] Multi-Provider Monitor Stabilization, Codex v1 Lifecycle & Unified Display — antigravity — 2026-08-17T11:55:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Antigravity StopError Decoupling & Subagent Identity Filtering
+Done:
+1. StopError Decoupling: Decoupled non-actionable Antigravity `Stop` events with errors (e.g. stream interruption / model quota exhaustion) from `Needs You` (`.blocked`). Non-actionable halts transition cleanly to `⚪ .idle` with descriptive detail and zero alarms. Verified actionable gates (`ask_question` and correlated AX notification banners) and pending tool executions remain preserved.
+2. Subagent Identity Filtering: Implemented `isUserFacingAntigravitySession` checking `~/.gemini/antigravity/annotations/<cid>.pbtxt`. Internal helper subagents created via `invoke_subagent` without annotation files are strictly filtered from `trackedSessions[.antigravity]`, eliminating duplicate `[NooBoss-MV3]` rows.
+3. Smart Auto Safety: Verified non-actionable StopError immediately releases Smart Auto keep-awake assertions.
+4. Comprehensive Automated Verification: Added Tests 55–60 to `Stage1TestRunner` (60/60 passed) and unit test in `AgentSignalBarTests`. Clean release build and zero whitespace errors.
+Verified: `swift run Stage1TestRunner` (60/60 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Phase 1 — Provider Availability & Quota v1.
+Blockers: none
+
+[RELEASE] Antigravity StopError Decoupling & Subagent Identity Filtering — antigravity — 2026-08-17T12:45:00+02:00

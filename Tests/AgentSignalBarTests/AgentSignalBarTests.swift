@@ -960,6 +960,40 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(blockedInfo.effectiveDisplayStatus.badge(theme: .classic), "🔴")
         XCTAssertEqual(blockedInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🥶")
     }
+
+    func testAntigravityStopErrorSemanticsAndSubagentFiltering() throws {
+        let store = AgentStore.shared
+        let sleepMgr = SleepManager.shared
+        sleepMgr.mode = .smartAuto
+
+        let testSessionId = "test_unit_agy_stoperror"
+        defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
+
+        _ = store.handleAntigravityHookEvent(json: [
+            "event": "PreInvocation",
+            "session_id": testSessionId,
+            "cwd": "/tmp"
+        ], isTestMode: true)
+
+        let sessionWorking = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+        XCTAssertEqual(sessionWorking?.status, .working)
+
+        // StopError -> must be .idle, NOT .blocked, NOT .done
+        _ = store.handleAntigravityHookEvent(json: [
+            "event": "Stop",
+            "session_id": testSessionId,
+            "error": "The stream was interrupted. Please continue the task you were working on.",
+            "termination_reason": "ERROR",
+            "fully_idle": true,
+            "cwd": "/tmp"
+        ], isTestMode: true)
+
+        let sessionStopped = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+        XCTAssertEqual(sessionStopped?.status, .idle)
+        XCTAssertNil(sessionStopped?.attentionReason)
+        XCTAssertTrue(sessionStopped?.sourceEvidence.contains("Generation stopped") == true)
+        XCTAssertEqual(store.getStatus(for: .antigravity).status, .idle)
+    }
 }
 #endif
 

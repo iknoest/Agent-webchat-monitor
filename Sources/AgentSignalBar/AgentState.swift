@@ -681,6 +681,47 @@ public final class AgentStore: @unchecked Sendable {
                lower == "session-alpha" || lower == "session-beta" || lower == "unknown_session"
     }
 
+    public static func isUserFacingAntigravitySession(_ sessionId: String, isTestMode: Bool = false) -> Bool {
+        if isTestMode || isSyntheticTestSessionId(sessionId) {
+            return true
+        }
+
+        let annotationPath = NSString(string: "~/.gemini/antigravity/annotations/\(sessionId).pbtxt").expandingTildeInPath
+        if FileManager.default.fileExists(atPath: annotationPath) {
+            return true
+        }
+
+        let brainPath = NSString(string: "~/.gemini/antigravity/brain/\(sessionId)").expandingTildeInPath
+        if FileManager.default.fileExists(atPath: brainPath) {
+            // Brain exists but annotation file does not -> internal subagent / helper execution
+            return false
+        }
+
+        // Neither exists yet (e.g. brand new conversation in flight before first write) -> allow initially
+        return true
+    }
+
+    public func reconcileAntigravitySessions(isTestMode: Bool = false) {
+        lock.lock()
+        var currentSessions = trackedSessions[.antigravity] ?? [:]
+        var changed = false
+
+        for (sessionId, _) in currentSessions {
+            if !AgentStore.isUserFacingAntigravitySession(sessionId, isTestMode: isTestMode) {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+            }
+        }
+
+        if changed {
+            trackedSessions[.antigravity] = currentSessions
+            lock.unlock()
+            syncSessions(for: .antigravity, activeSessions: Array(currentSessions.values), processRunning: true)
+        } else {
+            lock.unlock()
+        }
+    }
+
     public func pruneStaleClaudeSessions(maxAgeSeconds: TimeInterval = 300) {
         lock.lock()
         var currentSessions = trackedSessions[.claude] ?? [:]
@@ -900,7 +941,20 @@ public final class AgentStore: @unchecked Sendable {
         let rawCwd = json["cwd"] as? String ?? ""
         let folderName = (rawCwd as NSString).lastPathComponent
         let title = folderName.isEmpty ? "Antigravity (\(sessionId.prefix(8)))" : "[\(folderName)]"
-        let error = json["error"] as? String
+        let error = json["error"] as? String ?? ((json["termination_reason"] as? String == "ERROR" || json["terminationReason"] as? String == "ERROR") ? "Error" : nil)
+        let terminationReason = json["termination_reason"] as? String ?? json["terminationReason"] as? String
+
+        // User-Facing Identity Guard: Filter out internal subagents / helper executions
+        if !AgentStore.isUserFacingAntigravitySession(sessionId, isTestMode: isTestMode) {
+            if currentSessions.removeValue(forKey: sessionId) != nil {
+                trackedSessions[.antigravity] = currentSessions
+                lock.unlock()
+                syncSessions(for: .antigravity, activeSessions: Array(currentSessions.values), processRunning: true)
+            } else {
+                lock.unlock()
+            }
+            return true
+        }
 
         var session = currentSessions[sessionId] ?? AgentSessionInfo(
             provider: .antigravity,
@@ -985,25 +1039,32 @@ public final class AgentStore: @unchecked Sendable {
             session.sensorReason = "Antigravity Hook: PostInvocation"
 
         case "Stop":
-            if let err = error, !err.isEmpty {
-                session.status = .blocked
-                let reasonStr = "Stop error: \(err)"
-                session.attentionReason = reasonStr
-                session.sourceEvidence = "Antigravity Hook: StopError"
-                session.sensorReason = reasonStr
+            let hasError = (error != nil && !error!.isEmpty) || terminationReason == "ERROR"
+
+            if session.status == .blocked {
+                // A. If already positively blocked by an actionable permission/question gate: preserve .blocked
                 session.pendingToolName = nil
                 session.pendingToolTime = nil
+            } else if session.pendingToolName != nil {
+                // B. Genuinely unresolved pending tool: preserve .working
+                session.status = .working
+            } else if hasError {
+                // C. Non-actionable StopError / Stream Interruption / Quota Exhaustion / Error Stop
+                // Transition to a NON-ACTIONABLE stopped/idle state (status = .idle)
+                session.status = .idle
+                session.attentionReason = nil
+                session.pendingToolName = nil
+                session.pendingToolTime = nil
+                let errText = (error != nil && !error!.isEmpty) ? error! : "Stream interrupted / execution halted"
+                let reasonStr = "Generation stopped: \(errText)"
+                session.sourceEvidence = "Antigravity Hook: Generation stopped"
+                session.sensorReason = reasonStr
                 if let start = session.thinkingStartTime {
                     session.lastDurationSeconds = now.timeIntervalSince(start)
                 }
                 session.thinkingStartTime = nil
-            } else if session.status == .blocked {
-                // If already blocked (Needs You), preserve .blocked, attentionReason and duration
-            } else if session.pendingToolName != nil {
-                // Unresolved pending tool request (e.g. model finished generation turn before user permission approval)
-                // Retain working status and pending tool correlation evidence
-                session.status = .working
             } else {
+                // D. Normal turn completion with zero errors -> .done (NEW Output Ready)
                 session.status = .done
                 session.attentionReason = nil
                 session.sourceEvidence = "Antigravity Hook: Turn complete (Stop)"
@@ -1017,15 +1078,21 @@ public final class AgentStore: @unchecked Sendable {
             }
 
         case "StopFailure":
-            session.status = .blocked
-            let reasonStr = error != nil ? "Stop failed: \(error!)" : "Session stopped with error"
-            session.attentionReason = reasonStr
-            session.sourceEvidence = "Antigravity Hook: StopFailure"
-            session.sensorReason = reasonStr
-            if let start = session.thinkingStartTime {
-                session.lastDurationSeconds = now.timeIntervalSince(start)
+            if session.status == .blocked {
+                // Preserve .blocked if already positively blocked
+            } else {
+                session.status = .idle
+                session.attentionReason = nil
+                session.pendingToolName = nil
+                session.pendingToolTime = nil
+                let reasonStr = error != nil ? "Generation failed: \(error!)" : "Session stopped with error"
+                session.sourceEvidence = "Antigravity Hook: Generation stopped"
+                session.sensorReason = reasonStr
+                if let start = session.thinkingStartTime {
+                    session.lastDurationSeconds = now.timeIntervalSince(start)
+                }
+                session.thinkingStartTime = nil
             }
-            session.thinkingStartTime = nil
 
         case "SessionEnd":
             session.status = .idle
