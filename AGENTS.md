@@ -717,8 +717,19 @@ Done:
 4. Standardized 24-Hour Reset Times: Implemented unified reset time formatting (`resets today 18:42 (in 1h 34m)` / `resets Aug 20 09:06 (in 2d 16h)`) using 24-hour time, user local timezone, and zero seconds across all providers.
 5. Future Roadmap Item: Added `Quota Resume Orchestration` (`INVESTIGATION / P1 — NOT IMPLEMENTED`) with 3-level progression and 9 strict safety requirements to `PLAN.md`.
 6. Comprehensive Automated Verification: Added Tests 92–105 to `Stage1TestRunner` (105/105 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` validation.
-Verified: `swift run Stage1TestRunner` (105/105 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
-Next: Commit and push `fix: finalize quota freshness and reset-time UX` to origin/main.
+[RELEASE] Quota UX Finalization & Roadmap Closeout — antigravity — 2026-08-17T17:18:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Final Quota Presentation Truth Closeout
+Done:
+1. Provider Names Only in Quota Headers: Stripped all Availability/Exhaustion/Limited words from quota headers (`Claude Code`, `Antigravity`, `Codex Desktop`), letting quota rows themselves express capacity.
+2. Removed Global Refresh Timestamp: Cleaned bottom action to `Refresh Usage Limits` (or `🔄 Refreshing Usage Limits...` in-flight), eliminating contradictory global "Updated X ago" labels.
+3. Independent Per-Provider Freshness: Rendered truthful secondary freshness rows (`· updated just now`, `· updated 24s ago`, `· updated 2m ago`) per provider section using each source's `lastSuccessfulRefresh`.
+4. Exact Live vs Last-Known Semantics: Closed apps with live CLI sources (e.g. closed Codex Desktop with active `codex app-server`) display `updated just now`, NOT `last known`. "Last known" is used strictly when a query fails and a previously successful sample is retained (`· last known · updated 3h ago`).
+5. Comprehensive Test Verification: Added Tests 106–117 to `Stage1TestRunner` (117/117 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (117/117 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `fix: finalize per-provider quota freshness semantics` to origin/main.
 Blockers: none
 
-[RELEASE] Quota UX Finalization & Roadmap Closeout — antigravity — 2026-08-17T17:18:00+02:00
+[RELEASE] Final Quota Presentation Truth Closeout — antigravity — 2026-08-17T21:10:00+02:00

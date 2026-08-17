@@ -277,6 +277,15 @@ public final class AutoMonitor: @unchecked Sendable {
                 AgentUsageStore.shared.updateUsage(for: .antigravity, data: updated)
                 AgentStore.shared.updateAvailability(for: .antigravity, availability: updated.availability)
                 return
+            } else {
+                // Live fetch failed: preserve prior sample but mark source as not live (last known)
+                if var existing = AgentUsageStore.shared.getUsage(for: .antigravity), !existing.modelFamilies.isEmpty {
+                    existing.isLiveSource = false
+                    existing.freshness = "Stale"
+                    existing.lastUpdated = now
+                    AgentUsageStore.shared.updateUsage(for: .antigravity, data: existing)
+                    return
+                }
             }
         }
 
@@ -317,6 +326,12 @@ public final class AutoMonitor: @unchecked Sendable {
               let samples = json["samples"] as? [[String: Any]],
               let lastSample = samples.last,
               let uDict = lastSample["u"] as? [String: Any] else {
+            if var existing = AgentUsageStore.shared.getUsage(for: .claude), (existing.sessionLimitPercent != nil || existing.weeklyLimitPercent != nil) {
+                existing.isLiveSource = false
+                existing.freshness = "Stale"
+                existing.lastUpdated = Date()
+                AgentUsageStore.shared.updateUsage(for: .claude, data: existing)
+            }
             return
         }
 
@@ -360,6 +375,15 @@ public final class AutoMonitor: @unchecked Sendable {
                 AgentUsageStore.shared.updateUsage(for: .codex, data: updated)
                 AgentStore.shared.updateAvailability(for: .codex, availability: liveUsage.availability)
                 return
+            } else {
+                // Live fetch failed: preserve prior sample but mark source as not live (last known)
+                if var existing = AgentUsageStore.shared.getUsage(for: .codex), existing.weeklyLimitPercent != nil {
+                    existing.isLiveSource = false
+                    existing.freshness = "Stale"
+                    existing.lastUpdated = now
+                    AgentUsageStore.shared.updateUsage(for: .codex, data: existing)
+                    return
+                }
             }
         }
 

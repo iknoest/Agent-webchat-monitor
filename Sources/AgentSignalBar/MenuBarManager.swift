@@ -188,9 +188,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 }
             }
 
-            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
+            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false):\(usage?.lastSuccessfulRefresh?.timeIntervalSince1970 ?? 0);"
         }
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(usageRefreshTs)|\(refreshingTag)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(refreshingTag)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -202,6 +202,19 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let filled = String(repeating: "■", count: filledCount)
         let empty = String(repeating: "□", count: emptyCount)
         return "[\(filled)\(empty)]"
+    }
+
+    public func makeProviderFreshnessTag(usage: AgentUsageData?) -> String {
+        guard let usage = usage, (usage.weeklyLimitPercent != nil || usage.sessionLimitPercent != nil || !usage.modelFamilies.isEmpty) else {
+            return "Quota unavailable"
+        }
+        let ts = usage.lastSuccessfulRefresh ?? usage.lastUpdated
+        let timeStr = ts.relativeString()
+        if usage.isLiveSource {
+            return "updated \(timeStr)"
+        } else {
+            return "last known · updated \(timeStr)"
+        }
     }
 
     private func rebuildMenu() {
@@ -376,20 +389,15 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // 3A. Claude Code Usage Rows
         if let claudeUsage = allUsage[.claude] {
-            let isExhausted = claudeUsage.isQuotaExhausted
-            let hdrTitle = isExhausted ? "  Claude Code (Quota Exhausted)" : "  Claude Code"
-            let hdr = NSMenuItem(title: hdrTitle, action: nil, keyEquivalent: "")
+            let hdr = NSMenuItem(title: "  Claude Code", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
-
-            let isStale = Date().timeIntervalSince(claudeUsage.lastUpdated) > 86400 || !claudeUsage.isLiveSource
-            let freshnessTag = isStale ? " [Stale Data]" : ""
 
             if let sRemaining = claudeUsage.sessionRemainingPercent {
                 let sBar = makeCompactBar(percent: sRemaining)
                 let sReset = claudeUsage.sessionResetText ?? ""
                 let resetTag = sReset.isEmpty ? "" : " · \(sReset)"
-                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sRemaining))% left\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
                 row1.isEnabled = false
                 menu.addItem(row1)
             }
@@ -398,23 +406,20 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 let wBar = makeCompactBar(percent: wRemaining)
                 let wReset = claudeUsage.weeklyResetText ?? ""
                 let resetTag = wReset.isEmpty ? "" : " · \(wReset)"
-                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wRemaining))% left\(resetTag)\(freshnessTag)", action: nil, keyEquivalent: "")
+                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
                 row2.isEnabled = false
                 menu.addItem(row2)
             }
+
+            let freshnessText = makeProviderFreshnessTag(usage: claudeUsage)
+            let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+            freshRow.isEnabled = false
+            menu.addItem(freshRow)
         }
 
         // 3B. Antigravity Usage Rows
         if let agyUsage = allUsage[.antigravity] {
-            let hdrTitle: String
-            if agyUsage.availability == .limited {
-                hdrTitle = "  Antigravity (Limited)"
-            } else if agyUsage.availability == .quotaExhausted {
-                hdrTitle = "  Antigravity (Quota Exhausted)"
-            } else {
-                hdrTitle = "  Antigravity"
-            }
-            let hdr = NSMenuItem(title: hdrTitle, action: nil, keyEquivalent: "")
+            let hdr = NSMenuItem(title: "  Antigravity", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
 
@@ -441,27 +446,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         menu.addItem(row)
                     }
                 }
-            }
-        }
-
-        // 3C. Codex Desktop Usage Rows
-        if let cdxUsage = allUsage[.codex] {
-            let isExhausted = cdxUsage.isQuotaExhausted
-            let hdrTitle = isExhausted ? "  Codex Desktop (Quota Exhausted)" : "  Codex Desktop"
-            let hdr = NSMenuItem(title: hdrTitle, action: nil, keyEquivalent: "")
-            hdr.isEnabled = false
-            menu.addItem(hdr)
-
-            let isCodexOff = AgentStore.shared.getStatus(for: .codex).status == .off
-            let cachedTag = isCodexOff && cdxUsage.weeklyLimitPercent != nil ? " [Last known quota · updated \(cdxUsage.lastUpdated.relativeString())]" : ""
-
-            if let wRemaining = cdxUsage.weeklyRemainingPercent {
-                let bar = makeCompactBar(percent: wRemaining)
-                let resetTag = cdxUsage.weeklyResetText ?? ""
-                let resetPrefix = resetTag.isEmpty ? "" : " · \(resetTag)"
-                let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wRemaining))% left\(resetPrefix)\(cachedTag)", action: nil, keyEquivalent: "")
-                row.isEnabled = false
-                menu.addItem(row)
+                let freshnessText = makeProviderFreshnessTag(usage: agyUsage)
+                let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                freshRow.isEnabled = false
+                menu.addItem(freshRow)
             } else {
                 let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false
@@ -469,12 +457,37 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             }
         }
 
-        // 3D. Interactive Refresh Button (Updated Xm ago)
+        // 3C. Codex Desktop Usage Rows
+        if let cdxUsage = allUsage[.codex] {
+            let hdr = NSMenuItem(title: "  Codex Desktop", action: nil, keyEquivalent: "")
+            hdr.isEnabled = false
+            menu.addItem(hdr)
+
+            if let wRemaining = cdxUsage.weeklyRemainingPercent {
+                let bar = makeCompactBar(percent: wRemaining)
+                let resetTag = cdxUsage.weeklyResetText ?? ""
+                let resetPrefix = resetTag.isEmpty ? "" : " · \(resetTag)"
+                let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wRemaining))% left\(resetPrefix)", action: nil, keyEquivalent: "")
+                row.isEnabled = false
+                menu.addItem(row)
+
+                let freshnessText = makeProviderFreshnessTag(usage: cdxUsage)
+                let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                freshRow.isEnabled = false
+                menu.addItem(freshRow)
+            } else {
+                let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
+                unavailRow.isEnabled = false
+                menu.addItem(unavailRow)
+            }
+        }
+
+        // 3D. Interactive Refresh Button
         let refreshUsageTitle: String
         if isRefreshingUsage {
             refreshUsageTitle = "  🔄 Refreshing Usage Limits..."
         } else {
-            refreshUsageTitle = "  Refresh Usage Limits (Updated \(lastUsageRefreshTime.relativeString()))"
+            refreshUsageTitle = "  Refresh Usage Limits"
         }
         let refreshUsageItem = NSMenuItem(title: refreshUsageTitle, action: #selector(refreshUsageClicked), keyEquivalent: "r")
         refreshUsageItem.target = self

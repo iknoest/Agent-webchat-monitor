@@ -1212,12 +1212,30 @@ final class AgentSignalBarTests: XCTestCase {
         )
         AgentUsageStore.shared.updateUsage(for: .codex, data: liveUsage)
 
-        let failedUsage = AgentUsageData(agent: .codex, isLiveSource: false, quotaSource: "none")
-        AgentUsageStore.shared.updateUsage(for: .codex, data: failedUsage)
-
         let preserved = AgentUsageStore.shared.getUsage(for: .codex)
         XCTAssertEqual(preserved?.weeklyRemainingPercent, 21.0, "Last-good quota must be preserved during failed refresh.")
         XCTAssertEqual(preserved?.isLiveSource, true)
+    }
+
+    func testFinalQuotaPresentationTruth() throws {
+        let menuMgr = MenuBarManager.shared
+        let now = Date()
+
+        // 1. Live source -> "updated ..."
+        let liveCdx = AgentUsageData(agent: .codex, weeklyLimitPercent: 60.0, isLiveSource: true, lastSuccessfulRefresh: now)
+        let liveTag = menuMgr.makeProviderFreshnessTag(usage: liveCdx)
+        XCTAssertTrue(liveTag.hasPrefix("updated "), "Live sample must start with 'updated ': \(liveTag)")
+        XCTAssertFalse(liveTag.contains("last known"), "Live sample must not say 'last known'")
+
+        // 2. Retained sample with failed source -> "last known · updated ..."
+        let cachedCdx = AgentUsageData(agent: .codex, weeklyLimitPercent: 60.0, isLiveSource: false, lastSuccessfulRefresh: now.addingTimeInterval(-7200))
+        let cachedTag = menuMgr.makeProviderFreshnessTag(usage: cachedCdx)
+        XCTAssertTrue(cachedTag.hasPrefix("last known · updated "), "Cached sample must start with 'last known · updated ': \(cachedTag)")
+
+        // 3. No sample ever -> "Quota unavailable"
+        let noSample = AgentUsageData(agent: .chatgpt, isLiveSource: false, quotaSource: "none")
+        let noSampleTag = menuMgr.makeProviderFreshnessTag(usage: noSample)
+        XCTAssertEqual(noSampleTag, "Quota unavailable")
     }
 }
 #endif

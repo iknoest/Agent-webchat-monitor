@@ -227,7 +227,7 @@ public final class AgentUsageStore: @unchecked Sendable {
         let existing = usageData[agent]
 
         // Prevent non-live config fallbacks from overwriting a live source
-        if let existing = existing, existing.isLiveSource && !data.isLiveSource {
+        if let existing = existing, existing.isLiveSource && !data.isLiveSource && (data.quotaSource == "none" || data.sourceAuthority == "loaded_from_config") {
             lock.unlock()
             return
         }

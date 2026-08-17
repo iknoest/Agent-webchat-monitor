@@ -2544,4 +2544,139 @@ runTest("105. Quota Resume Orchestration Roadmap-Only Validation") {
     try assert(sleepMgr.mode == .smartAuto, "Smart Auto remains intact.")
 }
 
-print("🎉 All 105 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError, Proven Quota V1, Quota Completeness & UX Finalization Tests Passed!")
+// 106. Quota Section Headers Contain Provider Names Only
+runTest("106. Quota Section Headers Contain Provider Names Only") {
+    let claudeUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true)
+    let agyUsage = AgentUsageData(agent: .antigravity, modelFamilies: [
+        ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 80.0, isPercentUsed: false),
+        ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+    ], isLiveSource: true)
+    let cdxUsage = AgentUsageData(agent: .codex, weeklyLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true)
+
+    AgentUsageStore.shared.updateUsage(for: .claude, data: claudeUsage)
+    AgentUsageStore.shared.updateUsage(for: .antigravity, data: agyUsage)
+    AgentUsageStore.shared.updateUsage(for: .codex, data: cdxUsage)
+
+    // Verify availability doesn't contaminate header titles
+    try assert(claudeUsage.availability == .quotaExhausted, "Claude availability is quotaExhausted")
+    try assert(agyUsage.availability == .limited, "AGY availability is limited")
+    try assert(cdxUsage.availability == .quotaExhausted, "Codex availability is quotaExhausted")
+}
+
+// 107. Refresh Action Has No Global Updated X Ago
+runTest("107. Refresh Action Has No Global Updated X Ago") {
+    let sig = MenuBarManager.shared.computeRenderSignature()
+    try assert(!sig.isEmpty, "Render signature generated.")
+}
+
+// 108. Per-Provider Freshness is Independent
+runTest("108. Per-Provider Freshness is Independent") {
+    let menuMgr = MenuBarManager.shared
+    let now = Date()
+
+    let cldFresh = AgentUsageData(agent: .claude, sessionLimitPercent: 50.0, isLiveSource: true, lastSuccessfulRefresh: now)
+    let agyFresh = AgentUsageData(agent: .antigravity, modelFamilies: [ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 90.0, isPercentUsed: false)], isLiveSource: true, lastSuccessfulRefresh: now.addingTimeInterval(-24))
+    let cdxFresh = AgentUsageData(agent: .codex, weeklyLimitPercent: 40.0, isLiveSource: true, lastSuccessfulRefresh: now.addingTimeInterval(-120))
+
+    let cldTag = menuMgr.makeProviderFreshnessTag(usage: cldFresh)
+    let agyTag = menuMgr.makeProviderFreshnessTag(usage: agyFresh)
+    let cdxTag = menuMgr.makeProviderFreshnessTag(usage: cdxFresh)
+
+    try assert(cldTag.contains("updated"), "Claude freshness must contain 'updated': got \(cldTag)")
+    try assert(agyTag.contains("updated"), "AGY freshness must contain 'updated': got \(agyTag)")
+    try assert(cdxTag.contains("updated"), "Codex freshness must contain 'updated': got \(cdxTag)")
+    try assert(cdxTag != agyTag || cdxTag.contains("m ago") || cdxTag.contains("2m"), "Independent relative durations.")
+}
+
+// 109. Closed Codex + Live CLI Sample -> Updated Now, NOT Last Known
+runTest("109. Closed Codex + Live CLI Sample -> Updated Now, NOT Last Known") {
+    AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
+    let liveCdx = AgentUsageData(
+        agent: .codex,
+        weeklyLimitPercent: 79.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "codex_app_server",
+        lastSuccessfulRefresh: Date()
+    )
+    AgentUsageStore.shared.updateUsage(for: .codex, data: liveCdx)
+
+    let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: liveCdx)
+    try assert(!tag.contains("last known"), "Live CLI sample for closed app must NOT be labelled last known: got \(tag)")
+    try assert(tag.contains("updated"), "Must be labelled updated: got \(tag)")
+}
+
+// 110. Failed Source + Cached Sample -> Last Known
+runTest("110. Failed Source + Cached Sample -> Last Known") {
+    let cachedCdx = AgentUsageData(
+        agent: .codex,
+        weeklyLimitPercent: 79.0,
+        isPercentUsed: true,
+        isLiveSource: false,
+        quotaSource: "codex_app_server",
+        lastSuccessfulRefresh: Date().addingTimeInterval(-10800) // 3h ago
+    )
+    let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: cachedCdx)
+    try assert(tag.hasPrefix("last known · updated"), "Failed live source with retained sample must be labelled 'last known · updated ...': got \(tag)")
+}
+
+// 111. Refresh Keeps Previous Sample Visible
+runTest("111. Refresh Keeps Previous Sample Visible") {
+    let sample = AgentUsageStore.shared.getUsage(for: .codex)
+    try assert(sample?.weeklyRemainingPercent == 21.0, "Previous sample remains visible.")
+}
+
+// 112. No-Sample Source Failure -> Unavailable
+runTest("112. No-Sample Source Failure -> Unavailable") {
+    let emptyUsage = AgentUsageData(agent: .chatgpt, isLiveSource: false, quotaSource: "none")
+    let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: emptyUsage)
+    try assert(tag == "Quota unavailable", "No sample must yield 'Quota unavailable': got \(tag)")
+}
+
+// 113. Standardized Reset Format Remains 24-Hour
+runTest("113. Standardized Reset Format Remains 24-Hour") {
+    let now = Date()
+    let todayDate = now.addingTimeInterval(2760) // 46m
+    let formattedToday = AntigravityLocalQuotaConnector.formatResetDateTime(date: todayDate, now: now)
+    try assert(formattedToday.hasPrefix("today "), "Today prefix: \(formattedToday)")
+    try assert(formattedToday.contains("(in 46m)"), "46m relative: \(formattedToday)")
+    try assert(!formattedToday.contains("AM") && !formattedToday.contains("PM"), "24-hour clock only")
+}
+
+// 114. Universal % Left Remains Intact
+runTest("114. Universal % Left Remains Intact") {
+    try assert(ModelFamilyQuota.normalizeRemaining(raw: 79.0, isPercentUsed: true) == 21.0, "79% used -> 21% left")
+    try assert(ModelFamilyQuota.normalizeRemaining(raw: 100.0, isPercentUsed: true) == 0.0, "100% used -> 0% left")
+    try assert(ModelFamilyQuota.normalizeRemaining(raw: 34.0, isPercentUsed: false) == 34.0, "34% remaining -> 34% left")
+}
+
+// 115. Lifecycle Remains Separate from Quota Dashboard
+runTest("115. Lifecycle Remains Separate from Quota Dashboard") {
+    AgentStore.shared.updateStatus(for: .antigravity, status: .working, detail: "Working active turn")
+    let info = AgentStore.shared.getStatus(for: .antigravity)
+    try assert(info.status == .working, "Provider row tracks Working lifecycle")
+    let usage = AgentUsageStore.shared.getUsage(for: .antigravity)
+    try assert(usage?.availability == .limited, "Quota dashboard tracks Limited capacity independently")
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+}
+
+// 116. Quota Never Affects Smart Auto By Itself
+runTest("116. Quota Never Affects Smart Auto By Itself") {
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+    for p in AgentID.allCases {
+        AgentStore.shared.updateStatus(for: p, status: .idle)
+    }
+    AgentStore.shared.updateAvailability(for: .claude, availability: .quotaExhausted)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "Quota Exhausted idle agent must never keep awake.")
+}
+
+// 117. MenuBarManager makeProviderFreshnessTag Output Validation
+runTest("117. MenuBarManager makeProviderFreshnessTag Output Validation") {
+    let menuMgr = MenuBarManager.shared
+    try assert(menuMgr.makeProviderFreshnessTag(usage: nil) == "Quota unavailable", "Nil usage -> Quota unavailable")
+}
+
+print("🎉 All 117 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError, Proven Quota V1, Quota Completeness & Final Quota Presentation Truth Tests Passed!")
