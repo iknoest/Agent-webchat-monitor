@@ -39,11 +39,11 @@
 - [ ] **Telegram mobile notification**: Remote attention push notifications
 
 ### FUTURE ROADMAP
-- [ ] **Quota Resume Orchestration** (`INVESTIGATION / P1 — NOT IMPLEMENTED`):
-  - **Goal**: When a provider hits quota exhaustion, AgentSignalBar may eventually help work continue after quota resets.
-  - **Level 1**: Detect quota restoration and notify Ava.
-  - **Level 2**: Use provider-native auto-resume when officially available from provider CLI/app.
-  - **Level 3**: For providers with stable CLI/session identity, investigate safe automatic resume of the exact interrupted session after quota restoration.
+- [ ] **Quota Resume Orchestration** (`LEVEL 1 IMPLEMENTED / LEVEL 2-3 INVESTIGATION — P1`):
+  - **Goal**: When a provider hits quota exhaustion, AgentSignalBar helps work continue after quota resets.
+  - **Level 1 (`IMPLEMENTED — QUOTA RESTORATION AWARENESS`)**: Detect quota restoration (>0% left after exhaustion) and surface it to Ava via Fun theme 🥱 / Classic theme `[Quota Restored]` without acquiring keep-awake.
+  - **Level 2 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: Use provider-native auto-resume when officially available from provider CLI/app.
+  - **Level 3 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: For providers with stable CLI/session identity, investigate safe automatic resume of the exact interrupted session after quota restoration.
   - **Safety Requirements for Any Future Level 3**:
     1. Exact session identity verification
     2. Positively verify quota is actually restored before attempting resume

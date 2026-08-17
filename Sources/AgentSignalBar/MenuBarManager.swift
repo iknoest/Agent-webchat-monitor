@@ -316,8 +316,20 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
             let displayStatus = info.effectiveDisplayStatus
             let badge = displayStatus.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
-            let displayStatusLabel = (displayStatus == .quotaExhausted) ? "Quota Exhausted" : statusLabel
-            let title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(displayStatusLabel)]\(durationTag)"
+            let displayStatusLabel: String
+            if displayStatus == .quotaExhausted {
+                displayStatusLabel = "Quota Exhausted"
+            } else if displayStatus == .quotaRestored {
+                displayStatusLabel = "Quota Restored"
+            } else {
+                displayStatusLabel = statusLabel
+            }
+            let title: String
+            if displayStatus == .quotaRestored {
+                title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [Quota Restored] [Idle]"
+            } else {
+                title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(displayStatusLabel)]\(durationTag)"
+            }
 
             let item = NSMenuItem(title: title, action: #selector(agentItemClicked(_:)), keyEquivalent: "")
             item.image = cachedDisplayDotImage(for: displayStatus)

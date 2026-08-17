@@ -172,10 +172,17 @@ public final class AgentUsageStore: @unchecked Sendable {
     public static let shared = AgentUsageStore()
 
     private var usageData: [AgentID: AgentUsageData] = [:]
+    private var previousAuthoritativeExhausted: [AgentID: Bool] = [:]
     private let lock = NSLock()
 
     private init() {
         reloadFromConfig()
+    }
+
+    public func setPreviousAuthoritativeExhausted(for agent: AgentID, exhausted: Bool) {
+        lock.lock()
+        previousAuthoritativeExhausted[agent] = exhausted
+        lock.unlock()
     }
 
     public func reloadFromConfig() {
@@ -240,6 +247,16 @@ public final class AgentUsageStore: @unchecked Sendable {
         }
 
         let hasChanged = existing != toStore
+
+        if toStore.isLiveSource {
+            let currentIsExhausted = toStore.isQuotaExhausted || toStore.availability == .quotaExhausted || (toStore.weeklyRemainingPercent ?? 100.0) <= 0.0 || (toStore.sessionRemainingPercent ?? 100.0) <= 0.0 || (!toStore.modelFamilies.isEmpty && toStore.modelFamilies.allSatisfy { $0.isExhausted })
+            let wasExhausted = previousAuthoritativeExhausted[agent] ?? false
+            if wasExhausted && !currentIsExhausted {
+                // Genuine positive recovery transition: previously exhausted -> now available
+                AgentStore.shared.setQuotaRestored(for: agent, restored: true)
+            }
+            previousAuthoritativeExhausted[agent] = currentIsExhausted
+        }
 
         usageData[agent] = toStore
         lock.unlock()

@@ -1261,7 +1261,39 @@ final class AgentSignalBarTests: XCTestCase {
         let clean = OutputRelayManager.shared.sanitizeOutputText(dirty)
         XCTAssertEqual(clean, "Response text")
     }
+
+    func testClaudeResetAndQuotaRecovery() throws {
+        // 1. Claude AX Reset Derivation
+        let now = Date()
+        let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "17% · resets 3h", observedAt: now, now: now)
+        XCTAssertNotNil(obs)
+        XCTAssertEqual(obs?.relativeDurationSeconds, 10800.0)
+        XCTAssertEqual(obs?.source, "claude_native_ui_ax")
+
+        // 2. Quota Recovery Event
+        AgentStore.shared.clearQuotaRestored(for: .claude)
+        AgentStore.shared.updateStatus(for: .claude, status: .idle)
+        AgentUsageStore.shared.setPreviousAuthoritativeExhausted(for: .claude, exhausted: true)
+
+        let recovered = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 10.0,
+            weeklyLimitPercent: 20.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "claude_plan_usage_history"
+        )
+        AgentUsageStore.shared.updateUsage(for: .claude, data: recovered)
+        XCTAssertTrue(AgentStore.shared.isQuotaRestored(for: .claude))
+
+        var info = AgentStore.shared.getStatus(for: .claude)
+        XCTAssertEqual(info.effectiveDisplayStatus, .quotaRestored)
+        XCTAssertEqual(info.effectiveDisplayStatus.badge(theme: .funEmoji), "🥱")
+        XCTAssertEqual(info.effectiveDisplayStatus.badge(theme: .classic), "⚪")
+
+        // 3. Working clears recovery event
+        AgentStore.shared.updateStatus(for: .claude, status: .working)
+        XCTAssertFalse(AgentStore.shared.isQuotaRestored(for: .claude))
+    }
 }
 #endif
-
-

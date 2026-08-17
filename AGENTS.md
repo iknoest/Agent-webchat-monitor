@@ -744,3 +744,22 @@ Next: Commit and push `fix: consolidate closed-lid defaults relay and quota UX` 
 Blockers: none
 
 [RELEASE] UX Consolidation: Closed-Lid Default, Relay Restore, Claude Reset & Freshness Cleanup — antigravity — 2026-08-17T21:19:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Claude Reset Completion & Quota Restored Wake State
+Done:
+1. Claude First-Party AX Reset Sensor: Implemented `ClaudeLocalQuotaConnector.swift` inspecting native Claude Accessibility UI (`claude_native_ui_ax`) non-intrusively without stealing focus or opening menus. Parses relative reset strings (`resets 3h`, `resets 42m`, `resets in 1h 15m`), calculates derived absolute timestamps (`observedAt + duration`), and renders standardized 24-hour reset windows (`today 23:41 (in 2h 20m)` / `Aug 18 04:00 (in 6h 39m)`). Percentage truth strictly remains from `plan-usage-history.json`.
+2. Quota Restored Wake Event: Implemented positive recovery transition detection (`0% / exhausted -> >0% / available`) across providers in `AgentUsageStore.swift`.
+3. Dual Theme Quota Wake Representation:
+   - Fun Emoji Theme: Renders 🥱 (Yawning face — Quota restored / Ready again) on idle recovered providers (e.g. `CLD:🥱`, `🥱 Claude Code — [Quota Restored] [Idle]`).
+   - Classic Theme: Preserves normal ⚪ idle dot and appends `[Quota Restored] [Idle]` in dropdowns without inventing new lifecycle colors.
+4. Deterministic Clearance & Display Priority: Actionable lifecycle states (Needs You > Working > Done) outrank 🥱. Quota restoration clears deterministically when the provider starts real work again or when explicitly inspected/acknowledged.
+5. Strict Smart Auto Isolation: Verified that quota recovery / 🥱 never acquires keep-awake assertions, never modifies pmset, and never creates attention/sound chimes.
+6. Roadmap Upgrade: Upgraded `Quota Resume Orchestration Level 1` in `PLAN.md` to `IMPLEMENTED — QUOTA RESTORATION AWARENESS`.
+7. Comprehensive Test Verification: Added Tests 124–142 to `Stage1TestRunner` (142/142 passed), updated SPM unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (142/142 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `feat: add Claude reset metadata and quota recovery indicator` to origin/main.
+Blockers: none
+
+[RELEASE] Claude Reset Completion & Quota Restored Wake State — antigravity — 2026-08-17T21:28:00+02:00

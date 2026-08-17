@@ -345,15 +345,18 @@ public final class AutoMonitor: @unchecked Sendable {
 
         let isStale = sampleDate != nil && Date().timeIntervalSince(sampleDate!) > 86400
 
+        _ = ClaudeLocalQuotaConnector.shared.queryClaudeNativeAXReset()
+        let resetMeta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+
         var usage = AgentUsageStore.shared.getUsage(for: .claude) ?? AgentUsageData(agent: .claude)
         usage.sessionLimitPercent = fh
-        usage.sessionResetText = nil // No guessing or fabricating Claude reset time
+        usage.sessionResetText = resetMeta.sessionResetText
         usage.weeklyLimitPercent = sd
-        usage.weeklyResetText = nil
+        usage.weeklyResetText = resetMeta.weeklyResetText
         usage.isPercentUsed = true
         usage.isLiveSource = true
         usage.sourceAuthority = "live_first_party"
-        usage.quotaSource = "claude_plan_usage_history"
+        usage.quotaSource = (resetMeta.sessionResetText != nil || resetMeta.weeklyResetText != nil) ? "claude_plan_usage_history+claude_native_ui_ax" : "claude_plan_usage_history"
         usage.quotaTimestamp = sampleDate
         usage.lastSuccessfulRefresh = Date()
         usage.parserDecision = isStale ? "stale_sample_history" : "parsed_live_sample"

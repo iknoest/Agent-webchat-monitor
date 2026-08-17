@@ -163,6 +163,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
     case blocked = "blocked"
     case working = "working"
     case done = "done"
+    case quotaRestored = "quotaRestored"
     case quotaExhausted = "quotaExhausted"
     case idle = "idle"
     case off = "off"
@@ -172,7 +173,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         case .classic:
             switch self {
             case .off: return "⚫"
-            case .idle: return "⚪"
+            case .idle, .quotaRestored: return "⚪"
             case .working: return "🟡"
             case .done: return "🟢"
             case .blocked: return "🔴"
@@ -182,6 +183,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             switch self {
             case .off: return "😴"
             case .idle: return "🫥"
+            case .quotaRestored: return "🥱"
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
                     return "🥵"
@@ -202,7 +204,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         let color: NSColor
         switch self {
         case .off: color = NSColor.secondaryLabelColor
-        case .idle: color = NSColor.labelColor.withAlphaComponent(0.4)
+        case .idle, .quotaRestored: color = NSColor.labelColor.withAlphaComponent(0.4)
         case .working: color = NSColor.systemYellow
         case .done: color = NSColor.systemGreen
         case .blocked: color = NSColor.systemRed
@@ -223,6 +225,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         switch self {
         case .off: return "Closed"
         case .idle: return "Idle"
+        case .quotaRestored: return "Quota Restored"
         case .working: return "Working..."
         case .done: return "NEW Output Ready!"
         case .blocked: return "ATTENTION NEEDED!"
@@ -230,7 +233,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         }
     }
 
-    public static func from(lifecycle: AgentStatus, availability: ProviderAvailability) -> EffectiveDisplayStatus {
+    public static func from(lifecycle: AgentStatus, availability: ProviderAvailability, isQuotaRestored: Bool = false) -> EffectiveDisplayStatus {
         switch lifecycle {
         case .blocked: return .blocked
         case .working: return .working
@@ -240,14 +243,17 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             if availability == .quotaExhausted {
                 return .quotaExhausted
             }
+            if isQuotaRestored {
+                return .quotaRestored
+            }
             return .idle
         case .off: return .off
         }
     }
 
-    public static func from(lifecycle: String, availability: ProviderAvailability) -> EffectiveDisplayStatus {
+    public static func from(lifecycle: String, availability: ProviderAvailability, isQuotaRestored: Bool = false) -> EffectiveDisplayStatus {
         let status = AgentStatus(rawValue: lifecycle) ?? .idle
-        return from(lifecycle: status, availability: availability)
+        return from(lifecycle: status, availability: availability, isQuotaRestored: isQuotaRestored)
     }
 }
 
@@ -353,6 +359,7 @@ public struct AgentInfo: Codable {
     public var openTabs: [ChatGPTTabInfo]
     public var revision: Int?
     public var turnId: String?
+    public var isQuotaRestored: Bool
 
     public init(
         id: AgentID,
@@ -370,7 +377,8 @@ public struct AgentInfo: Codable {
         focusedStartTime: Date? = nil,
         openTabs: [ChatGPTTabInfo] = [],
         revision: Int? = nil,
-        turnId: String? = nil
+        turnId: String? = nil,
+        isQuotaRestored: Bool = false
     ) {
         self.id = id
         self.status = status
@@ -388,6 +396,7 @@ public struct AgentInfo: Codable {
         self.openTabs = openTabs
         self.revision = revision
         self.turnId = turnId
+        self.isQuotaRestored = isQuotaRestored
     }
 
     public var effectiveDisplayStatus: EffectiveDisplayStatus {
@@ -406,6 +415,9 @@ public struct AgentInfo: Codable {
         let effAvail = AgentUsageStore.shared.getUsage(for: id)?.availability ?? availability
         if effAvail == .quotaExhausted {
             return .quotaExhausted
+        }
+        if isQuotaRestored && status == .idle {
+            return .quotaRestored
         }
         return .idle
     }
@@ -462,6 +474,24 @@ public final class AgentStore: @unchecked Sendable {
             states[agent] = AgentInfo(id: agent, status: .off)
             trackedSessions[agent] = [:]
         }
+    }
+
+    public func setQuotaRestored(for agent: AgentID, restored: Bool) {
+        lock.lock()
+        var current = states[agent] ?? AgentInfo(id: agent)
+        current.isQuotaRestored = restored
+        states[agent] = current
+        lock.unlock()
+    }
+
+    public func isQuotaRestored(for agent: AgentID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return states[agent]?.isQuotaRestored ?? false
+    }
+
+    public func clearQuotaRestored(for agent: AgentID) {
+        setQuotaRestored(for: agent, restored: false)
     }
 
     public static func computeChatGPTAggregateStatus(openTabs: [ChatGPTTabInfo], defaultStatus: AgentStatus) -> AgentStatus {
@@ -591,6 +621,7 @@ public final class AgentStore: @unchecked Sendable {
                 selectedSession = topBlocked
             } else if let topWorking = workingSessions.first {
                 currentParent.status = .working
+                currentParent.isQuotaRestored = false
                 var durationStr = ""
                 let earliestStart = workingSessions.compactMap({ $0.thinkingStartTime }).min() ?? now
                 currentParent.thinkingStartTime = earliestStart
@@ -1328,6 +1359,10 @@ public final class AgentStore: @unchecked Sendable {
 
     public func markSessionChecked(provider: AgentID, sessionId: String, turnId: String? = nil) {
         lock.lock()
+        if var current = states[provider] {
+            current.isQuotaRestored = false
+            states[provider] = current
+        }
         var currentDict = trackedSessions[provider] ?? [:]
         guard var session = currentDict[sessionId] else {
             lock.unlock()
@@ -1346,6 +1381,10 @@ public final class AgentStore: @unchecked Sendable {
 
     public func markChecked(for agent: AgentID) {
         lock.lock()
+        if var current = states[agent] {
+            current.isQuotaRestored = false
+            states[agent] = current
+        }
         var currentDict = trackedSessions[agent] ?? [:]
         let now = Date()
         for (key, var session) in currentDict {

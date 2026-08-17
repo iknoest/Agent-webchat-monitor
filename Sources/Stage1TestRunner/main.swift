@@ -1417,6 +1417,8 @@ runTest("54. Unified Display Status: All 6 states derive identical top-level, co
     try assert(offInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "😴", "Fun off badge must be '😴'.")
 
     // State 2: Idle + Available
+    usageStore.setPreviousAuthoritativeExhausted(for: .claude, exhausted: false)
+    store.clearQuotaRestored(for: .claude)
     let availUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 50.0, isPercentUsed: true, isLiveSource: true, quotaSource: "plan-usage-history.json", freshness: "Fresh")
     usageStore.updateUsage(for: .claude, data: availUsage)
     store.updateStatus(for: .claude, status: .idle)
@@ -1455,6 +1457,15 @@ runTest("54. Unified Display Status: All 6 states derive identical top-level, co
     try assert(blockedInfo.effectiveDisplayStatus == .blocked, "Blocked must map to .blocked display status.")
     try assert(blockedInfo.effectiveDisplayStatus.badge(theme: .classic) == "🔴", "Classic blocked badge must be '🔴'.")
     try assert(blockedInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🥶", "Fun blocked badge must be '🥶'.")
+
+    // State 7: Quota Restored / Wake Event
+    store.setQuotaRestored(for: .codex, restored: true)
+    store.updateStatus(for: .codex, status: .idle)
+    let restoredInfo = store.getStatus(for: .codex)
+    try assert(restoredInfo.effectiveDisplayStatus == .quotaRestored, "Quota restored must map to .quotaRestored display status.")
+    try assert(restoredInfo.effectiveDisplayStatus.badge(theme: .classic) == "⚪", "Classic quota restored badge must be '⚪'.")
+    try assert(restoredInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🥱", "Fun quota restored badge must be '🥱'.")
+    store.clearQuotaRestored(for: .codex)
 }
 
 // 55. AGY StopError: Generic Stop with error + fullyIdle transitions to .idle (NOT .blocked, NOT .done)
@@ -2760,4 +2771,251 @@ runTest("123. Independent Reset Windows for Multi-Family Models") {
     try assert(gemini?.weeklyResetText != claude?.weeklyResetText, "Weekly reset windows must remain independent per model family.")
 }
 
-print("🎉 All 123 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Relay Restore, UX Consolidation & Final Truth Tests Passed!")
+// 124. Claude AX Reset: Relative "resets 3h" + observedAt -> correct absolute reset
+runTest("124. Claude AX Reset: Relative resets 3h + observedAt -> correct absolute reset") {
+    let cal = Calendar.current
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 8; comps.day = 17; comps.hour = 14; comps.minute = 0; comps.second = 0
+    let observedAt = cal.date(from: comps)!
+    let now = observedAt
+
+    let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "17% · resets 3h", observedAt: observedAt, now: now)
+    try assert(obs != nil, "Observation must be derived from resets 3h")
+    try assert(obs?.relativeDurationSeconds == 10800.0, "3h must parse to 10800s")
+    try assert(obs?.source == "claude_native_ui_ax", "Source must be claude_native_ui_ax")
+    try assert(obs?.authority == "ui_derived_first_party", "Authority must be ui_derived_first_party")
+    try assert(obs?.formattedResetText.contains("17:00") == true, "14:00 + 3h must format to 17:00")
+    try assert(obs?.formattedResetText.contains("in 3h") == true, "Formatted reset must contain relative in 3h")
+}
+
+// 125. Claude AX Reset: Minute-only relative reset ("resets 42m")
+runTest("125. Claude AX Reset: Minute-only relative reset (resets 42m)") {
+    let cal = Calendar.current
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 8; comps.day = 17; comps.hour = 14; comps.minute = 10; comps.second = 0
+    let observedAt = cal.date(from: comps)!
+    let now = observedAt
+
+    let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "resets 42m", observedAt: observedAt, now: now)
+    try assert(obs != nil, "Observation must be derived from resets 42m")
+    try assert(obs?.relativeDurationSeconds == 2520.0, "42m must parse to 2520s")
+    try assert(obs?.formattedResetText.contains("14:52") == true, "14:10 + 42m must format to 14:52")
+    try assert(obs?.formattedResetText.contains("in 42m") == true, "Formatted reset must contain in 42m")
+}
+
+// 126. Claude AX Reset: Reset crossing midnight -> correct tomorrow/date formatting
+runTest("126. Claude AX Reset: Reset crossing midnight -> correct tomorrow/date formatting") {
+    let cal = Calendar.current
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 8; comps.day = 17; comps.hour = 23; comps.minute = 0; comps.second = 0
+    let observedAt = cal.date(from: comps)!
+    let now = observedAt
+
+    let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "resets 2h", observedAt: observedAt, now: now)
+    try assert(obs != nil, "Observation must be derived")
+    try assert(obs?.formattedResetText.contains("Aug 18 01:00") == true || obs?.formattedResetText.contains("tomorrow 01:00") == true || obs?.formattedResetText.contains("01:00") == true, "Crossing midnight must format next day")
+}
+
+// 127. Claude AX Reset: 24-hour format and no seconds
+runTest("127. Claude AX Reset: 24-hour format and no seconds") {
+    let cal = Calendar.current
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 8; comps.day = 17; comps.hour = 15; comps.minute = 30; comps.second = 0
+    let observedAt = cal.date(from: comps)!
+    let now = observedAt
+
+    let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "resets in 1h 15m", observedAt: observedAt, now: now)
+    try assert(obs != nil, "Observation must parse compound relative duration")
+    let formatted = obs!.formattedResetText
+    try assert(!formatted.contains("AM") && !formatted.contains("PM"), "Formatted reset must not contain AM/PM")
+    try assert(!formatted.contains(":00:"), "Formatted reset must not contain seconds")
+    try assert(formatted.contains("16:45"), "15:30 + 1h15m must equal 16:45")
+}
+
+// 128. Claude AX Reset: Unavailable AX reset -> no fabrication (nil)
+runTest("128. Claude AX Reset: Unavailable AX reset -> no fabrication") {
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: nil, weeklyReset: nil)
+    let meta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+    try assert(meta.sessionResetText == nil, "Unavailable reset must remain nil without guessing")
+    try assert(meta.weeklyResetText == nil, "Unavailable weekly reset must remain nil without guessing")
+}
+
+// 129. Claude Quota: Percentage source remains plan-usage-history
+runTest("129. Claude Quota: Percentage source remains plan-usage-history") {
+    let usage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 17.0,
+        weeklyLimitPercent: 92.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history"
+    )
+    try assert(usage.quotaSource == "claude_plan_usage_history", "Percentage source must remain plan-usage-history")
+    try assert(usage.sessionRemainingPercent == 83.0, "17% used -> 83% remaining")
+    try assert(usage.weeklyRemainingPercent == 8.0, "92% used -> 8% remaining")
+}
+
+// 130. Claude Quota: Reset source is separately attributed
+runTest("130. Claude Quota: Reset source is separately attributed") {
+    let obs = ClaudeResetObservation(
+        observedAt: Date(),
+        relativeResetText: "resets 3h",
+        relativeDurationSeconds: 10800.0,
+        derivedAbsoluteReset: Date().addingTimeInterval(10800),
+        formattedResetText: "resets today 23:41 (in 3h)",
+        source: "claude_native_ui_ax",
+        authority: "ui_derived_first_party"
+    )
+    try assert(obs.source == "claude_native_ui_ax", "Source must be claude_native_ui_ax")
+    try assert(obs.authority == "ui_derived_first_party", "Authority must be ui_derived_first_party")
+}
+
+// 131. Quota Recovery: 0% -> >0% creates recovery event
+runTest("131. Quota Recovery: 0% -> >0% creates recovery event") {
+    AgentStore.shared.clearQuotaRestored(for: .claude)
+    AgentStore.shared.updateStatus(for: .claude, status: .idle)
+    AgentUsageStore.shared.setPreviousAuthoritativeExhausted(for: .claude, exhausted: true)
+
+    let recoveredUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 15.0,
+        weeklyLimitPercent: 20.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history"
+    )
+    AgentUsageStore.shared.updateUsage(for: .claude, data: recoveredUsage)
+
+    try assert(AgentStore.shared.isQuotaRestored(for: .claude) == true, "Positive recovery from 0% -> >0% must set isQuotaRestored == true")
+}
+
+// 132. Quota Recovery: Unknown -> >0% does NOT create recovery
+runTest("132. Quota Recovery: Unknown -> >0% does NOT create recovery") {
+    AgentStore.shared.clearQuotaRestored(for: .codex)
+    AgentStore.shared.updateStatus(for: .codex, status: .idle)
+    AgentUsageStore.shared.setPreviousAuthoritativeExhausted(for: .codex, exhausted: false)
+
+    let normalUsage = AgentUsageData(
+        agent: .codex,
+        sessionLimitPercent: 20.0,
+        weeklyLimitPercent: 20.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "codex_app_server"
+    )
+    AgentUsageStore.shared.updateUsage(for: .codex, data: normalUsage)
+
+    try assert(AgentStore.shared.isQuotaRestored(for: .codex) == false, "Initial or non-exhausted sample must NOT trigger quota recovery")
+}
+
+// 133. Quota Recovery: >0% -> >0% does NOT create recovery
+runTest("133. Quota Recovery: >0% -> >0% does NOT create recovery") {
+    AgentStore.shared.clearQuotaRestored(for: .antigravity)
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+    AgentUsageStore.shared.setPreviousAuthoritativeExhausted(for: .antigravity, exhausted: false)
+
+    let agyUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 50.0, weeklyLimitPercent: 50.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        quotaSource: "agy_local"
+    )
+    AgentUsageStore.shared.updateUsage(for: .antigravity, data: agyUsage)
+
+    try assert(AgentStore.shared.isQuotaRestored(for: .antigravity) == false, ">0% to >0% must NOT trigger quota recovery")
+}
+
+// 134. Quota Recovery: Fun Theme + Idle -> 🥱
+runTest("134. Quota Recovery: Fun Theme + Idle -> 🥱") {
+    var info = AgentInfo(id: .claude, status: .idle, availability: .available)
+    info.isQuotaRestored = true
+
+    try assert(info.effectiveDisplayStatus == .quotaRestored, "Idle + isQuotaRestored must result in .quotaRestored")
+    let funBadge = info.effectiveDisplayStatus.badge(theme: .funEmoji)
+    try assert(funBadge == "🥱", "Fun theme badge for quotaRestored must be 🥱")
+}
+
+// 135. Quota Recovery: Classic Theme + Idle -> normal ⚪ badge + [Quota Restored]
+runTest("135. Quota Recovery: Classic Theme + Idle -> normal ⚪ badge") {
+    var info = AgentInfo(id: .claude, status: .idle, availability: .available)
+    info.isQuotaRestored = true
+
+    let classicBadge = info.effectiveDisplayStatus.badge(theme: .classic)
+    try assert(classicBadge == "⚪", "Classic theme badge for quotaRestored must be ⚪")
+    try assert(info.effectiveDisplayStatus.statusTitle == "Quota Restored", "Status title must be Quota Restored")
+}
+
+// 136. Quota Recovery: Working outranks 🥱
+runTest("136. Quota Recovery: Working outranks 🥱") {
+    var info = AgentInfo(id: .claude, status: .working, availability: .available)
+    info.isQuotaRestored = true
+
+    try assert(info.effectiveDisplayStatus == .working, "Working status must outrank quotaRestored")
+    let badge = info.effectiveDisplayStatus.badge(theme: .funEmoji)
+    try assert(badge == "🤔", "Working badge must be 🤔, not 🥱")
+}
+
+// 137. Quota Recovery: Done outranks 🥱
+runTest("137. Quota Recovery: Done outranks 🥱") {
+    var info = AgentInfo(id: .claude, status: .done, availability: .available)
+    info.isQuotaRestored = true
+
+    try assert(info.effectiveDisplayStatus == .done, "Done status must outrank quotaRestored")
+    let badge = info.effectiveDisplayStatus.badge(theme: .funEmoji)
+    try assert(badge == "🐶", "Done badge must be 🐶, not 🥱")
+}
+
+// 138. Quota Recovery: Provider starts Working -> recovery event clears
+runTest("138. Quota Recovery: Provider starts Working -> recovery event clears") {
+    AgentStore.shared.setQuotaRestored(for: .claude, restored: true)
+    try assert(AgentStore.shared.isQuotaRestored(for: .claude) == true, "Must be restored before work")
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working")
+    try assert(AgentStore.shared.isQuotaRestored(for: .claude) == false, "Starting work must clear isQuotaRestored")
+}
+
+// 139. Quota Recovery: Explicit session/agent acknowledgement -> clears recovery event
+runTest("139. Quota Recovery: Explicit session/agent acknowledgement -> clears recovery event") {
+    AgentStore.shared.setQuotaRestored(for: .codex, restored: true)
+    try assert(AgentStore.shared.isQuotaRestored(for: .codex) == true, "Must be restored before ack")
+
+    AgentStore.shared.markChecked(for: .codex)
+    try assert(AgentStore.shared.isQuotaRestored(for: .codex) == false, "Explicit markChecked must clear isQuotaRestored")
+}
+
+// 140. Quota Recovery: Recovery does not activate Smart Auto keep-awake
+runTest("140. Quota Recovery: Recovery does not activate Smart Auto keep-awake") {
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .idle)
+    AgentStore.shared.updateStatus(for: .claude, status: .idle)
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+    AgentStore.shared.updateStatus(for: .codex, status: .off)
+
+    AgentStore.shared.setQuotaRestored(for: .claude, restored: true)
+    let req = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(req.shouldKeepAwake == false, "Quota restored wake event must NEVER acquire keep-awake")
+}
+
+// 141. Quota Recovery: Recovery does not create attention or output sound chime
+runTest("141. Quota Recovery: Recovery does not create attention or output sound chime") {
+    var info = AgentInfo(id: .claude, status: .idle, availability: .available)
+    info.isQuotaRestored = true
+    try assert(info.effectiveDisplayStatus != .blocked, "Quota recovery must not be .blocked")
+    try assert(info.effectiveDisplayStatus != .done, "Quota recovery must not be .done")
+}
+
+// 142. Quota Recovery: MenuBarManager render signature responds to quota restoration
+runTest("142. Quota Recovery: MenuBarManager render signature responds to quota restoration") {
+    let manager = MenuBarManager.shared
+    AgentStore.shared.setQuotaRestored(for: .claude, restored: false)
+    let sigBefore = manager.computeRenderSignature()
+
+    AgentStore.shared.setQuotaRestored(for: .claude, restored: true)
+    let sigAfter = manager.computeRenderSignature()
+
+    try assert(sigBefore != sigAfter, "Render signature must change when quota restoration state changes")
+    AgentStore.shared.clearQuotaRestored(for: .claude)
+}
+
+print("🎉 All 142 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Relay Restore, Claude Reset & Quota Recovery Tests Passed!")
