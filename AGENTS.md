@@ -763,3 +763,19 @@ Next: Commit and push `feat: add Claude reset metadata and quota recovery indica
 Blockers: none
 
 [RELEASE] Claude Reset Completion & Quota Restored Wake State — antigravity — 2026-08-17T21:28:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Theme-Aware Legend & Real Claude Reset Completion
+Done:
+1. Status Meaning & Color Legend Theme Alignment: In `MenuBarManager.swift`, created dynamic `getStatusLegendItems(theme:overworkMinutes:)` deriving all legend items and badges directly from `EffectiveDisplayStatus.badge(theme: currentTheme)` (the same resolver used in the menu bar and provider rows). Eliminated hardcoded emoji lists. Fun theme dynamically shows `🥱 Quota Restored / Ready Again`, `🤔 Working / Thinking`, `🥵 Overworking`, `🐶 Completed / Done`, `🥶 Blocked / Attention Needed`, `🫥 Idle`, `😴 Closed / Offline`, `🤯 Unknown`. Classic theme dynamically shows `⚪ [Quota Restored]`, `🟡 Working`, `🟢 Done`, `🔴 Attention Needed`, `⚪ Idle`, `⚫ Closed / Offline`. Added explicit header in the legend submenu showing the active theme.
+2. Real Claude Reset Capture via Native AX: Located Claude's native Usage popover in macOS Accessibility hierarchy (`com.anthropic.claudefordesktop`). On bounded `Refresh Usage Limits` (or POST `/refresh-usage`), presses the Usage popover button, reads both `5-hour limit` (`Resets in 3 hr 26 min`) and `Weekly` (`Resets in 1 hr 16 min`) reset strings, immediately dismisses the popover, and restores previous application focus within 350ms without stealing focus or leaving windows open.
+3. Standardized 24-Hour Reset Format & Attribution: Formatted relative strings into standardized 24-hour timestamps (e.g. `resets Aug 18 01:09 (in 3h 26m)` and `resets today 22:59 (in 1h 16m)`). Quota percentage source strictly remains `claude_plan_usage_history`; reset source is attributed as `claude_native_menu_ax` (`ui_derived_first_party`).
+4. Automatic Invalidation of Expired Resets: In `ClaudeLocalQuotaConnector.swift`, when `now >= derivedAbsoluteReset`, expired reset observations are automatically invalidated and omitted from display so they do not linger as false future truth.
+5. Comprehensive Test Verification: Added Tests 143–157 to `Stage1TestRunner` (157/157 passed), added `testThemeAwareStatusLegendAndClaudeMenuReset` to SPM test suite (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (157/157 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s -X POST http://127.0.0.1:18888/refresh-usage` and `curl -s http://127.0.0.1:18888/status` returning live Claude 5h & weekly resets.
+Next: Commit and push `fix: align badge legend and complete Claude reset capture` to origin/main.
+Blockers: none
+
+[RELEASE] Theme-Aware Legend & Real Claude Reset Completion — antigravity — 2026-08-17T21:44:00+02:00
+

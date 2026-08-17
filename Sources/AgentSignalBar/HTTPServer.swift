@@ -91,6 +91,13 @@ public final class HTTPServer: @unchecked Sendable {
             return
         }
 
+        if path == "/refresh-usage" || path == "/usage/refresh" {
+            AutoMonitor.shared.refreshUsageNow()
+            MenuBarManager.shared.scheduleTitleAndMenuUpdate()
+            sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true,\"refreshed\":true}")
+            return
+        }
+
         if path == "/status" {
             if method == "GET" {
                 if let queryItems = urlComponents?.queryItems,
@@ -123,7 +130,7 @@ public final class HTTPServer: @unchecked Sendable {
                         }
                     }
 
-                    dict[agent.rawValue] = [
+                    var agentDict: [String: Any] = [
                         "status": info.status.rawValue,
                         "availability": (usage?.availability ?? info.availability).rawValue,
                         "effectiveDisplayStatus": info.effectiveDisplayStatus.rawValue,
@@ -140,6 +147,11 @@ public final class HTTPServer: @unchecked Sendable {
                         "isQuotaExhausted": usage?.isQuotaExhausted ?? false,
                         "modelFamilies": modelFamiliesList
                     ]
+                    if let sRem = usage?.sessionRemainingPercent { agentDict["sessionRemainingPercent"] = sRem }
+                    if let wRem = usage?.weeklyRemainingPercent { agentDict["weeklyRemainingPercent"] = wRem }
+                    if let sReset = usage?.sessionResetText { agentDict["sessionResetText"] = sReset }
+                    if let wReset = usage?.weeklyResetText { agentDict["weeklyResetText"] = wReset }
+                    dict[agent.rawValue] = agentDict
                 }
                 dict["sleep"] = SleepManager.shared.getDebugInfo()
 
@@ -427,6 +439,10 @@ public final class HTTPServer: @unchecked Sendable {
         } else if path == "/sound/stop" {
             NotificationManager.shared.stopCurrentSound()
             sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"soundStopped\":true}")
+        } else if path == "/refresh-usage" || path == "/usage/refresh" {
+            AutoMonitor.shared.refreshUsageNow()
+            MenuBarManager.shared.scheduleTitleAndMenuUpdate()
+            sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true,\"refreshed\":true}")
         } else {
             sendResponse(connection: connection, statusCode: 404, body: "Not Found")
         }

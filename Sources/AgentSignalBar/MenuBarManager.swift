@@ -91,6 +91,39 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         onPerformUpdateTitleAndMenu = nil
     }
 
+    public static func getStatusLegendItems(theme: BadgeThemeMode, overworkMinutes: Int = 10) -> [(status: EffectiveDisplayStatus, badge: String, title: String, desc: String)] {
+        var items: [(status: EffectiveDisplayStatus, badge: String, title: String, desc: String)] = []
+
+        let blockedBadge = EffectiveDisplayStatus.blocked.badge(theme: theme)
+        items.append((.blocked, blockedBadge, "\(blockedBadge) Attention Needed / User Input Required", "Agent is blocked and waiting for user input / permission"))
+
+        let workingBadge = EffectiveDisplayStatus.working.badge(theme: theme)
+        items.append((.working, workingBadge, "\(workingBadge) Working / Thinking Active", "Agent is actively running tools, reasoning, or executing tasks"))
+
+        if theme == .funEmoji {
+            let overworkBadge = EffectiveDisplayStatus.working.badge(theme: theme, thinkingDuration: Double((overworkMinutes + 1) * 60), overworkThresholdMinutes: overworkMinutes)
+            items.append((.working, overworkBadge, "\(overworkBadge) Overworking / Extended Thinking (> \(overworkMinutes)m)", "Agent has been thinking or running tools continuously for over \(overworkMinutes) minutes"))
+        }
+
+        let doneBadge = EffectiveDisplayStatus.done.badge(theme: theme)
+        items.append((.done, doneBadge, "\(doneBadge) Finished / Task Complete", "Agent finished its task; unread output is ready"))
+
+        let quotaExhaustedBadge = EffectiveDisplayStatus.quotaExhausted.badge(theme: theme)
+        items.append((.quotaExhausted, quotaExhaustedBadge, "\(quotaExhaustedBadge) Quota Exhausted / Rate Limited", "Provider usage limit reached; turn halted"))
+
+        let quotaRestoredBadge = EffectiveDisplayStatus.quotaRestored.badge(theme: theme)
+        let quotaRestoredLabel = (theme == .funEmoji) ? "\(quotaRestoredBadge) Quota Restored / Ready Again" : "\(quotaRestoredBadge) [Quota Restored] Quota Recovered / Ready Again"
+        items.append((.quotaRestored, quotaRestoredBadge, quotaRestoredLabel, "Provider recovered quota (>0% remaining after exhaustion); standby for prompt"))
+
+        let idleBadge = EffectiveDisplayStatus.idle.badge(theme: theme)
+        items.append((.idle, idleBadge, "\(idleBadge) Idle / Standby", "Agent process is running and standby for input"))
+
+        let offBadge = EffectiveDisplayStatus.off.badge(theme: theme)
+        items.append((.off, offBadge, "\(offBadge) App Closed / Process Terminated", "Agent process or browser tab is not running"))
+
+        return items
+    }
+
     public func scheduleTitleAndMenuUpdate() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -227,19 +260,18 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
-        // Color Status Legend Submenu
+        // Status Legend Submenu (Theme-Aware)
         let legendSubmenu = NSMenu()
-        let legendItems = [
-            ("🔴 Attention Needed / User Input Required", "Agent is blocked and waiting for user input / permission"),
-            ("🟡 Working / Thinking Active", "Agent is actively running tools, reasoning, or executing tasks"),
-            ("🟢 Finished / Task Complete", "Agent finished its task; unread output is ready"),
-            ("⛔ Quota Exhausted / Rate Limited", "Provider usage limit reached; turn halted"),
-            ("⚪ Idle / Ready for Next Prompt", "Agent process is running and standby for input"),
-            ("⚫ App Closed / Process Terminated", "Agent process or browser tab is not running")
-        ]
-        for (itemTitle, itemDesc) in legendItems {
-            let legItem = NSMenuItem(title: itemTitle, action: nil, keyEquivalent: "")
-            legItem.toolTip = itemDesc
+        let themeHeading = NSMenuItem(title: "Current Theme: \(currentTheme == .funEmoji ? "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)" : "Classic Colored Balls (⚪🟡🟢🔴⚫)")", action: nil, keyEquivalent: "")
+        themeHeading.isEnabled = false
+        legendSubmenu.addItem(themeHeading)
+        legendSubmenu.addItem(NSMenuItem.separator())
+
+        let legendItems = MenuBarManager.getStatusLegendItems(theme: currentTheme, overworkMinutes: overworkMins)
+        for item in legendItems {
+            let legItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+            legItem.image = cachedDisplayDotImage(for: item.status)
+            legItem.toolTip = item.desc
             legItem.isEnabled = false
             legendSubmenu.addItem(legItem)
         }

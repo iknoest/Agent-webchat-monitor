@@ -1295,5 +1295,34 @@ final class AgentSignalBarTests: XCTestCase {
         AgentStore.shared.updateStatus(for: .claude, status: .working)
         XCTAssertFalse(AgentStore.shared.isQuotaRestored(for: .claude))
     }
+
+    func testThemeAwareStatusLegendAndClaudeMenuReset() throws {
+        // 1. Theme-aware legend resolution
+        let funLegend = MenuBarManager.getStatusLegendItems(theme: .funEmoji)
+        let funBadges = funLegend.map { $0.badge }
+        XCTAssertTrue(funBadges.contains("🥱"))
+        XCTAssertTrue(funBadges.contains("🤔"))
+        XCTAssertTrue(funBadges.contains("🥶"))
+
+        let classicLegend = MenuBarManager.getStatusLegendItems(theme: .classic)
+        let classicBadges = classicLegend.map { $0.badge }
+        XCTAssertTrue(classicBadges.contains("⚪"))
+        XCTAssertTrue(classicBadges.contains("🟡"))
+        XCTAssertTrue(classicBadges.contains("🔴"))
+
+        // 2. Real Claude live reset string parsing
+        let dur5h = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 3 hr 36 min")
+        XCTAssertEqual(dur5h, 12960.0)
+
+        let durWeekly = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 1 hr 26 min")
+        XCTAssertEqual(durWeekly, 5160.0)
+
+        // 3. Derived reset observation
+        let now = Date()
+        let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "Resets in 3 hr 36 min", observedAt: now, now: now)
+        XCTAssertNotNil(obs)
+        XCTAssertEqual(obs?.source, "claude_native_menu_ax")
+        XCTAssertFalse(obs!.isExpired)
+    }
 }
 #endif

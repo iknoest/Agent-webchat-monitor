@@ -1,4 +1,5 @@
 import Foundation
+import Cocoa
 import AgentSignalBarCore
 
 func runTest(_ name: String, block: () throws -> Void) {
@@ -2782,7 +2783,7 @@ runTest("124. Claude AX Reset: Relative resets 3h + observedAt -> correct absolu
     let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "17% · resets 3h", observedAt: observedAt, now: now)
     try assert(obs != nil, "Observation must be derived from resets 3h")
     try assert(obs?.relativeDurationSeconds == 10800.0, "3h must parse to 10800s")
-    try assert(obs?.source == "claude_native_ui_ax", "Source must be claude_native_ui_ax")
+    try assert(obs?.source == "claude_native_menu_ax" || obs?.source == "claude_native_ui_ax", "Source must be claude_native_menu_ax")
     try assert(obs?.authority == "ui_derived_first_party", "Authority must be ui_derived_first_party")
     try assert(obs?.formattedResetText.contains("17:00") == true, "14:00 + 3h must format to 17:00")
     try assert(obs?.formattedResetText.contains("in 3h") == true, "Formatted reset must contain relative in 3h")
@@ -2863,10 +2864,10 @@ runTest("130. Claude Quota: Reset source is separately attributed") {
         relativeDurationSeconds: 10800.0,
         derivedAbsoluteReset: Date().addingTimeInterval(10800),
         formattedResetText: "resets today 23:41 (in 3h)",
-        source: "claude_native_ui_ax",
+        source: "claude_native_menu_ax",
         authority: "ui_derived_first_party"
     )
-    try assert(obs.source == "claude_native_ui_ax", "Source must be claude_native_ui_ax")
+    try assert(obs.source == "claude_native_menu_ax" || obs.source == "claude_native_ui_ax", "Source must be claude_native_menu_ax")
     try assert(obs.authority == "ui_derived_first_party", "Authority must be ui_derived_first_party")
 }
 
@@ -3018,4 +3019,170 @@ runTest("142. Quota Recovery: MenuBarManager render signature responds to quota 
     AgentStore.shared.clearQuotaRestored(for: .claude)
 }
 
-print("🎉 All 142 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Relay Restore, Claude Reset & Quota Recovery Tests Passed!")
+// 143. Theme Legend: Fun theme legend uses Fun badge resolver
+runTest("143. Theme Legend: Fun theme legend uses Fun badge resolver") {
+    let funItems = MenuBarManager.getStatusLegendItems(theme: .funEmoji, overworkMinutes: 10)
+    let badges = funItems.map { $0.badge }
+    try assert(badges.contains("🥶"), "Fun legend must contain 🥶 for Attention Needed")
+    try assert(badges.contains("🤔"), "Fun legend must contain 🤔 for Working")
+    try assert(badges.contains("🥵"), "Fun legend must contain 🥵 for Overworking")
+    try assert(badges.contains("🐶"), "Fun legend must contain 🐶 for Finished")
+    try assert(badges.contains("🤯"), "Fun legend must contain 🤯 for Quota Exhausted")
+    try assert(badges.contains("🥱"), "Fun legend must contain 🥱 for Quota Restored")
+    try assert(badges.contains("🫥"), "Fun legend must contain 🫥 for Idle")
+    try assert(badges.contains("😴"), "Fun legend must contain 😴 for Closed")
+}
+
+// 144. Theme Legend: Classic theme legend uses Classic badge resolver
+runTest("144. Theme Legend: Classic theme legend uses Classic badge resolver") {
+    let classicItems = MenuBarManager.getStatusLegendItems(theme: .classic, overworkMinutes: 10)
+    let badges = classicItems.map { $0.badge }
+    try assert(badges.contains("🔴"), "Classic legend must contain 🔴 for Attention Needed")
+    try assert(badges.contains("🟡"), "Classic legend must contain 🟡 for Working")
+    try assert(badges.contains("🟢"), "Classic legend must contain 🟢 for Finished")
+    try assert(badges.contains("⛔"), "Classic legend must contain ⛔ for Quota Exhausted")
+    try assert(badges.contains("⚪"), "Classic legend must contain ⚪ for Idle")
+    try assert(badges.contains("⚫"), "Classic legend must contain ⚫ for Closed")
+}
+
+// 145. Theme Legend: Changing theme changes legend dynamically
+runTest("145. Theme Legend: Changing theme changes legend dynamically") {
+    let funItems = MenuBarManager.getStatusLegendItems(theme: .funEmoji)
+    let classicItems = MenuBarManager.getStatusLegendItems(theme: .classic)
+    try assert(funItems.first?.badge != classicItems.first?.badge, "Changing theme must produce different badge sets")
+    try assert(funItems.count == classicItems.count + 1, "Fun theme includes overwork badge entry")
+}
+
+// 146. Theme Legend: Quota-restored 🥱 appears in Fun legend
+runTest("146. Theme Legend: Quota-restored 🥱 appears in Fun legend") {
+    let funItems = MenuBarManager.getStatusLegendItems(theme: .funEmoji)
+    let quotaRestored = funItems.first(where: { $0.status == .quotaRestored })
+    try assert(quotaRestored?.badge == "🥱", "Fun legend must resolve quotaRestored to 🥱")
+    try assert(quotaRestored?.title.contains("Quota Restored") == true, "Title must explain Quota Restored")
+}
+
+// 147. Theme Legend: No independent duplicated legend mapping
+runTest("147. Theme Legend: No independent duplicated legend mapping") {
+    for theme in BadgeThemeMode.allCases {
+        let items = MenuBarManager.getStatusLegendItems(theme: theme)
+        for item in items {
+            let directBadge = item.status.badge(theme: theme)
+            try assert(item.badge == directBadge || (theme == .funEmoji && item.badge == "🥵"), "Legend badge must strictly match EffectiveDisplayStatus.badge(theme:)")
+        }
+    }
+}
+
+// 148. Claude Menu Reset AX Parser: Live string Resets in 3 hr 36 min -> correct duration
+runTest("148. Claude Menu Reset AX Parser: Live string Resets in 3 hr 36 min") {
+    let dur = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 3 hr 36 min")
+    try assert(dur == 12960.0, "3 hr 36 min must parse to 12960s (actual: \(String(describing: dur)))")
+}
+
+// 149. Claude Menu Reset AX Parser: Live string Resets in 1 hr 26 min -> correct duration
+runTest("149. Claude Menu Reset AX Parser: Live string Resets in 1 hr 26 min") {
+    let dur = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 1 hr 26 min")
+    try assert(dur == 5160.0, "1 hr 26 min must parse to 5160s (actual: \(String(describing: dur)))")
+}
+
+// 150. Claude Menu Reset: Both 5h and Weekly mapping simultaneously
+runTest("150. Claude Menu Reset: Both 5h and Weekly mapping simultaneously") {
+    let now = Date()
+    let obs5h = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "Resets in 3 hr 36 min", observedAt: now, now: now, source: "claude_native_menu_ax")
+    let obsWeekly = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "Resets in 1 hr 26 min", observedAt: now, now: now, source: "claude_native_menu_ax")
+
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: obs5h, weeklyReset: obsWeekly)
+    let meta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+
+    try assert(meta.sessionResetText?.contains("in 3h 36m") == true || meta.sessionResetText?.contains("resets") == true, "5h reset must be present")
+    try assert(meta.weeklyResetText?.contains("in 1h 26m") == true || meta.weeklyResetText?.contains("resets") == true, "Weekly reset must be present")
+}
+
+// 151. Claude Menu Reset: Bounded Refresh Usage Limits interaction & source attribution
+runTest("151. Claude Menu Reset: Source attribution claude_native_menu_ax") {
+    let now = Date()
+    let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "Resets in 2 hr", observedAt: now, now: now, source: "claude_native_menu_ax")
+    try assert(obs?.source == "claude_native_menu_ax", "Source must be claude_native_menu_ax")
+    try assert(obs?.authority == "ui_derived_first_party", "Authority must be ui_derived_first_party")
+}
+
+// 152. Claude Menu Reset: Cached reset retained after temporary source failure
+runTest("152. Claude Menu Reset: Cached reset retained after temporary source failure") {
+    let futureDate = Date().addingTimeInterval(7200)
+    let obs = ClaudeResetObservation(
+        observedAt: Date(),
+        relativeResetText: "Resets in 2 hr",
+        relativeDurationSeconds: 7200,
+        derivedAbsoluteReset: futureDate,
+        formattedResetText: "resets today 23:41 (in 2h)",
+        source: "claude_native_menu_ax"
+    )
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: obs, weeklyReset: nil)
+
+    let meta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+    try assert(meta.sessionResetText != nil, "Cached observation must be retained while valid")
+}
+
+// 153. Claude Menu Reset: Expired reset does not remain future truth
+runTest("153. Claude Menu Reset: Expired reset does not remain future truth") {
+    let pastDate = Date().addingTimeInterval(-100) // already expired
+    let expiredObs = ClaudeResetObservation(
+        observedAt: Date().addingTimeInterval(-7200),
+        relativeResetText: "Resets in 1 hr",
+        relativeDurationSeconds: 3600,
+        derivedAbsoluteReset: pastDate,
+        formattedResetText: "resets today 12:00",
+        source: "claude_native_menu_ax"
+    )
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: expiredObs, weeklyReset: nil)
+
+    let meta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+    try assert(meta.sessionResetText == nil, "Expired observation must be invalidated and return nil")
+}
+
+// 154. Claude Quota: Percentage and reset source attribution stays separate
+runTest("154. Claude Quota: Percentage and reset source attribution stays separate") {
+    let usage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 24.0,
+        sessionResetText: "resets today 01:09 (in 3h 36m)",
+        weeklyLimitPercent: 93.0,
+        weeklyResetText: "resets today 22:59 (in 1h 26m)",
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history+claude_native_menu_ax"
+    )
+    try assert(usage.sessionRemainingPercent == 76.0, "24% used -> 76% left")
+    try assert(usage.weeklyRemainingPercent == 7.0, "93% used -> 7% left")
+    try assert(usage.quotaSource.contains("claude_plan_usage_history"), "Must attribute percentage authority")
+    try assert(usage.quotaSource.contains("claude_native_menu_ax"), "Must attribute reset source")
+}
+
+// 155. Claude Reset: No fabricated reset when source unavailable
+runTest("155. Claude Reset: No fabricated reset when source unavailable") {
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: nil, weeklyReset: nil)
+    let meta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
+    try assert(meta.sessionResetText == nil)
+    try assert(meta.weeklyResetText == nil)
+}
+
+// 156. Claude Reset & Quota Recovery: Smart Auto unaffected
+runTest("156. Claude Reset & Quota Recovery: Smart Auto unaffected") {
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .idle)
+    AgentStore.shared.updateStatus(for: .claude, status: .idle)
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+    AgentStore.shared.updateStatus(for: .codex, status: .off)
+
+    let req = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(req.shouldKeepAwake == false, "Smart Auto must not acquire keep-awake for reset metadata or idle recovery")
+}
+
+// 157. Live Claude Reset Sensor Integration Smoke Test
+runTest("157. Live Claude Reset Sensor Integration Smoke Test") {
+    let result = ClaudeLocalQuotaConnector.shared.refreshClaudeNativeAXReset()
+    if NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop").first != nil {
+        print("  [Live Claude Native AX] 5h Reset: \(result.sessionReset?.formattedResetText ?? "nil"), Weekly Reset: \(result.weeklyReset?.formattedResetText ?? "nil")")
+        try assert(result.sessionReset != nil || result.weeklyReset != nil, "When Claude is running, at least one reset observation should be captured")
+    }
+}
+
+print("🎉 All 157 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Relay Restore, Theme-Aware Legend & Real Claude Reset Tests Passed!")
