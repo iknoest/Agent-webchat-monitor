@@ -879,7 +879,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
         XCTAssertEqual(store.getStatus(for: .claude).availability, .available)
 
-        // Quota Exhausted -> CLD:⛔
+        // Quota Exhausted -> CLD:⦸
         let exhaustedUsage = AgentUsageData(
             agent: .claude,
             sessionLimitPercent: 100.0,
@@ -890,15 +890,15 @@ final class AgentSignalBarTests: XCTestCase {
         )
         usageStore.updateUsage(for: .claude, data: exhaustedUsage)
         store.updateStatus(for: .claude, status: .idle)
-        XCTAssertTrue(store.overallSummary().contains("CLD:⛔"))
+        XCTAssertTrue(store.overallSummary().contains("CLD:⦸"))
         XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
         XCTAssertEqual(store.getStatus(for: .claude).availability, .quotaExhausted)
 
-        // Compact when all else idle -> CLD⛔
+        // Compact when all else idle -> CLD⦸
         store.updateStatus(for: .chatgpt, status: .idle)
         store.updateStatus(for: .codex, status: .idle)
         store.updateStatus(for: .antigravity, status: .idle)
-        XCTAssertEqual(store.compactSummary(), "CLD⛔")
+        XCTAssertEqual(store.compactSummary(), "CLD⦸")
 
         // Compact when AGY Working -> AGY🟡
         store.updateStatus(for: .antigravity, status: .working)
@@ -935,7 +935,7 @@ final class AgentSignalBarTests: XCTestCase {
         store.updateStatus(for: .claude, status: .idle)
         let exhaustedInfo = store.getStatus(for: .claude)
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
-        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⦸")
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🤯")
         XCTAssertEqual(exhaustedInfo.status, .idle)
 
@@ -1041,7 +1041,7 @@ final class AgentSignalBarTests: XCTestCase {
         let exhaustedInfo = store.getStatus(for: .antigravity)
         XCTAssertEqual(exhaustedInfo.availability, .quotaExhausted)
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
-        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⦸")
 
         // 4. Codex Honest Unknown
         let cdxUnknown = AgentUsageData(agent: .codex, isLiveSource: false, freshness: "Unavailable")
@@ -1309,6 +1309,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(classicBadges.contains("⚪"))
         XCTAssertTrue(classicBadges.contains("🟡"))
         XCTAssertTrue(classicBadges.contains("🔴"))
+        XCTAssertTrue(classicBadges.contains("⦸"))
 
         // 2. Real Claude live reset string parsing
         let dur5h = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 3 hr 36 min")

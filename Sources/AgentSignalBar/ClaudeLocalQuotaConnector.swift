@@ -6,6 +6,7 @@ public struct ClaudeResetObservation: Codable, Sendable, Equatable {
     public let observedAt: Date
     public let relativeResetText: String
     public let relativeDurationSeconds: TimeInterval
+    public let isApproximate: Bool
     public let derivedAbsoluteReset: Date
     public let formattedResetText: String
     public let source: String
@@ -15,6 +16,7 @@ public struct ClaudeResetObservation: Codable, Sendable, Equatable {
         observedAt: Date,
         relativeResetText: String,
         relativeDurationSeconds: TimeInterval,
+        isApproximate: Bool = false,
         derivedAbsoluteReset: Date,
         formattedResetText: String,
         source: String = "claude_native_menu_ax",
@@ -23,6 +25,7 @@ public struct ClaudeResetObservation: Codable, Sendable, Equatable {
         self.observedAt = observedAt
         self.relativeResetText = relativeResetText
         self.relativeDurationSeconds = relativeDurationSeconds
+        self.isApproximate = isApproximate
         self.derivedAbsoluteReset = derivedAbsoluteReset
         self.formattedResetText = formattedResetText
         self.source = source
@@ -34,23 +37,81 @@ public struct ClaudeResetObservation: Codable, Sendable, Equatable {
     }
 }
 
+public struct ClaudeResetDebugInfo: Codable, Sendable {
+    public let agentSignalBarAXTrusted: Bool
+    public let claudeRunning: Bool
+    public let usageControlFound: Bool
+    public let popoverOpened: Bool
+    public let fiveHourRawReset: String?
+    public let weeklyRawReset: String?
+    public let fiveHourParsedReset: String?
+    public let weeklyParsedReset: String?
+    public let percentageSource: String
+    public let resetSource: String
+    public let lastError: String?
+    public let windowsCount: Int
+    public let scannedStringsCount: Int
+    public let candidateQuotaStrings: [String]
+
+    public init(
+        agentSignalBarAXTrusted: Bool,
+        claudeRunning: Bool,
+        usageControlFound: Bool,
+        popoverOpened: Bool,
+        fiveHourRawReset: String?,
+        weeklyRawReset: String?,
+        fiveHourParsedReset: String?,
+        weeklyParsedReset: String?,
+        percentageSource: String = "claude_plan_usage_history",
+        resetSource: String = "claude_native_menu_ax",
+        lastError: String? = nil,
+        windowsCount: Int = 0,
+        scannedStringsCount: Int = 0,
+        candidateQuotaStrings: [String] = []
+    ) {
+        self.agentSignalBarAXTrusted = agentSignalBarAXTrusted
+        self.claudeRunning = claudeRunning
+        self.usageControlFound = usageControlFound
+        self.popoverOpened = popoverOpened
+        self.fiveHourRawReset = fiveHourRawReset
+        self.weeklyRawReset = weeklyRawReset
+        self.fiveHourParsedReset = fiveHourParsedReset
+        self.weeklyParsedReset = weeklyParsedReset
+        self.percentageSource = percentageSource
+        self.resetSource = resetSource
+        self.lastError = lastError
+        self.windowsCount = windowsCount
+        self.scannedStringsCount = scannedStringsCount
+        self.candidateQuotaStrings = candidateQuotaStrings
+    }
+}
+
 public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
     public static let shared = ClaudeLocalQuotaConnector()
 
     private var cached5hReset: ClaudeResetObservation? = nil
     private var cachedWeeklyReset: ClaudeResetObservation? = nil
     private var lastRefreshAttempt: Date = .distantPast
+    private var lastDebugInfo: ClaudeResetDebugInfo? = nil
     private let lock = NSLock()
 
     private init() {}
 
-    // Parse relative duration from strings like "resets 3h", "resets 42m", "17% · resets 3h", "Resets in 3 hr 36 min", "Resets in 1 hr 26 min"
-    public static func parseRelativeResetDuration(from text: String) -> TimeInterval? {
+    public struct ParsedDuration: Equatable {
+        public let seconds: TimeInterval
+        public let isApproximate: Bool
+    }
+
+    // Parse relative duration details from strings like "resets 3h", "resets 42m", "17% · resets 3h", "Resets in 3 hr 36 min", "Resets in 1 hr 26 min"
+    public static func parseRelativeResetDurationDetails(from text: String) -> ParsedDuration? {
         let lower = text.lowercased()
         guard lower.contains("reset") else { return nil }
 
         var totalSeconds: TimeInterval = 0
         var matchedAny = false
+        var hasMinutes = false
+        var hasHours = false
+        var hasDays = false
 
         // Days
         if let match = lower.range(of: "(\\d+)\\s*(?:d|day|days)", options: .regularExpression) {
@@ -58,6 +119,7 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             if let days = Double(numStr) {
                 totalSeconds += days * 86400
                 matchedAny = true
+                hasDays = true
             }
         }
 
@@ -67,6 +129,7 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             if let hours = Double(numStr) {
                 totalSeconds += hours * 3600
                 matchedAny = true
+                hasHours = true
             }
         }
 
@@ -76,10 +139,85 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             if let mins = Double(numStr) {
                 totalSeconds += mins * 60
                 matchedAny = true
+                hasMinutes = true
             }
         }
 
-        return (matchedAny && totalSeconds > 0) ? totalSeconds : nil
+        guard matchedAny && totalSeconds > 0 else { return nil }
+        let isApproximate = !hasMinutes
+        return ParsedDuration(seconds: totalSeconds, isApproximate: isApproximate)
+    }
+
+    public static func parseRelativeResetDuration(from text: String) -> TimeInterval? {
+        return parseRelativeResetDurationDetails(from: text)?.seconds
+    }
+
+    // Format reset timestamp with rounded/approximate vs exact precision semantics
+    public static func formatClaudeResetDateTime(
+        date: Date,
+        now: Date = Date(),
+        isApproximate: Bool = false,
+        timeZone: TimeZone = .current
+    ) -> String {
+        let calendar = Calendar.current
+        let diff = max(0, date.timeIntervalSince(now))
+
+        if diff <= 0 {
+            return "soon"
+        }
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeZone = timeZone
+        timeFormatter.dateFormat = "HH:mm"
+        let timeStr = timeFormatter.string(from: date)
+
+        let relString: String
+        let clockPrefix: String
+
+        if isApproximate {
+            let hours = max(1, Int(round(diff / 3600.0)))
+            if hours >= 24 {
+                let days = max(1, Int(round(diff / 86400.0)))
+                relString = "in ~\(days)d"
+            } else {
+                relString = "in ~\(hours)h"
+            }
+            clockPrefix = "~\(timeStr)"
+        } else {
+            if diff < 3600 {
+                let mins = max(1, Int(round(diff / 60.0)))
+                relString = "in \(mins)m"
+            } else if diff < 86400 {
+                let hours = Int(diff / 3600.0)
+                let mins = (Int(diff) / 60) % 60
+                if mins > 0 {
+                    relString = "in \(hours)h \(mins)m"
+                } else {
+                    relString = "in \(hours)h"
+                }
+            } else {
+                let days = Int(diff / 86400.0)
+                let hours = Int((diff.truncatingRemainder(dividingBy: 86400.0)) / 3600.0)
+                if hours > 0 {
+                    relString = "in \(days)d \(hours)h"
+                } else {
+                    relString = "in \(days)d"
+                }
+            }
+            clockPrefix = timeStr
+        }
+
+        let dayPrefix: String
+        if calendar.isDate(date, inSameDayAs: now) {
+            dayPrefix = "today"
+        } else {
+            let dateFormatter = DateFormatter()
+            dateFormatter.timeZone = timeZone
+            dateFormatter.dateFormat = "MMM d"
+            dayPrefix = dateFormatter.string(from: date)
+        }
+
+        return "\(dayPrefix) \(clockPrefix) (\(relString))"
     }
 
     // Derive absolute reset date and format according to AgentSignalBar standardized 24-hour style
@@ -89,22 +227,28 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
         now: Date = Date(),
         source: String = "claude_native_menu_ax"
     ) -> ClaudeResetObservation? {
-        guard let duration = parseRelativeResetDuration(from: relativeText) else {
+        guard let parsed = parseRelativeResetDurationDetails(from: relativeText) else {
             return nil
         }
-        let derivedDate = observedAt.addingTimeInterval(duration)
-        let formattedDate = AntigravityLocalQuotaConnector.formatResetDateTime(date: derivedDate, now: now)
+        let derivedDate = observedAt.addingTimeInterval(parsed.seconds)
+        let formattedDate = formatClaudeResetDateTime(date: derivedDate, now: now, isApproximate: parsed.isApproximate)
         let formattedReset = "resets \(formattedDate)"
 
         return ClaudeResetObservation(
             observedAt: observedAt,
             relativeResetText: relativeText,
-            relativeDurationSeconds: duration,
+            relativeDurationSeconds: parsed.seconds,
+            isApproximate: parsed.isApproximate,
             derivedAbsoluteReset: derivedDate,
             formattedResetText: formattedReset,
             source: source,
             authority: "ui_derived_first_party"
         )
+    }
+
+    public static func promptAccessibilityPermissionIfUntrusted() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     // Explicit Bounded Refresh: Inspects Claude Desktop UI for live 5-hour and Weekly reset strings
@@ -113,35 +257,77 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        let isTrusted = AXIsProcessTrusted()
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop")
         let allApps = NSWorkspace.shared.runningApplications
-        guard let app = apps.first ?? allApps.first(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName == "Claude" }) else {
+        let app = apps.first ?? allApps.first(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName == "Claude" })
+
+        guard isTrusted else {
+            lastDebugInfo = ClaudeResetDebugInfo(
+                agentSignalBarAXTrusted: false,
+                claudeRunning: app != nil,
+                usageControlFound: false,
+                popoverOpened: false,
+                fiveHourRawReset: cached5hReset?.relativeResetText,
+                weeklyRawReset: cachedWeeklyReset?.relativeResetText,
+                fiveHourParsedReset: cached5hReset?.formattedResetText,
+                weeklyParsedReset: cachedWeeklyReset?.formattedResetText,
+                lastError: "AgentSignalBar lacks macOS Accessibility permission (TCC). Grant Accessibility in System Settings > Privacy & Security > Accessibility."
+            )
             return (cached5hReset, cachedWeeklyReset)
         }
 
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        guard let claudeApp = app else {
+            lastDebugInfo = ClaudeResetDebugInfo(
+                agentSignalBarAXTrusted: true,
+                claudeRunning: false,
+                usageControlFound: false,
+                popoverOpened: false,
+                fiveHourRawReset: cached5hReset?.relativeResetText,
+                weeklyRawReset: cachedWeeklyReset?.relativeResetText,
+                fiveHourParsedReset: cached5hReset?.formattedResetText,
+                weeklyParsedReset: cachedWeeklyReset?.formattedResetText,
+                lastError: "Claude Desktop app is not running."
+            )
+            return (cached5hReset, cachedWeeklyReset)
+        }
+
+        let axApp = AXUIElementCreateApplication(claudeApp.processIdentifier)
         AXUIElementSetAttributeValue(axApp, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(axApp, "AXManualAccessibility" as CFString, kCFBooleanTrue)
 
         var windows: AnyObject?
         AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
-        let winArray = windows as? [AXUIElement] ?? []
+        var winArray = windows as? [AXUIElement] ?? []
 
-        func findUsageButton(elem: AXUIElement) -> AXUIElement? {
+        if winArray.isEmpty {
+            var children: AnyObject?
+            if AXUIElementCopyAttributeValue(axApp, kAXChildrenAttribute as CFString, &children) == .success,
+               let chArr = children as? [AXUIElement] {
+                winArray = chArr
+            }
+        }
+
+        func findUsageButton(elem: AXUIElement, depth: Int = 0) -> AXUIElement? {
+            if depth > 30 { return nil }
             var desc: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXDescriptionAttribute as CFString, &desc)
             var title: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &title)
             var val: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXValueAttribute as CFString, &val)
-            let s = [desc, title, val].compactMap({ $0 as? String }).joined(separator: " ")
-            if s.contains("Usage:") || s.contains("Plan usage") || (s.contains("Usage") && s.contains("plan")) {
+            var help: AnyObject?
+            AXUIElementCopyAttributeValue(elem, kAXHelpAttribute as CFString, &help)
+
+            let s = [desc, title, val, help].compactMap({ $0 as? String }).joined(separator: " ").lowercased()
+            if s.contains("usage:") || s.contains("plan usage") || (s.contains("usage") && s.contains("plan")) || (s.contains("5-hour") && s.contains("limit")) {
                 return elem
             }
+
             var ch: AnyObject?
             if AXUIElementCopyAttributeValue(elem, kAXChildrenAttribute as CFString, &ch) == .success, let childArray = ch as? [AXUIElement] {
                 for c in childArray {
-                    if let f = findUsageButton(elem: c) { return f }
+                    if let f = findUsageButton(elem: c, depth: depth + 1) { return f }
                 }
             }
             return nil
@@ -157,81 +343,167 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             }
         }
 
-        guard let mainWin = targetWin ?? winArray.first else {
-            return (cached5hReset, cachedWeeklyReset)
-        }
+        let mainWin = targetWin ?? winArray.first
 
         var strings: [String] = []
         func collectStrings(elem: AXUIElement, depth: Int = 0) {
-            if depth > 30 { return }
+            if depth > 35 { return }
             var val: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXValueAttribute as CFString, &val)
             var title: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &title)
             var desc: AnyObject?
             AXUIElementCopyAttributeValue(elem, kAXDescriptionAttribute as CFString, &desc)
-            for s in [val, title, desc].compactMap({ $0 as? String }).filter({ !$0.isEmpty }) {
+            var help: AnyObject?
+            AXUIElementCopyAttributeValue(elem, kAXHelpAttribute as CFString, &help)
+
+            for s in [val, title, desc, help].compactMap({ $0 as? String }).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }).filter({ !$0.isEmpty }) {
                 strings.append(s)
             }
+
             var ch: AnyObject?
             if AXUIElementCopyAttributeValue(elem, kAXChildrenAttribute as CFString, &ch) == .success, let childArray = ch as? [AXUIElement] {
                 for c in childArray { collectStrings(elem: c, depth: depth + 1) }
             }
         }
 
-        collectStrings(elem: mainWin)
+        if let mw = mainWin {
+            collectStrings(elem: mw)
+        }
 
         let prevFrontmost = NSWorkspace.shared.frontmostApplication
+        var popoverOpened = false
 
         if let usageBtn = targetBtn {
             // Bounded interaction: Open usage popover
-            _ = AXUIElementPerformAction(usageBtn, kAXPressAction as CFString)
-            Thread.sleep(forTimeInterval: 0.35)
+            let pressResult = AXUIElementPerformAction(usageBtn, kAXPressAction as CFString)
+            if pressResult == .success {
+                popoverOpened = true
+                Thread.sleep(forTimeInterval: 0.35)
 
-            var afterWins: AnyObject?
-            AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &afterWins)
-            for w in (afterWins as? [AXUIElement]) ?? [mainWin] {
-                collectStrings(elem: w)
-            }
+                var afterWins: AnyObject?
+                AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &afterWins)
+                let afterWinArray = (afterWins as? [AXUIElement]) ?? (mainWin != nil ? [mainWin!] : [])
+                for w in afterWinArray {
+                    collectStrings(elem: w)
+                }
 
-            // Close popover immediately
-            _ = AXUIElementPerformAction(usageBtn, kAXPressAction as CFString)
+                // Close popover immediately
+                _ = AXUIElementPerformAction(usageBtn, kAXPressAction as CFString)
 
-            // Restore prior focused application
-            if let prev = prevFrontmost, prev.processIdentifier != app.processIdentifier {
-                prev.activate(options: [])
+                // Restore prior focused application
+                if let prev = prevFrontmost, prev.processIdentifier != claudeApp.processIdentifier {
+                    prev.activate(options: [])
+                }
             }
         }
 
         let now = Date()
+        var raw5h: String? = nil
+        var rawWeekly: String? = nil
+        var candidateQuotas: [String] = []
+
         for i in 0..<strings.count {
             let s = strings[i]
-            if s.contains("5-hour limit") || s.contains("5-hour") {
-                for j in (i+1)..<min(strings.count, i+5) {
+            let lower = s.lowercased()
+
+            // Safe quota metadata collection (no user prompts/conversations)
+            if lower.contains("usage") || lower.contains("limit") || lower.contains("reset") || lower.contains("5-hour") || lower.contains("weekly") || lower.contains("%") {
+                if candidateQuotas.count < 30 {
+                    candidateQuotas.append(s)
+                }
+            }
+
+            if lower.contains("5-hour limit") || lower.contains("5-hour") || lower.contains("current session") {
+                for j in max(0, i-2)..<min(strings.count, i+6) {
                     if strings[j].lowercased().contains("reset") {
+                        raw5h = strings[j]
                         if let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: strings[j], observedAt: now, now: now, source: "claude_native_menu_ax") {
                             cached5hReset = obs
-                            print("✅ [Claude AX] Captured 5h reset: \(obs.formattedResetText) from '\(strings[j])'")
                         }
                         break
                     }
                 }
             }
-            if s.contains("Weekly") {
-                for j in (i+1)..<min(strings.count, i+5) {
+
+            if lower.contains("weekly limit") || lower.contains("weekly") || lower.contains("all models") {
+                for j in max(0, i-2)..<min(strings.count, i+6) {
                     if strings[j].lowercased().contains("reset") {
+                        rawWeekly = strings[j]
                         if let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: strings[j], observedAt: now, now: now, source: "claude_native_menu_ax") {
                             cachedWeeklyReset = obs
-                            print("✅ [Claude AX] Captured Weekly reset: \(obs.formattedResetText) from '\(strings[j])'")
                         }
                         break
+                    }
+                }
+            }
+        }
+
+        // Fallback: standalone reset string parsing if sections were separated
+        if raw5h == nil || rawWeekly == nil {
+            for s in strings {
+                let lower = s.lowercased()
+                if lower.contains("reset") {
+                    if let parsed = ClaudeLocalQuotaConnector.parseRelativeResetDurationDetails(from: s) {
+                        if parsed.seconds <= 8 * 3600 && raw5h == nil {
+                            raw5h = s
+                            if let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: s, observedAt: now, now: now, source: "claude_native_menu_ax") {
+                                cached5hReset = obs
+                            }
+                        } else if parsed.seconds > 8 * 3600 && rawWeekly == nil {
+                            rawWeekly = s
+                            if let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: s, observedAt: now, now: now, source: "claude_native_menu_ax") {
+                                cachedWeeklyReset = obs
+                            }
+                        }
                     }
                 }
             }
         }
 
         lastRefreshAttempt = now
+        lastDebugInfo = ClaudeResetDebugInfo(
+            agentSignalBarAXTrusted: isTrusted,
+            claudeRunning: true,
+            usageControlFound: targetBtn != nil,
+            popoverOpened: popoverOpened,
+            fiveHourRawReset: raw5h ?? cached5hReset?.relativeResetText,
+            weeklyRawReset: rawWeekly ?? cachedWeeklyReset?.relativeResetText,
+            fiveHourParsedReset: cached5hReset?.formattedResetText,
+            weeklyParsedReset: cachedWeeklyReset?.formattedResetText,
+            lastError: nil,
+            windowsCount: winArray.count,
+            scannedStringsCount: strings.count,
+            candidateQuotaStrings: candidateQuotas
+        )
+
         return (cached5hReset, cachedWeeklyReset)
+    }
+
+    public func getDebugInfo() -> ClaudeResetDebugInfo {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = lastDebugInfo {
+            return existing
+        }
+
+        let isTrusted = AXIsProcessTrusted()
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop")
+        let allApps = NSWorkspace.shared.runningApplications
+        let app = apps.first ?? allApps.first(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName == "Claude" })
+
+        return ClaudeResetDebugInfo(
+            agentSignalBarAXTrusted: isTrusted,
+            claudeRunning: app != nil,
+            usageControlFound: false,
+            popoverOpened: false,
+            fiveHourRawReset: cached5hReset?.relativeResetText,
+            weeklyRawReset: cachedWeeklyReset?.relativeResetText,
+            fiveHourParsedReset: cached5hReset?.formattedResetText,
+            weeklyParsedReset: cachedWeeklyReset?.formattedResetText,
+            lastError: isTrusted ? nil : "AgentSignalBar lacks macOS Accessibility permission (TCC)."
+        )
     }
 
     public func setCachedObservations(sessionReset: ClaudeResetObservation?, weeklyReset: ClaudeResetObservation?) {
@@ -254,7 +526,7 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             if now >= s.derivedAbsoluteReset {
                 cached5hReset = nil
             } else {
-                let relativeFormatted = AntigravityLocalQuotaConnector.formatResetDateTime(date: s.derivedAbsoluteReset, now: now)
+                let relativeFormatted = ClaudeLocalQuotaConnector.formatClaudeResetDateTime(date: s.derivedAbsoluteReset, now: now, isApproximate: s.isApproximate)
                 sText = "resets \(relativeFormatted)"
             }
         }
@@ -262,7 +534,7 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
             if now >= w.derivedAbsoluteReset {
                 cachedWeeklyReset = nil
             } else {
-                let relativeFormatted = AntigravityLocalQuotaConnector.formatResetDateTime(date: w.derivedAbsoluteReset, now: now)
+                let relativeFormatted = ClaudeLocalQuotaConnector.formatClaudeResetDateTime(date: w.derivedAbsoluteReset, now: now, isApproximate: w.isApproximate)
                 wText = "resets \(relativeFormatted)"
             }
         }

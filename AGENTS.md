@@ -779,3 +779,19 @@ Blockers: none
 
 [RELEASE] Theme-Aware Legend & Real Claude Reset Completion — antigravity — 2026-08-17T21:44:00+02:00
 
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Claude Reset Runtime TCC Proof, Quota Glyph ⦸ & Relay Feature Removal
+Done:
+1. Production Runtime Claude AX TCC Proof: Identified from the live running `AgentSignalBar.app` process (`PID 93441`) that `AXIsProcessTrusted()` returns `false` due to macOS TCC Accessibility restrictions on the app bundle, preventing cross-process UI inspection. Added safe diagnostic endpoint `GET /debug/claude-reset` exposing permission and metadata state (`agentSignalBarAXTrusted`, `claudeRunning`, `usageControlFound`, `percentageSource`, `resetSource`, `lastError`) with zero prompt/conversation leaks. Surfaced truthful setup state in the menu dropdown (`· Reset times: Accessibility permission required (Click to Setup)`) and added 1-click system prompt helper.
+2. Approximate vs Minute-Precise Reset Semantics: In `ClaudeLocalQuotaConnector.swift`, updated relative duration parser to distinguish coarse hours-only values (`resets 3h` -> formatted with approximate marker `today ~HH:mm (in ~3h)`) from minute-precise values (`3 hr 26 min` -> formatted `today HH:mm (in 3h 26m)`).
+3. Stable Monochrome Quota Exhausted Glyph `⦸` (`U+29B8`): Replaced emoji `⛔` with monochrome Unicode text symbol `⦸` (`U+29B8 CIRCLED REVERSE SOLIDUS`) in all dropdown quota rows, provider tags (`Claude/GPT ⦸`), and classic badge overlay mode. Updated legend explanation to `⦸ Quota Exhausted / Rate Limited`.
+4. Product Simplification — Relay Feature Removal: Completely removed dead relay actions (`Relay Output -> ChatGPT Web`, `Relay Output -> Claude Code / Antigravity / Codex Desktop`) and auto-relay settings across `MenuBarManager.swift`, `OutputRelayManager.swift`, and `HTTPServer.swift`. Preserved `📋 Copy Output -> Clipboard`, `⚡ Focus / Switch Window Immediately`, `Jump to Active Tab`, and exact ChatGPT tab routing.
+5. Comprehensive Test Verification: Added Tests 158–160 to `Stage1TestRunner` (160/160 passed), updated SPM unit tests in `AgentSignalBarTests` (`swift test` clean exit 0), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (160/160 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/debug/claude-reset` and `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `fix: prove Claude resets and simplify agent actions` to origin/main.
+Blockers: none
+
+[RELEASE] Claude Reset Runtime TCC Proof, Quota Glyph ⦸ & Relay Feature Removal — antigravity — 2026-08-17T22:00:00+02:00
+
+

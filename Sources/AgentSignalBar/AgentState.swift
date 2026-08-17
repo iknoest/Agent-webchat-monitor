@@ -177,7 +177,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             case .working: return "🟡"
             case .done: return "🟢"
             case .blocked: return "🔴"
-            case .quotaExhausted: return "⛔"
+            case .quotaExhausted: return "⦸"
             }
         case .funEmoji:
             switch self {

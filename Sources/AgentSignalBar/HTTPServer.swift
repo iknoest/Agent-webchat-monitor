@@ -243,30 +243,35 @@ public final class HTTPServer: @unchecked Sendable {
                 }
             }
             sendResponse(connection: connection, statusCode: 400, body: "Invalid agent parameter")
-        } else if path == "/relay/pending" {
-            if let pending = OutputRelayManager.shared.popPendingRelayText() {
-                let dict: [String: Any] = ["hasPending": true, "text": pending]
-                if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
-                   let jsonString = String(data: jsonData, encoding: .utf8) {
-                    sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
-                } else {
-                    sendResponse(connection: connection, statusCode: 500, body: "JSON error")
-                }
+        } else if path == "/debug/claude-reset" {
+            if urlComponents?.queryItems?.first(where: { $0.name == "refresh" })?.value != "false" {
+                ClaudeLocalQuotaConnector.shared.refreshClaudeNativeAXReset()
+            }
+            let info = ClaudeLocalQuotaConnector.shared.getDebugInfo()
+            var respDict: [String: Any] = [
+                "agentSignalBarAXTrusted": info.agentSignalBarAXTrusted,
+                "claudeRunning": info.claudeRunning,
+                "usageControlFound": info.usageControlFound,
+                "popoverOpened": info.popoverOpened,
+                "percentageSource": info.percentageSource,
+                "resetSource": info.resetSource,
+                "windowsCount": info.windowsCount,
+                "scannedStringsCount": info.scannedStringsCount,
+                "candidateQuotaStrings": info.candidateQuotaStrings
+            ]
+            if let fhr = info.fiveHourRawReset { respDict["fiveHourRawReset"] = fhr }
+            if let wr = info.weeklyRawReset { respDict["weeklyRawReset"] = wr }
+            if let fhp = info.fiveHourParsedReset { respDict["fiveHourParsedReset"] = fhp }
+            if let wp = info.weeklyParsedReset { respDict["weeklyParsedReset"] = wp }
+            if let err = info.lastError { respDict["lastError"] = err }
+
+            if let jsonData = try? JSONSerialization.data(withJSONObject: respDict, options: .prettyPrinted),
+               let jsonString = String(data: jsonData, encoding: .utf8) {
+                sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: jsonString)
             } else {
-                sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"hasPending\":false}")
+                sendResponse(connection: connection, statusCode: 500, body: "JSON encoding error")
             }
-        } else if path == "/relay" {
-            if method == "POST", let bodyRange = requestString.range(of: "\r\n\r\n") {
-                let body = String(requestString[bodyRange.upperBound...])
-                if let bodyData = body.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
-                   let text = json["text"] as? String {
-                    OutputRelayManager.shared.setPendingRelayText(text)
-                    sendResponse(connection: connection, statusCode: 200, contentType: "application/json", body: "{\"success\":true}")
-                    return
-                }
-            }
-            sendResponse(connection: connection, statusCode: 400, body: "Invalid relay request")
+            return
         } else if path == "/sleep/closed-lid/toggle" {
             let current = SleepManager.shared.isClosedLidModeEnabled
             SleepManager.shared.isClosedLidModeEnabled = !current

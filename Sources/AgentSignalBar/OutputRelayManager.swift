@@ -5,10 +5,7 @@ public final class OutputRelayManager: @unchecked Sendable {
     public static let shared = OutputRelayManager()
 
     private var outputs: [AgentID: String] = [:]
-    private var pendingRelayText: String? = nil
     private let lock = NSLock()
-
-    public var isAutoRelayEnabled: Bool = false
 
     private init() {}
 
@@ -351,48 +348,6 @@ public final class OutputRelayManager: @unchecked Sendable {
         lock.unlock()
     }
 
-    public func setPendingRelayText(_ text: String) {
-        lock.lock()
-        pendingRelayText = sanitizeOutputText(text)
-        lock.unlock()
-    }
-
-    public func popPendingRelayText() -> String? {
-        lock.lock()
-        defer { lock.unlock() }
-        let text = pendingRelayText
-        pendingRelayText = nil
-        return text
-    }
-
-    public func relayToChatGPT(from agent: AgentID) {
-        let text = fetchFreshestOutput(for: agent)
-
-        lock.lock()
-        pendingRelayText = text
-        lock.unlock()
-
-        print("📲 Relaying clean output from \(agent.displayName) to ChatGPT Web (\(text.count) chars)")
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-
-        NSSound(named: "Pop")?.play()
-        let notification = NSUserNotification()
-        notification.title = "📲 Relaying Clean AI Output"
-        notification.subtitle = "Source: \(agent.displayName)"
-        notification.informativeText = String(text.prefix(80)) + "..."
-        NSUserNotificationCenter.default.deliver(notification)
-
-        let currentStatus = AgentStore.shared.getStatus(for: .chatgpt)
-        if let link = currentStatus.webLink, let url = URL(string: link), !link.isEmpty {
-            NSWorkspace.shared.open(url)
-        } else if let defaultUrl = URL(string: "https://chatgpt.com") {
-            NSWorkspace.shared.open(defaultUrl)
-        }
-    }
-
     public func copyToClipboard(from agent: AgentID) -> Bool {
         let text = fetchFreshestOutput(for: agent)
 
@@ -409,23 +364,5 @@ public final class OutputRelayManager: @unchecked Sendable {
 
         print("📋 Copied clean output of \(agent.displayName) to macOS Clipboard (\(text.count) chars)")
         return true
-    }
-
-    public func relayChatGPTToAgent(targetAgent: AgentID) {
-        let text = fetchFreshestOutput(for: .chatgpt)
-
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-
-        NSSound(named: "Pop")?.play()
-        let notification = NSUserNotification()
-        notification.title = "📲 Relayed ChatGPT Output -> \(targetAgent.displayName)"
-        notification.subtitle = "Copied to Clipboard & Focused Window"
-        notification.informativeText = String(text.prefix(80)) + "..."
-        NSUserNotificationCenter.default.deliver(notification)
-
-        print("📲 Relayed ChatGPT Web response to \(targetAgent.displayName) (\(text.count) chars)")
-        WindowFocuser.focusAgent(targetAgent)
     }
 }

@@ -109,7 +109,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         items.append((.done, doneBadge, "\(doneBadge) Finished / Task Complete", "Agent finished its task; unread output is ready"))
 
         let quotaExhaustedBadge = EffectiveDisplayStatus.quotaExhausted.badge(theme: theme)
-        items.append((.quotaExhausted, quotaExhaustedBadge, "\(quotaExhaustedBadge) Quota Exhausted / Rate Limited", "Provider usage limit reached; turn halted"))
+        let quotaExhaustedLabel = (theme == .funEmoji) ? "\(quotaExhaustedBadge) [⦸] Quota Exhausted / Rate Limited" : "⦸ Quota Exhausted / Rate Limited"
+        items.append((.quotaExhausted, quotaExhaustedBadge, quotaExhaustedLabel, "Provider usage limit reached; turn halted"))
 
         let quotaRestoredBadge = EffectiveDisplayStatus.quotaRestored.badge(theme: theme)
         let quotaRestoredLabel = (theme == .funEmoji) ? "\(quotaRestoredBadge) Quota Restored / Ready Again" : "\(quotaRestoredBadge) [Quota Restored] Quota Recovered / Ready Again"
@@ -196,8 +197,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let attentionSound = cfg.attentionSoundName ?? "Basso"
         let sleepMode = "\(SleepManager.shared.mode.rawValue):\(SleepManager.shared.isAssertionActive):\(SleepManager.shared.currentReason ?? "")"
         let closedLid = "\(SleepManager.shared.isClosedLidModeEnabled):\(SleepManager.shared.isDisableSleepActive)"
-        let autoRelay = OutputRelayManager.shared.isAutoRelayEnabled
         let refreshingTag = isRefreshingUsage
+        let axTrusted = AXIsProcessTrusted()
 
         var sessionsStr = ""
         for s in AgentStore.shared.getAllSessions() {
@@ -222,7 +223,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false):\(usage?.lastSuccessfulRefresh?.timeIntervalSince1970 ?? 0);"
         }
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(refreshingTag)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -418,57 +419,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             submenu.addItem(NSMenuItem.separator())
 
-            // ONE-CLICK RELAY ACTIONS
-            if agent != .chatgpt {
-                let gptInfo = allStates[.chatgpt]
-                let tabs = gptInfo?.openTabs ?? []
-
-                if tabs.count > 1 {
-                    let relayMainItem = NSMenuItem(title: "📲 Relay Output -> ChatGPT Web (\(tabs.count) target tabs)", action: nil, keyEquivalent: "")
-                    let relaySubmenu = NSMenu()
-
-                    for (idx, tab) in tabs.enumerated() {
-                        let tabItem = NSMenuItem(title: "Relay to Tab \(idx + 1): \(tab.title)", action: #selector(relayToSpecificTabClicked(_:)), keyEquivalent: "")
-                        tabItem.target = self
-                        tabItem.representedObject = ["agent": agent, "url": tab.url, "tabId": tab.tabId as Any] as [String: Any]
-                        relaySubmenu.addItem(tabItem)
-                    }
-
-                    relayMainItem.submenu = relaySubmenu
-                    submenu.addItem(relayMainItem)
-                } else {
-                    let gptTargetTag = (gptInfo?.sessionTitle?.isEmpty == false) ? " (\(gptInfo!.sessionTitle!))" : ""
-                    let relayTitle = "📲 Relay Output -> ChatGPT Web\(gptTargetTag)"
-
-                    let relayItem = NSMenuItem(title: relayTitle, action: #selector(relayOutputClicked(_:)), keyEquivalent: "")
-                    relayItem.target = self
-                    relayItem.representedObject = agent
-                    submenu.addItem(relayItem)
-                }
-
-                let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
-                copyItem.target = self
-                copyItem.representedObject = agent
-                submenu.addItem(copyItem)
-            } else {
-                // BI-DIRECTIONAL RELAY: ChatGPT Web -> Assigned Agents
-                let relayClaudeItem = NSMenuItem(title: "📲 Relay Output -> Claude Code", action: #selector(relayChatGPTToClaudeClicked), keyEquivalent: "")
-                relayClaudeItem.target = self
-                submenu.addItem(relayClaudeItem)
-
-                let relayAgyItem = NSMenuItem(title: "📲 Relay Output -> Antigravity", action: #selector(relayChatGPTToAgyClicked), keyEquivalent: "")
-                relayAgyItem.target = self
-                submenu.addItem(relayAgyItem)
-
-                let relayCdxItem = NSMenuItem(title: "📲 Relay Output -> Codex Desktop", action: #selector(relayChatGPTToCdxClicked), keyEquivalent: "")
-                relayCdxItem.target = self
-                submenu.addItem(relayCdxItem)
-
-                let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
-                copyItem.target = self
-                copyItem.representedObject = agent
-                submenu.addItem(copyItem)
-            }
+            let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
+            copyItem.target = self
+            copyItem.representedObject = agent
+            submenu.addItem(copyItem)
 
             let directSwitchItem = NSMenuItem(title: "⚡ Focus / Switch Window Immediately", action: #selector(agentItemClicked(_:)), keyEquivalent: "")
             directSwitchItem.target = self
@@ -512,6 +466,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 menu.addItem(row2)
             }
 
+            if claudeUsage.sessionResetText == nil && claudeUsage.weeklyResetText == nil && !AXIsProcessTrusted() {
+                let axRow = NSMenuItem(title: "     · Reset times: Accessibility permission required (Click to Setup)", action: #selector(openAccessibilitySettingsClicked), keyEquivalent: "")
+                axRow.target = self
+                menu.addItem(axRow)
+            }
+
             if let freshnessText = makeProviderFreshnessTag(usage: claudeUsage) {
                 let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
                 freshRow.isEnabled = false
@@ -527,7 +487,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             if !agyUsage.modelFamilies.isEmpty {
                 for family in agyUsage.modelFamilies {
-                    let fExhaustedTag = family.isExhausted ? " ⛔" : ""
+                    let fExhaustedTag = family.isExhausted ? " ⦸" : ""
                     let fHdr = NSMenuItem(title: "     \(family.name)\(fExhaustedTag):", action: nil, keyEquivalent: "")
                     fHdr.isEnabled = false
                     menu.addItem(fHdr)
@@ -731,12 +691,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
-        let isAutoRelay = OutputRelayManager.shared.isAutoRelayEnabled
-        let autoRelayTitle = isAutoRelay ? "Auto-Relay Output to ChatGPT: ON (Click to Disable)" : "Auto-Relay Output to ChatGPT: OFF (Click to Enable)"
-        let autoRelayItem = NSMenuItem(title: autoRelayTitle, action: #selector(toggleAutoRelayClicked), keyEquivalent: "")
-        autoRelayItem.target = self
-        settingsSubmenu.addItem(autoRelayItem)
-
         let openConfigItem = NSMenuItem(title: "Edit Custom Logos & Badges (config.json)...", action: #selector(openConfigClicked), keyEquivalent: "")
         openConfigItem.target = self
         settingsSubmenu.addItem(openConfigItem)
@@ -803,18 +757,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func relayChatGPTToClaudeClicked() {
-        OutputRelayManager.shared.relayChatGPTToAgent(targetAgent: .claude)
-    }
-
-    @objc private func relayChatGPTToAgyClicked() {
-        OutputRelayManager.shared.relayChatGPTToAgent(targetAgent: .antigravity)
-    }
-
-    @objc private func relayChatGPTToCdxClicked() {
-        OutputRelayManager.shared.relayChatGPTToAgent(targetAgent: .codex)
-    }
-
     @objc private func refreshUsageClicked() {
         print("🔄 Manual Usage Limits Refresh requested (stale-while-revalidate)...")
         isRefreshingUsage = true
@@ -870,39 +812,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         updateTitleAndMenu()
     }
 
-    @objc private func relayOutputClicked(_ sender: NSMenuItem) {
-        if let agent = sender.representedObject as? AgentID {
-            print("📲 Manual relay requested for \(agent.displayName)")
-            OutputRelayManager.shared.relayToChatGPT(from: agent)
-        }
-    }
-
-    @objc private func relayToSpecificTabClicked(_ sender: NSMenuItem) {
-        if let dict = sender.representedObject as? [String: Any],
-           let agent = dict["agent"] as? AgentID {
-            let urlStr = dict["url"] as? String ?? ""
-            print("🎯 Specific Tab Relay requested for \(agent.displayName) -> \(urlStr)")
-            OutputRelayManager.shared.relayToChatGPT(from: agent)
-            if let tabId = dict["tabId"] as? Int {
-                HTTPServer.shared.requestTabFocus(tabId: tabId)
-                WindowFocuser.focusAppOnly("com.google.Chrome")
-            } else if !urlStr.isEmpty {
-                WindowFocuser.focusURL(urlStr)
-            }
-        }
-    }
-
     @objc private func copyOutputClicked(_ sender: NSMenuItem) {
         if let agent = sender.representedObject as? AgentID {
             let success = OutputRelayManager.shared.copyToClipboard(from: agent)
             print("📋 Copy to clipboard requested for \(agent.displayName) -> \(success)")
         }
-    }
-
-    @objc private func toggleAutoRelayClicked() {
-        OutputRelayManager.shared.isAutoRelayEnabled.toggle()
-        print("⚡ Auto-Relay toggled: \(OutputRelayManager.shared.isAutoRelayEnabled)")
-        updateTitleAndMenu()
     }
 
     @objc private func sessionItemClicked(_ sender: NSMenuItem) {
@@ -932,6 +846,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         } else if let urlStr = sender.representedObject as? String {
             print("🌐 Opening URL in Browser: \(urlStr)")
             WindowFocuser.focusURL(urlStr)
+        }
+    }
+
+    @objc private func openAccessibilitySettingsClicked() {
+        print("🔓 Opening macOS Accessibility settings...")
+        ClaudeLocalQuotaConnector.promptAccessibilityPermissionIfUntrusted()
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
         }
     }
 
