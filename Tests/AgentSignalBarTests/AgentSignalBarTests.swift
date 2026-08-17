@@ -994,6 +994,71 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(sessionStopped?.sourceEvidence.contains("Generation stopped") == true)
         XCTAssertEqual(store.getStatus(for: .antigravity).status, .idle)
     }
+
+    func testProviderAvailabilityAndMultiModelFamilyQuotas() throws {
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+        let sleepMgr = SleepManager.shared
+        sleepMgr.mode = .smartAuto
+
+        // 1. Antigravity Limited State (Gemini available, Claude/GPT exhausted)
+        let limitedUsage = AgentUsageData(
+            agent: .antigravity,
+            modelFamilies: [
+                ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 76.0, sessionResetText: nil, weeklyLimitPercent: 46.0, isPercentUsed: false),
+                ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, sessionResetText: "resets in 2h", weeklyLimitPercent: 32.0, isPercentUsed: false)
+            ],
+            isLiveSource: true,
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .antigravity, data: limitedUsage)
+        store.updateStatus(for: .antigravity, status: .idle)
+
+        let agyInfo = store.getStatus(for: .antigravity)
+        XCTAssertEqual(agyInfo.availability, .limited)
+        XCTAssertEqual(agyInfo.effectiveDisplayStatus, .idle)
+        XCTAssertEqual(agyInfo.effectiveDisplayStatus.badge(theme: .classic), "⚪")
+
+        // 2. Antigravity Working outranks Limited/Exhausted
+        store.updateStatus(for: .antigravity, status: .working)
+        let workingInfo = store.getStatus(for: .antigravity)
+        XCTAssertEqual(workingInfo.effectiveDisplayStatus, .working)
+        XCTAssertEqual(workingInfo.effectiveDisplayStatus.badge(theme: .classic), "🟡")
+
+        // 3. Antigravity All Exhausted
+        let allExhausted = AgentUsageData(
+            agent: .antigravity,
+            modelFamilies: [
+                ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 0.0, isPercentUsed: false),
+                ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+            ],
+            isLiveSource: true,
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .antigravity, data: allExhausted)
+        store.updateStatus(for: .antigravity, status: .idle)
+
+        let exhaustedInfo = store.getStatus(for: .antigravity)
+        XCTAssertEqual(exhaustedInfo.availability, .quotaExhausted)
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
+
+        // 4. Codex Honest Unknown
+        let cdxUnknown = AgentUsageData(agent: .codex, isLiveSource: false, freshness: "Unavailable")
+        usageStore.updateUsage(for: .codex, data: cdxUnknown)
+        store.updateStatus(for: .codex, status: .idle)
+        let cdxInfo = store.getStatus(for: .codex)
+        XCTAssertEqual(cdxInfo.availability, .unknown)
+        XCTAssertEqual(cdxInfo.effectiveDisplayStatus, .idle)
+
+        // 5. Smart Auto assertion is not held by exhausted or limited quotas
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        store.updateStatus(for: .codex, status: .off)
+        let eval = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertFalse(eval.shouldKeepAwake, "Smart Auto must NOT keep awake when all agents are idle even if quota is exhausted.")
+    }
 }
 #endif
 

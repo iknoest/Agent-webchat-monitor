@@ -1,6 +1,42 @@
 import Foundation
 
-public struct AgentUsageData: Codable {
+public struct ModelFamilyQuota: Codable, Sendable, Equatable {
+    public var name: String
+    public var sessionLimitPercent: Double?
+    public var sessionResetText: String?
+    public var weeklyLimitPercent: Double?
+    public var weeklyResetText: String?
+    public var isPercentUsed: Bool
+
+    public var isExhausted: Bool {
+        if isPercentUsed {
+            if let session = sessionLimitPercent, session >= 100.0 { return true }
+            if let weekly = weeklyLimitPercent, weekly >= 100.0 { return true }
+        } else {
+            if let session = sessionLimitPercent, session <= 0.0 { return true }
+            if let weekly = weeklyLimitPercent, weekly <= 0.0 { return true }
+        }
+        return false
+    }
+
+    public init(
+        name: String,
+        sessionLimitPercent: Double? = nil,
+        sessionResetText: String? = nil,
+        weeklyLimitPercent: Double? = nil,
+        weeklyResetText: String? = nil,
+        isPercentUsed: Bool = false
+    ) {
+        self.name = name
+        self.sessionLimitPercent = sessionLimitPercent
+        self.sessionResetText = sessionResetText
+        self.weeklyLimitPercent = weeklyLimitPercent
+        self.weeklyResetText = weeklyResetText
+        self.isPercentUsed = isPercentUsed
+    }
+}
+
+public struct AgentUsageData: Codable, Sendable, Equatable {
     public var agent: AgentID
     public var sessionLimitPercent: Double?     // e.g. 12.0 (% used or % remaining)
     public var sessionResetText: String?        // e.g. "resets in 3h 02m"
@@ -9,6 +45,7 @@ public struct AgentUsageData: Codable {
     public var resetCardCount: Int?             // e.g. 1 (1 reset card available for Codex)
     public var resetCardExpiryText: String?     // e.g. "Expires 8/12, 7:51 PM GMT+2"
     public var extraMetricText: String?         // e.g. "Claude/GPT: 100% remaining"
+    public var modelFamilies: [ModelFamilyQuota]
     public var isPercentUsed: Bool              // true if % represents "used", false if "remaining/left"
     public var isLiveSource: Bool               // true if parsed from live local source or POST /usage
     public var quotaSource: String              // e.g. "plan-usage-history.json", "manual_config", "none"
@@ -26,6 +63,7 @@ public struct AgentUsageData: Codable {
         resetCardCount: Int? = nil,
         resetCardExpiryText: String? = nil,
         extraMetricText: String? = nil,
+        modelFamilies: [ModelFamilyQuota] = [],
         isPercentUsed: Bool = true,
         isLiveSource: Bool = false,
         quotaSource: String = "none",
@@ -42,6 +80,7 @@ public struct AgentUsageData: Codable {
         self.resetCardCount = resetCardCount
         self.resetCardExpiryText = resetCardExpiryText
         self.extraMetricText = extraMetricText
+        self.modelFamilies = modelFamilies
         self.isPercentUsed = isPercentUsed
         self.isLiveSource = isLiveSource
         self.quotaSource = quotaSource
@@ -62,6 +101,10 @@ public struct AgentUsageData: Codable {
 
     public var isQuotaExhausted: Bool {
         guard isLiveSource, freshness != "Unavailable" else { return false }
+        if !modelFamilies.isEmpty {
+            let exhaustedCount = modelFamilies.filter { $0.isExhausted }.count
+            return exhaustedCount == modelFamilies.count
+        }
         if isPercentUsed {
             if let session = sessionLimitPercent, session >= 100.0 { return true }
             if let weekly = weeklyLimitPercent, weekly >= 100.0 { return true }
@@ -70,6 +113,27 @@ public struct AgentUsageData: Codable {
             if let weekly = weeklyLimitPercent, weekly <= 0.0 { return true }
         }
         return false
+    }
+
+    public var availability: ProviderAvailability {
+        guard isLiveSource, freshness != "Unavailable" else {
+            return .unknown
+        }
+        if !modelFamilies.isEmpty {
+            let total = modelFamilies.count
+            let exhaustedCount = modelFamilies.filter { $0.isExhausted }.count
+            if exhaustedCount == 0 {
+                return .available
+            } else if exhaustedCount == total {
+                return .quotaExhausted
+            } else {
+                return .limited
+            }
+        }
+        if isQuotaExhausted {
+            return .quotaExhausted
+        }
+        return .available
     }
 }
 
@@ -91,6 +155,19 @@ public final class AgentUsageStore: @unchecked Sendable {
 
         for agent in AgentID.allCases {
             let q = cfgQuotas[agent.rawValue]
+            var families: [ModelFamilyQuota] = []
+            if let cfgFamilies = q?.modelFamilies {
+                for cf in cfgFamilies {
+                    families.append(ModelFamilyQuota(
+                        name: cf.name,
+                        sessionLimitPercent: cf.sessionPercent,
+                        sessionResetText: cf.sessionResetText,
+                        weeklyLimitPercent: cf.weeklyPercent,
+                        weeklyResetText: cf.weeklyResetText,
+                        isPercentUsed: cf.isPercentUsed ?? false
+                    ))
+                }
+            }
             usageData[agent] = AgentUsageData(
                 agent: agent,
                 sessionLimitPercent: q?.sessionPercent,
@@ -100,6 +177,7 @@ public final class AgentUsageStore: @unchecked Sendable {
                 resetCardCount: q?.resetCardCount,
                 resetCardExpiryText: q?.resetCardExpiryText,
                 extraMetricText: q?.extraMetricText,
+                modelFamilies: families,
                 isPercentUsed: q?.isPercentUsed ?? true,
                 isLiveSource: false,
                 quotaSource: "config.json",
@@ -121,13 +199,7 @@ public final class AgentUsageStore: @unchecked Sendable {
             return
         }
 
-        let hasChanged = existing == nil ||
-            existing?.sessionLimitPercent != data.sessionLimitPercent ||
-            existing?.sessionResetText != data.sessionResetText ||
-            existing?.weeklyLimitPercent != data.weeklyLimitPercent ||
-            existing?.weeklyResetText != data.weeklyResetText ||
-            existing?.extraMetricText != data.extraMetricText ||
-            existing?.isLiveSource != data.isLiveSource
+        let hasChanged = existing != data
 
         usageData[agent] = data
         lock.unlock()
@@ -136,6 +208,17 @@ public final class AgentUsageStore: @unchecked Sendable {
         if hasChanged {
             var cfg = ConfigManager.shared.config
             var currentQuotas = cfg.quotas ?? [:]
+            var cfgFamilies: [ModelFamilyQuotaConfig] = []
+            for f in data.modelFamilies {
+                cfgFamilies.append(ModelFamilyQuotaConfig(
+                    name: f.name,
+                    sessionPercent: f.sessionLimitPercent,
+                    weeklyPercent: f.weeklyLimitPercent,
+                    sessionResetText: f.sessionResetText,
+                    weeklyResetText: f.weeklyResetText,
+                    isPercentUsed: f.isPercentUsed
+                ))
+            }
             currentQuotas[agent.rawValue] = AgentQuotaConfig(
                 sessionPercent: data.sessionLimitPercent,
                 sessionResetText: data.sessionResetText,
@@ -144,7 +227,8 @@ public final class AgentUsageStore: @unchecked Sendable {
                 extraMetricText: data.extraMetricText,
                 resetCardCount: data.resetCardCount,
                 resetCardExpiryText: data.resetCardExpiryText,
-                isPercentUsed: data.isPercentUsed
+                isPercentUsed: data.isPercentUsed,
+                modelFamilies: cfgFamilies.isEmpty ? nil : cfgFamilies
             )
             cfg.quotas = currentQuotas
             ConfigManager.shared.saveConfig(cfg)

@@ -676,3 +676,18 @@ Next: Phase 1 — Provider Availability & Quota v1.
 Blockers: none
 
 [RELEASE] Antigravity StopError Decoupling & Subagent Identity Filtering — antigravity — 2026-08-17T12:45:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Provider Availability & Quota V1 Implementation
+Done:
+1. Unified 4-Case Availability Model: Implemented `ProviderAvailability` (`.available`, `.limited`, `.quotaExhausted`, `.unknown`) across `AgentUsageData`, `AgentState`, `HTTPServer`, and `MenuBarManager`.
+2. Multi-Model Family Quota Structure: Created `ModelFamilyQuota` supporting per-model family limits (e.g. Gemini 76% remaining vs Claude/GPT 0% remaining ⛔). When some families are available while others are depleted, the provider is truthfully classified as `limited` (not exhausted, not Needs You).
+3. Lifecycle & Sleep Safety: Verified actionable lifecycle (`.working`, `.blocked`, `.done`) strictly outranks quota availability. An idle provider with exhausted quota surfaces `⛔` / `🤯` while an idle limited provider surfaces `⚪` / `🫥` (with `Availability: Limited` in the menu). Verified quota state NEVER holds Smart Auto or closed-lid assertions.
+4. Truthful Quota Source Representation: Preserved accepted Claude `plan-usage-history.json` live parsing. Antigravity and Codex report honest `unknown` with `[Live quota source unavailable]` when no local persisted disk file exists (zero fake reset-time guessing or fallback percentages).
+5. Comprehensive Test Suite: Added Tests 61–70 to `Stage1TestRunner` (70/70 passed), unit test `testProviderAvailabilityAndMultiModelFamilyQuotas` in `AgentSignalBarTests.swift` (`swift test` passed), JS extension tests in `background_test.js` (28/28 passed), and built release app bundle (`./build_app.sh`).
+Verified: `swift run Stage1TestRunner` (70/70 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime tested with `curl -s http://127.0.0.1:18888/status` and live POST `/usage`.
+Next: Commit and push `feat: unify provider availability and quota monitoring` to origin/main.
+Blockers: none
+
+[RELEASE] Provider Availability & Quota V1 Implementation — antigravity — 2026-08-17T13:00:00+02:00

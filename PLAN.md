@@ -23,6 +23,7 @@
 - [x] **Claude Quota Semantics & 100% Exhausted UI**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, Smart Auto keep-awake excluded when exhausted (`[x] Ava accepted`: real-use 100% 5-hour quota exhaustion observed, verified unified `⛔` badge, truthful 100% display, and clean lifecycle isolation)
 - [x] **Closed-Lid V2 Smart Auto Keep-Awake**: Privileged `pmset disablesleep 1`/`0` integration under Smart Auto policy, battery floor safety (<20%), automatic restoration upon work completion (`[x] Ava accepted`: verified real 4-minute closed-lid continuous execution and automatic clean restoration to `SleepDisabled 0`; crash recovery automated verified)
 - [x] **Unified Display Status & Menu Bar Modes**: Shared `EffectiveDisplayStatus` derivation across Detailed (default) and Compact (optional provider-aware), persistent user preference, and stable status item autosave name (`[x] Implemented & Verified`)
+- [x] **Provider Availability & Quota v1**: Unified 4-case availability model (`available`, `limited`, `quotaExhausted`, `unknown`), multi-model family structure (`ModelFamilyQuota`), truthful unavailable reporting for unpersisted disk sources (Antigravity/Codex), Smart Auto keep-awake decoupling, and multi-model family dropdown dashboard (`[x] Implemented & Verified`)
 
 ### TESTING / HUMAN ACCEPTANCE PENDING
 - [ ] **Antigravity Permission**: Native hooks + AX notification center probe (`IMPLEMENTED — HUMAN ACCEPTANCE PENDING` pending next natural event)
@@ -36,4 +37,3 @@
 
 ### OPEN
 - [ ] **Telegram mobile notification**: Remote attention push notifications
-- [ ] **Quota tracking**: Live quota sources for Codex and Antigravity

@@ -169,7 +169,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         for s in AgentStore.shared.getAllSessions() {
             sessionsStr += "\(s.provider.rawValue):\(s.sessionId):\(s.status.rawValue):\(s.title); "
         }
-
         var stateDetails = ""
         for agent in AgentID.allCases {
             let info = AgentStore.shared.getStatus(for: agent)
@@ -180,9 +179,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 openTabsStr.append("\(tab.title):\(tab.url):\(tab.status):\(tab.active ?? false);")
             }
 
+            var famStr = ""
+            if let families = usage?.modelFamilies {
+                for f in families {
+                    famStr.append("\(f.name):\(f.sessionLimitPercent ?? 0):\(f.weeklyLimitPercent ?? 0):\(f.isPercentUsed):\(f.isExhausted);")
+                }
+            }
 
-
-            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
+            stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
         }
         return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
     }
@@ -344,10 +348,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             // Submenu for Detailed Info & Tracked Sessions
             let submenu = NSMenu()
-
-            if isQuotaExhausted {
-                let pct = Int(AgentUsageStore.shared.getUsage(for: agent)?.sessionLimitPercent ?? 100.0)
-                let availItem = NSMenuItem(title: "Availability: Quota Exhausted (\(agent == .claude ? "5-hour usage: \(pct)%" : "100% used"))", action: nil, keyEquivalent: "")
+            let usage = AgentUsageStore.shared.getUsage(for: agent)
+            let effAvail = usage?.availability ?? info.availability
+            if effAvail != .available && effAvail != .unknown {
+                let extraTag = (effAvail == .quotaExhausted && agent == .claude) ? " (5-hour usage: \(Int(usage?.sessionLimitPercent ?? 100))%)" : ""
+                let availItem = NSMenuItem(title: "Availability: \(effAvail.displayName)\(extraTag)", action: nil, keyEquivalent: "")
                 availItem.isEnabled = false
                 submenu.addItem(availItem)
             }
@@ -487,7 +492,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // 3A. Claude Code Usage Rows
         if let claudeUsage = allUsage[.claude] {
-            let hdr = NSMenuItem(title: "  Claude Code", action: nil, keyEquivalent: "")
+            let availText = claudeUsage.availability.displayName
+            let hdr = NSMenuItem(title: "  Claude Code (\(availText))", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
 
@@ -523,18 +529,44 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // 3B. Antigravity Usage Rows
         if let agyUsage = allUsage[.antigravity] {
-            let hdr = NSMenuItem(title: "  Antigravity", action: nil, keyEquivalent: "")
+            let availText = agyUsage.availability.displayName
+            let hdr = NSMenuItem(title: "  Antigravity (\(availText))", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if agyUsage.isLiveSource, let sPct = agyUsage.sessionLimitPercent {
+            if !agyUsage.modelFamilies.isEmpty {
+                for family in agyUsage.modelFamilies {
+                    let fExhaustedTag = family.isExhausted ? " ⛔" : ""
+                    let fHdr = NSMenuItem(title: "     \(family.name)\(fExhaustedTag):", action: nil, keyEquivalent: "")
+                    fHdr.isEnabled = false
+                    menu.addItem(fHdr)
+
+                    if let sPct = family.sessionLimitPercent {
+                        let bar = makeCompactBar(percent: sPct)
+                        let unit = family.isPercentUsed ? "% used" : "% left"
+                        let resetTag = (family.sessionResetText?.isEmpty == false) ? " · \(family.sessionResetText!)" : ""
+                        let row = NSMenuItem(title: "       5-Hour: \(bar) \(Int(sPct))\(unit)\(resetTag)", action: nil, keyEquivalent: "")
+                        row.isEnabled = false
+                        menu.addItem(row)
+                    }
+
+                    if let wPct = family.weeklyLimitPercent {
+                        let bar = makeCompactBar(percent: wPct)
+                        let unit = family.isPercentUsed ? "% used" : "% left"
+                        let resetTag = (family.weeklyResetText?.isEmpty == false) ? " · \(family.weeklyResetText!)" : ""
+                        let row = NSMenuItem(title: "       Weekly: \(bar) \(Int(wPct))\(unit)\(resetTag)", action: nil, keyEquivalent: "")
+                        row.isEnabled = false
+                        menu.addItem(row)
+                    }
+                }
+            } else if agyUsage.isLiveSource, let sPct = agyUsage.sessionLimitPercent {
                 let bar = makeCompactBar(percent: sPct)
                 let resetTag = agyUsage.sessionResetText ?? ""
                 let row = NSMenuItem(title: "     Gemini 5-Hr:   \(bar) \(Int(sPct))% left · \(resetTag)", action: nil, keyEquivalent: "")
                 row.isEnabled = false
                 menu.addItem(row)
             } else {
-                let unavailRow = NSMenuItem(title: "     Quota: [Live disk quota unavailable]", action: nil, keyEquivalent: "")
+                let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false
                 menu.addItem(unavailRow)
             }
@@ -542,7 +574,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // 3C. Codex Desktop Usage Rows
         if let cdxUsage = allUsage[.codex] {
-            let hdr = NSMenuItem(title: "  Codex Desktop", action: nil, keyEquivalent: "")
+            let availText = cdxUsage.availability.displayName
+            let hdr = NSMenuItem(title: "  Codex Desktop (\(availText))", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
 
@@ -553,7 +586,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 row.isEnabled = false
                 menu.addItem(row)
             } else {
-                let unavailRow = NSMenuItem(title: "     Quota: [Live disk quota unavailable]", action: nil, keyEquivalent: "")
+                let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false
                 menu.addItem(unavailRow)
             }

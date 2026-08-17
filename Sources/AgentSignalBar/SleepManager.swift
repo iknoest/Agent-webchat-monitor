@@ -79,7 +79,7 @@ public final class SleepManager: @unchecked Sendable {
 
         // Quota exhaustion is provider availability: providers with exhausted quota CANNOT execute
         // and must NOT independently keep Smart Auto awake or masquerade as a user-action gate.
-        let availableTrusted = trusted.filter { AgentStore.shared.getAvailability(for: $0) == .available }
+        let availableTrusted = trusted.filter { AgentStore.shared.getAvailability(for: $0) != .quotaExhausted }
 
         // 1. Check child sessions of available trusted providers
         let allSessions = AgentStore.shared.getAllSessions().filter { availableTrusted.contains($0.provider) }

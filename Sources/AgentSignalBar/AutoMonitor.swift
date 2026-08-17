@@ -260,20 +260,22 @@ public final class AutoMonitor: @unchecked Sendable {
         let q = ConfigManager.shared.config.quotas?["antigravity"]
 
         var usage = AgentUsageStore.shared.getUsage(for: .antigravity) ?? AgentUsageData(agent: .antigravity)
-        usage.sessionLimitPercent = q?.sessionPercent
-        usage.sessionResetText = q?.sessionResetText
-        usage.weeklyLimitPercent = q?.weeklyPercent
-        usage.weeklyResetText = q?.weeklyResetText
-        usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
-        usage.isPercentUsed = q?.isPercentUsed ?? false
-        usage.isLiveSource = false
-        usage.quotaSource = "none"
-        usage.quotaTimestamp = nil
-        usage.parserDecision = "no_live_disk_file"
-        usage.freshness = "Unavailable"
-        usage.lastUpdated = Date()
-
-        AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
+        if !usage.isLiveSource {
+            usage.sessionLimitPercent = q?.sessionPercent
+            usage.sessionResetText = q?.sessionResetText
+            usage.weeklyLimitPercent = q?.weeklyPercent
+            usage.weeklyResetText = q?.weeklyResetText
+            usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
+            usage.isPercentUsed = q?.isPercentUsed ?? false
+            usage.isLiveSource = false
+            usage.quotaSource = "none"
+            usage.quotaTimestamp = nil
+            usage.parserDecision = "no_live_disk_file"
+            usage.freshness = "Unavailable"
+            usage.lastUpdated = Date()
+            AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
+        }
+        AgentStore.shared.updateAvailability(for: .antigravity, availability: usage.availability)
     }
 
     // Dynamic Claude Usage Calculator directly from plan-usage-history.json (JSONLines format)
@@ -314,9 +316,7 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.lastUpdated = Date()
 
         AgentUsageStore.shared.updateUsage(for: .claude, data: usage)
-
-        let isExhausted = usage.isQuotaExhausted
-        AgentStore.shared.updateAvailability(for: .claude, availability: isExhausted ? .quotaExhausted : .available)
+        AgentStore.shared.updateAvailability(for: .claude, availability: usage.availability)
     }
 
     // Dynamic Codex Usage Calculator from config.json and local files (No fake hardcoded fallback percentages)
@@ -324,20 +324,22 @@ public final class AutoMonitor: @unchecked Sendable {
         let q = ConfigManager.shared.config.quotas?["codex"]
 
         var usage = AgentUsageStore.shared.getUsage(for: .codex) ?? AgentUsageData(agent: .codex)
-        usage.weeklyLimitPercent = q?.weeklyPercent
-        usage.weeklyResetText = q?.weeklyResetText
-        usage.resetCardCount = q?.resetCardCount
-        usage.resetCardExpiryText = q?.resetCardExpiryText
-        usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
-        usage.isPercentUsed = q?.isPercentUsed ?? false
-        usage.isLiveSource = false
-        usage.quotaSource = "none"
-        usage.quotaTimestamp = nil
-        usage.parserDecision = "no_live_disk_file"
-        usage.freshness = "Unavailable"
-        usage.lastUpdated = Date()
-
-        AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
+        if !usage.isLiveSource {
+            usage.weeklyLimitPercent = q?.weeklyPercent
+            usage.weeklyResetText = q?.weeklyResetText
+            usage.resetCardCount = q?.resetCardCount
+            usage.resetCardExpiryText = q?.resetCardExpiryText
+            usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
+            usage.isPercentUsed = q?.isPercentUsed ?? false
+            usage.isLiveSource = false
+            usage.quotaSource = "none"
+            usage.quotaTimestamp = nil
+            usage.parserDecision = "no_live_disk_file"
+            usage.freshness = "Unavailable"
+            usage.lastUpdated = Date()
+            AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
+        }
+        AgentStore.shared.updateAvailability(for: .codex, availability: usage.availability)
     }
 
     private func parseISO8601Date(_ str: String) -> Date? {

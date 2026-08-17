@@ -108,10 +108,26 @@ public final class HTTPServer: @unchecked Sendable {
                     let usage = AgentUsageStore.shared.getUsage(for: agent)
                     let quotaTsStr = usage?.quotaTimestamp != nil ? isoFormatter.string(from: usage!.quotaTimestamp!) : nil
 
+                    var modelFamiliesList: [[String: Any]] = []
+                    if let families = usage?.modelFamilies, !families.isEmpty {
+                        for f in families {
+                            modelFamiliesList.append([
+                                "name": f.name,
+                                "sessionPercent": f.sessionLimitPercent as Any,
+                                "weeklyPercent": f.weeklyLimitPercent as Any,
+                                "sessionResetText": f.sessionResetText as Any,
+                                "weeklyResetText": f.weeklyResetText as Any,
+                                "isPercentUsed": f.isPercentUsed,
+                                "isExhausted": f.isExhausted
+                            ])
+                        }
+                    }
+
                     dict[agent.rawValue] = [
                         "status": info.status.rawValue,
-                        "availability": info.availability.rawValue,
-                        "badge": info.status.badge(),
+                        "availability": (usage?.availability ?? info.availability).rawValue,
+                        "effectiveDisplayStatus": info.effectiveDisplayStatus.rawValue,
+                        "badge": info.effectiveDisplayStatus.badge(theme: AgentStore.shared.currentTheme),
                         "name": info.id.displayName,
                         "detail": info.detail ?? "",
                         "lastUpdated": isoFormatter.string(from: info.lastUpdated),
@@ -120,7 +136,8 @@ public final class HTTPServer: @unchecked Sendable {
                         "quotaTimestamp": quotaTsStr as Any,
                         "parserDecision": usage?.parserDecision ?? "no_live_disk_file",
                         "freshness": usage?.freshness ?? "Unavailable",
-                        "isQuotaExhausted": usage?.isQuotaExhausted ?? false
+                        "isQuotaExhausted": usage?.isQuotaExhausted ?? false,
+                        "modelFamilies": modelFamiliesList
                     ]
                 }
                 dict["sleep"] = SleepManager.shared.getDebugInfo()
@@ -316,7 +333,30 @@ public final class HTTPServer: @unchecked Sendable {
                     if let wReset = json["weeklyReset"] as? String { usage.weeklyResetText = wReset }
                     if let extra = json["extra"] as? String { usage.extraMetricText = extra }
                     if let isUsed = json["isPercentUsed"] as? Bool { usage.isPercentUsed = isUsed }
+
+                    if let familiesRaw = json["modelFamilies"] as? [[String: Any]] {
+                        var parsedFamilies: [ModelFamilyQuota] = []
+                        for f in familiesRaw {
+                            guard let name = f["name"] as? String else { continue }
+                            let fSessionPct = f["sessionPercent"] as? Double
+                            let fWeeklyPct = f["weeklyPercent"] as? Double
+                            let fSessionReset = f["sessionResetText"] as? String
+                            let fWeeklyReset = f["weeklyResetText"] as? String
+                            let fIsUsed = f["isPercentUsed"] as? Bool ?? false
+                            parsedFamilies.append(ModelFamilyQuota(
+                                name: name,
+                                sessionLimitPercent: fSessionPct,
+                                sessionResetText: fSessionReset,
+                                weeklyLimitPercent: fWeeklyPct,
+                                weeklyResetText: fWeeklyReset,
+                                isPercentUsed: fIsUsed
+                            ))
+                        }
+                        usage.modelFamilies = parsedFamilies
+                    }
+
                     usage.isLiveSource = true
+                    usage.freshness = "Fresh"
                     usage.lastUpdated = Date()
 
                     AgentUsageStore.shared.updateUsage(for: agent, data: usage)

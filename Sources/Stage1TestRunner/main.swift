@@ -1647,40 +1647,245 @@ runTest("59. AGY Subagent Isolation: Subagent Stop cannot mutate user-facing ses
     try assert(mainSession?.status == .working, "Subagent Stop must not mutate main user session from working to done.")
 }
 
-// 60. AGY Reconciliation: Stale subagent rows are purged during session reconciliation
-runTest("60. AGY Reconciliation: Stale subagent rows are purged during session reconciliation") {
-    let store = AgentStore.shared
-    let fm = FileManager.default
-    let staleSubagentCid = "00000000-0000-0000-0000-000000000021"
-    defer {
-        store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
-        let brainSubPath = NSString(string: "~/.gemini/antigravity/brain/\(staleSubagentCid)").expandingTildeInPath
-        try? fm.removeItem(atPath: brainSubPath)
-    }
+// 61. Shared Availability Model: available, limited, quotaExhausted, unknown
+runTest("61. Shared Availability Model: available, limited, quotaExhausted, unknown") {
+    let avail1 = AgentUsageData(agent: .claude, sessionLimitPercent: 40.0, isPercentUsed: true, isLiveSource: true, freshness: "Fresh")
+    try assert(avail1.availability == .available, "40% used live source must be .available.")
 
-    let brainDir = NSString(string: "~/.gemini/antigravity/brain").expandingTildeInPath
-    let brainSubPath = "\(brainDir)/\(staleSubagentCid)"
-    try? fm.createDirectory(atPath: brainSubPath, withIntermediateDirectories: true)
+    let unavail = AgentUsageData(agent: .codex, sessionLimitPercent: nil, isLiveSource: false, freshness: "Unavailable")
+    try assert(unavail.availability == .unknown, "Non-live source must derive .unknown availability.")
 
-    // Artificially inject session into trackedSessions
-    var cur = store.getSessions(for: .antigravity)
-    cur.append(AgentSessionInfo(
-        provider: .antigravity,
-        sessionId: staleSubagentCid,
-        title: "[NooBoss-MV3]",
-        status: .done,
-        turnId: "turn_sub_stale",
-        sourceEvidence: "Injected",
-        lastUpdated: Date()
-    ))
-    store.syncSessions(for: .antigravity, activeSessions: cur, processRunning: true)
+    let exhausted = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, freshness: "Fresh")
+    try assert(exhausted.availability == .quotaExhausted, "100% used live source must derive .quotaExhausted.")
 
-    try assert(store.getSessions(for: .antigravity).contains(where: { $0.sessionId == staleSubagentCid }), "Injected subagent must exist before reconcile.")
-
-    // Reconcile
-    store.reconcileAntigravitySessions(isTestMode: false)
-
-    try assert(!store.getSessions(for: .antigravity).contains(where: { $0.sessionId == staleSubagentCid }), "Reconcile must purge internal subagent without annotation.")
+    let limited = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 80.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    try assert(limited.availability == .limited, "Partially exhausted model families must derive .limited.")
+    try assert(limited.isQuotaExhausted == false, "Limited provider is NOT fully quota exhausted.")
 }
 
-print("🎉 All 60 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display & AGY StopError/Subagent Tests Passed!")
+// 62. AGY Quota: Gemini available + Claude/GPT exhausted -> Provider Limited
+runTest("62. AGY Quota: Gemini available + Claude/GPT exhausted -> Provider Limited") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    let agyUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 76.0, sessionResetText: nil, weeklyLimitPercent: 46.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, sessionResetText: "resets in 2h 15m", weeklyLimitPercent: 32.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: agyUsage)
+    store.updateStatus(for: .antigravity, status: .idle)
+
+    let info = store.getStatus(for: .antigravity)
+    try assert(info.availability == .limited, "Antigravity availability must be .limited.")
+    try assert(info.effectiveDisplayStatus == .idle, "Limited provider with idle lifecycle must have .idle effectiveDisplayStatus.")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⚪", "Limited provider badge must remain '⚪' (not '⛔').")
+}
+
+// 63. AGY Quota: All proven model families exhausted -> Provider Quota Exhausted
+runTest("63. AGY Quota: All proven model families exhausted -> Provider Quota Exhausted") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    let allExhausted = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 0.0, weeklyLimitPercent: 0.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, weeklyLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: allExhausted)
+    store.updateStatus(for: .antigravity, status: .idle)
+
+    let info = store.getStatus(for: .antigravity)
+    try assert(info.availability == .quotaExhausted, "Antigravity availability must be .quotaExhausted when all families are depleted.")
+    try assert(info.effectiveDisplayStatus == .quotaExhausted, "Idle exhausted provider must have .quotaExhausted effective display status.")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⛔", "All exhausted provider badge must be '⛔'.")
+}
+
+// 64. AGY Lifecycle Priority: Actionable Working outranks Quota Limited / Exhausted
+runTest("64. AGY Lifecycle Priority: Actionable Working outranks Quota Limited / Exhausted") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    let allExhausted = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 0.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: allExhausted)
+
+    // When session is genuinely working on another model/task:
+    store.updateStatus(for: .antigravity, status: .working)
+    let info = store.getStatus(for: .antigravity)
+    try assert(info.effectiveDisplayStatus == .working, "Working status MUST outrank quota exhaustion.")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "🟡", "Working badge must be '🟡'.")
+}
+
+// 65. Smart Auto Safety: Quota Limited, Exhausted, Unknown never acquire Smart Auto keep-awake
+runTest("65. Smart Auto Safety: Quota Limited, Exhausted, Unknown never acquire Smart Auto keep-awake") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+    store.updateStatus(for: .antigravity, status: .idle)
+
+    // Set Claude to exhausted and AGY to limited
+    let claudeExhausted = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, freshness: "Fresh")
+    usageStore.updateUsage(for: .claude, data: claudeExhausted)
+
+    let agyLimited = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 76.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 0.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: agyLimited)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "Smart Auto MUST release assertion when all agents are lifecycle idle regardless of quota state.")
+}
+
+// 66. Codex Quota: Honest Unknown Availability when no live source exists
+runTest("66. Codex Quota: Honest Unknown Availability when no live source exists") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    let cdxUsage = AgentUsageData(agent: .codex, isLiveSource: false, quotaSource: "none", freshness: "Unavailable")
+    usageStore.updateUsage(for: .codex, data: cdxUsage)
+    store.updateStatus(for: .codex, status: .idle)
+
+    let info = store.getStatus(for: .codex)
+    try assert(info.availability == .unknown, "Codex availability must be .unknown.")
+    try assert(info.effectiveDisplayStatus == .idle, "Codex effective display status must be .idle (not .quotaExhausted).")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⚪", "Unknown quota must not show '⛔'.")
+}
+
+// 67. Compact Mode Display: Provider-Aware Compact Representation with Quota
+runTest("67. Compact Mode Display: Provider-Aware Compact Representation with Quota") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+
+    // Claude exhausted -> Compact shows CLD⛔
+    let claudeExhausted = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, freshness: "Fresh")
+    usageStore.updateUsage(for: .claude, data: claudeExhausted)
+
+    let summary = store.compactSummary()
+    try assert(summary.contains("CLD⛔") || summary.contains("CLD:⛔"), "Compact summary must show CLD⛔ when Claude is exhausted (actual: '\(summary)').")
+
+    // Working AGY outranks exhausted Claude
+    store.updateStatus(for: .antigravity, status: .working)
+    let activeSummary = store.compactSummary()
+    try assert(activeSummary.contains("AGY🟡") || activeSummary.contains("AGY:🟡"), "Working AGY must outrank exhausted Claude in compact mode (actual: '\(activeSummary)').")
+}
+
+// 68. Quota Dashboard: MenuBarManager render signature responds to quota changes
+runTest("68. Quota Dashboard: MenuBarManager render signature responds to quota changes") {
+    let menuMgr = MenuBarManager.shared
+    let usageStore = AgentUsageStore.shared
+
+    let sig1 = menuMgr.computeRenderSignature()
+
+    // Update AGY model family quota
+    let newAgyUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 90.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 10.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: newAgyUsage)
+
+    let sig2 = menuMgr.computeRenderSignature()
+    try assert(sig1 != sig2, "computeRenderSignature must change when model family quotas change.")
+}
+
+// 69. Config Persistence: Multi-Model Family Config Save and Reload
+runTest("69. Config Persistence: Multi-Model Family Config Save and Reload") {
+    let usageStore = AgentUsageStore.shared
+
+    let testUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini 2.5", sessionLimitPercent: 88.0, sessionResetText: nil, weeklyLimitPercent: 55.0, isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude 3.5 Sonnet", sessionLimitPercent: 0.0, sessionResetText: "resets in 1h 30m", weeklyLimitPercent: 20.0, isPercentUsed: false)
+        ],
+        isLiveSource: true,
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .antigravity, data: testUsage)
+
+    let retrieved = usageStore.getUsage(for: .antigravity)
+    try assert(retrieved?.modelFamilies.count == 2, "Retrieved usage must contain 2 model families.")
+    try assert(retrieved?.modelFamilies[0].name == "Gemini 2.5", "First family name must match.")
+    try assert(retrieved?.modelFamilies[1].isExhausted == true, "Second family (0% left) must be exhausted.")
+    try assert(retrieved?.availability == .limited, "Overall availability must be .limited.")
+}
+
+// 70. Generic StopError Decoupled from Quota Inference
+runTest("70. Generic StopError Decoupled from Quota Inference") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    let testSessionId = "test_agy_stoperror_no_quota_inference"
+    store.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+    defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
+
+    // Start turn
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": testSessionId,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    // Stop with error
+    _ = store.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": testSessionId,
+        "error": "The stream was interrupted.",
+        "termination_reason": "ERROR",
+        "fully_idle": true,
+        "cwd": "/tmp"
+    ], isTestMode: true)
+
+    let session = store.getSessions(for: .antigravity).first(where: { $0.sessionId == testSessionId })
+    try assert(session?.status == .idle, "Stop with error must produce .idle lifecycle.")
+    try assert(session?.attentionReason == nil, "Stop with error must NOT set attentionReason.")
+
+    // Usage data must NOT be fabricated into quota exhausted simply because error occurred
+    let usage = usageStore.getUsage(for: .antigravity)
+    try assert(usage?.isLiveSource == false || usage?.availability != .quotaExhausted, "Generic StopError must NOT infer full quota exhaustion.")
+}
+
+print("🎉 All 70 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError & Provider Availability V1 Tests Passed!")

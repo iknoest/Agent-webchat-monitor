@@ -58,12 +58,16 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
 
 public enum ProviderAvailability: String, Codable, Sendable {
     case available = "available"
+    case limited = "limited"
     case quotaExhausted = "quotaExhausted"
+    case unknown = "unknown"
 
     public var displayName: String {
         switch self {
         case .available: return "Available"
+        case .limited: return "Limited"
         case .quotaExhausted: return "Quota Exhausted"
+        case .unknown: return "Unknown"
         }
     }
 }
@@ -375,8 +379,8 @@ public struct AgentInfo: Codable {
         if status == .done {
             return .done
         }
-        let isExhausted = (availability == .quotaExhausted) || (AgentUsageStore.shared.getUsage(for: id)?.isQuotaExhausted == true)
-        if isExhausted {
+        let effAvail = AgentUsageStore.shared.getUsage(for: id)?.availability ?? availability
+        if effAvail == .quotaExhausted {
             return .quotaExhausted
         }
         return .idle
@@ -1446,10 +1450,10 @@ public final class AgentStore: @unchecked Sendable {
     public func getAvailability(for agent: AgentID) -> ProviderAvailability {
         lock.lock()
         defer { lock.unlock() }
-        if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
-            return .quotaExhausted
+        if let usage = AgentUsageStore.shared.getUsage(for: agent) {
+            return usage.availability
         }
-        return states[agent]?.availability ?? .available
+        return states[agent]?.availability ?? .unknown
     }
 
     public func updateAvailability(for agent: AgentID, availability: ProviderAvailability) {
@@ -1471,10 +1475,8 @@ public final class AgentStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         var info = states[agent] ?? AgentInfo(id: agent, status: .off)
-        if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
-            info.availability = .quotaExhausted
-        } else {
-            info.availability = .available
+        if let usage = AgentUsageStore.shared.getUsage(for: agent) {
+            info.availability = usage.availability
         }
         return info
     }
@@ -1485,10 +1487,8 @@ public final class AgentStore: @unchecked Sendable {
         var copy = states
         for agent in AgentID.allCases {
             var info = copy[agent] ?? AgentInfo(id: agent, status: .off)
-            if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
-                info.availability = .quotaExhausted
-            } else {
-                info.availability = .available
+            if let usage = AgentUsageStore.shared.getUsage(for: agent) {
+                info.availability = usage.availability
             }
             copy[agent] = info
         }

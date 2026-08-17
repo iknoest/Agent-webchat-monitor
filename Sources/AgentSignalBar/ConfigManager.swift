@@ -50,6 +50,31 @@ public struct AgentCustomConfig: Codable {
     public var customIconPath: String?
 }
 
+public struct ModelFamilyQuotaConfig: Codable, Sendable {
+    public var name: String
+    public var sessionPercent: Double?
+    public var weeklyPercent: Double?
+    public var sessionResetText: String?
+    public var weeklyResetText: String?
+    public var isPercentUsed: Bool?
+
+    public init(
+        name: String,
+        sessionPercent: Double? = nil,
+        weeklyPercent: Double? = nil,
+        sessionResetText: String? = nil,
+        weeklyResetText: String? = nil,
+        isPercentUsed: Bool? = nil
+    ) {
+        self.name = name
+        self.sessionPercent = sessionPercent
+        self.weeklyPercent = weeklyPercent
+        self.sessionResetText = sessionResetText
+        self.weeklyResetText = weeklyResetText
+        self.isPercentUsed = isPercentUsed
+    }
+}
+
 public struct AgentQuotaConfig: Codable {
     public var sessionPercent: Double?
     public var sessionResetText: String?
@@ -59,6 +84,29 @@ public struct AgentQuotaConfig: Codable {
     public var resetCardCount: Int?
     public var resetCardExpiryText: String?
     public var isPercentUsed: Bool?
+    public var modelFamilies: [ModelFamilyQuotaConfig]?
+
+    public init(
+        sessionPercent: Double? = nil,
+        sessionResetText: String? = nil,
+        weeklyPercent: Double? = nil,
+        weeklyResetText: String? = nil,
+        extraMetricText: String? = nil,
+        resetCardCount: Int? = nil,
+        resetCardExpiryText: String? = nil,
+        isPercentUsed: Bool? = nil,
+        modelFamilies: [ModelFamilyQuotaConfig]? = nil
+    ) {
+        self.sessionPercent = sessionPercent
+        self.sessionResetText = sessionResetText
+        self.weeklyPercent = weeklyPercent
+        self.weeklyResetText = weeklyResetText
+        self.extraMetricText = extraMetricText
+        self.resetCardCount = resetCardCount
+        self.resetCardExpiryText = resetCardExpiryText
+        self.isPercentUsed = isPercentUsed
+        self.modelFamilies = modelFamilies
+    }
 }
 
 public struct AppConfig: Codable {
