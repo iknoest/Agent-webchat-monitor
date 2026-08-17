@@ -135,7 +135,7 @@ public struct AppConfig: Codable {
             attentionSoundName: "Basso",
             antiSleepMode: "smartAuto",
             menuBarDisplayMode: "detailed",
-            isClosedLidEnabled: false,
+            isClosedLidEnabled: nil,
             minBatteryPercentForClosedLid: 20,
             customMainIconPath: nil,
             agents: [

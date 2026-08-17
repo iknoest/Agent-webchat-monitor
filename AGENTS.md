@@ -728,8 +728,19 @@ Done:
 3. Independent Per-Provider Freshness: Rendered truthful secondary freshness rows (`· updated just now`, `· updated 24s ago`, `· updated 2m ago`) per provider section using each source's `lastSuccessfulRefresh`.
 4. Exact Live vs Last-Known Semantics: Closed apps with live CLI sources (e.g. closed Codex Desktop with active `codex app-server`) display `updated just now`, NOT `last known`. "Last known" is used strictly when a query fails and a previously successful sample is retained (`· last known · updated 3h ago`).
 5. Comprehensive Test Verification: Added Tests 106–117 to `Stage1TestRunner` (117/117 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
-Verified: `swift run Stage1TestRunner` (117/117 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
-Next: Commit and push `fix: finalize per-provider quota freshness semantics` to origin/main.
+[RELEASE] Final Quota Presentation Truth Closeout — antigravity — 2026-08-17T21:10:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: UX Consolidation: Closed-Lid Default, Relay Restore, Claude Reset & Freshness Cleanup
+Done:
+1. Closed-Lid Smart Auto Default: Implemented conditional default where `hasClosedLidPrivilege == true` and no explicit persisted preference defaults `isClosedLidEnabled` to `true`. Explicit user overrides (`false` or `true`) persist and beat default derivation.
+2. Restored One-Click Relay Actions: Restored relay actions across all 4 agents (`Relay Output -> ChatGPT Web` with multi-tab selector, `Relay Output -> Claude Code / Antigravity / Codex Desktop`, `Copy Output -> Clipboard`, and immediate window focus) within provider submenus, eliminating self-relays while preserving session details.
+3. Claude Reset Source Audit: Verified first-party `plan-usage-history.json` and local Claude CLI state; confirmed absence of a secondary structured reset timestamp. Left reset blank/nil without UI scraping or artificial fabrication.
+4. Simplified Quota Freshness Display: Cleaned fresh live quota displays to hide routine `updated ...` text while preserving `last known · Xm ago` exclusively for stale cached data after query failure, and `Quota unavailable` for unrecorded sources.
+5. Comprehensive Test Verification: Added Tests 118–123 to `Stage1TestRunner` (123/123 passed), updated SPM unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (123/123 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `fix: consolidate closed-lid defaults relay and quota UX` to origin/main.
 Blockers: none
 
-[RELEASE] Final Quota Presentation Truth Closeout — antigravity — 2026-08-17T21:10:00+02:00
+[RELEASE] UX Consolidation: Closed-Lid Default, Relay Restore, Claude Reset & Freshness Cleanup — antigravity — 2026-08-17T21:19:00+02:00

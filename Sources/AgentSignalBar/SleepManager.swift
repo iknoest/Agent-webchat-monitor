@@ -45,7 +45,13 @@ public final class SleepManager: @unchecked Sendable {
     private var timerExpiryDate: Date?
 
     public var isClosedLidModeEnabled: Bool {
-        get { ConfigManager.shared.config.isClosedLidEnabled ?? false }
+        get {
+            if let explicit = ConfigManager.shared.config.isClosedLidEnabled {
+                return explicit
+            }
+            let priv = SleepManager.checkPrivilegeStatus()
+            return priv.hasPrivilege
+        }
         set {
             ConfigManager.shared.setClosedLidEnabled(newValue)
             updateSleepAssertionState()

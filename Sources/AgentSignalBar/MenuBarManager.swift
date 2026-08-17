@@ -164,7 +164,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let sleepMode = "\(SleepManager.shared.mode.rawValue):\(SleepManager.shared.isAssertionActive):\(SleepManager.shared.currentReason ?? "")"
         let closedLid = "\(SleepManager.shared.isClosedLidModeEnabled):\(SleepManager.shared.isDisableSleepActive)"
         let autoRelay = OutputRelayManager.shared.isAutoRelayEnabled
-        let usageRefreshTs = lastUsageRefreshTime.timeIntervalSince1970
         let refreshingTag = isRefreshingUsage
 
         var sessionsStr = ""
@@ -204,17 +203,16 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         return "[\(filled)\(empty)]"
     }
 
-    public func makeProviderFreshnessTag(usage: AgentUsageData?) -> String {
+    public func makeProviderFreshnessTag(usage: AgentUsageData?) -> String? {
         guard let usage = usage, (usage.weeklyLimitPercent != nil || usage.sessionLimitPercent != nil || !usage.modelFamilies.isEmpty) else {
             return "Quota unavailable"
         }
+        if usage.isLiveSource {
+            return nil
+        }
         let ts = usage.lastSuccessfulRefresh ?? usage.lastUpdated
         let timeStr = ts.relativeString()
-        if usage.isLiveSource {
-            return "updated \(timeStr)"
-        } else {
-            return "last known · updated \(timeStr)"
-        }
+        return "last known · \(timeStr)"
     }
 
     private func rebuildMenu() {
@@ -374,6 +372,65 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             timeItem.isEnabled = false
             submenu.addItem(timeItem)
 
+            submenu.addItem(NSMenuItem.separator())
+
+            // ONE-CLICK RELAY ACTIONS
+            if agent != .chatgpt {
+                let gptInfo = allStates[.chatgpt]
+                let tabs = gptInfo?.openTabs ?? []
+
+                if tabs.count > 1 {
+                    let relayMainItem = NSMenuItem(title: "📲 Relay Output -> ChatGPT Web (\(tabs.count) target tabs)", action: nil, keyEquivalent: "")
+                    let relaySubmenu = NSMenu()
+
+                    for (idx, tab) in tabs.enumerated() {
+                        let tabItem = NSMenuItem(title: "Relay to Tab \(idx + 1): \(tab.title)", action: #selector(relayToSpecificTabClicked(_:)), keyEquivalent: "")
+                        tabItem.target = self
+                        tabItem.representedObject = ["agent": agent, "url": tab.url, "tabId": tab.tabId as Any] as [String: Any]
+                        relaySubmenu.addItem(tabItem)
+                    }
+
+                    relayMainItem.submenu = relaySubmenu
+                    submenu.addItem(relayMainItem)
+                } else {
+                    let gptTargetTag = (gptInfo?.sessionTitle?.isEmpty == false) ? " (\(gptInfo!.sessionTitle!))" : ""
+                    let relayTitle = "📲 Relay Output -> ChatGPT Web\(gptTargetTag)"
+
+                    let relayItem = NSMenuItem(title: relayTitle, action: #selector(relayOutputClicked(_:)), keyEquivalent: "")
+                    relayItem.target = self
+                    relayItem.representedObject = agent
+                    submenu.addItem(relayItem)
+                }
+
+                let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
+                copyItem.target = self
+                copyItem.representedObject = agent
+                submenu.addItem(copyItem)
+            } else {
+                // BI-DIRECTIONAL RELAY: ChatGPT Web -> Assigned Agents
+                let relayClaudeItem = NSMenuItem(title: "📲 Relay Output -> Claude Code", action: #selector(relayChatGPTToClaudeClicked), keyEquivalent: "")
+                relayClaudeItem.target = self
+                submenu.addItem(relayClaudeItem)
+
+                let relayAgyItem = NSMenuItem(title: "📲 Relay Output -> Antigravity", action: #selector(relayChatGPTToAgyClicked), keyEquivalent: "")
+                relayAgyItem.target = self
+                submenu.addItem(relayAgyItem)
+
+                let relayCdxItem = NSMenuItem(title: "📲 Relay Output -> Codex Desktop", action: #selector(relayChatGPTToCdxClicked), keyEquivalent: "")
+                relayCdxItem.target = self
+                submenu.addItem(relayCdxItem)
+
+                let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
+                copyItem.target = self
+                copyItem.representedObject = agent
+                submenu.addItem(copyItem)
+            }
+
+            let directSwitchItem = NSMenuItem(title: "⚡ Focus / Switch Window Immediately", action: #selector(agentItemClicked(_:)), keyEquivalent: "")
+            directSwitchItem.target = self
+            directSwitchItem.representedObject = agent
+            submenu.addItem(directSwitchItem)
+
             item.submenu = submenu
             menu.addItem(item)
         }
@@ -411,10 +468,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 menu.addItem(row2)
             }
 
-            let freshnessText = makeProviderFreshnessTag(usage: claudeUsage)
-            let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
-            freshRow.isEnabled = false
-            menu.addItem(freshRow)
+            if let freshnessText = makeProviderFreshnessTag(usage: claudeUsage) {
+                let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                freshRow.isEnabled = false
+                menu.addItem(freshRow)
+            }
         }
 
         // 3B. Antigravity Usage Rows
@@ -446,10 +504,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         menu.addItem(row)
                     }
                 }
-                let freshnessText = makeProviderFreshnessTag(usage: agyUsage)
-                let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
-                freshRow.isEnabled = false
-                menu.addItem(freshRow)
+                if let freshnessText = makeProviderFreshnessTag(usage: agyUsage) {
+                    let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                    freshRow.isEnabled = false
+                    menu.addItem(freshRow)
+                }
             } else {
                 let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false
@@ -471,10 +530,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 row.isEnabled = false
                 menu.addItem(row)
 
-                let freshnessText = makeProviderFreshnessTag(usage: cdxUsage)
-                let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
-                freshRow.isEnabled = false
-                menu.addItem(freshRow)
+                if let freshnessText = makeProviderFreshnessTag(usage: cdxUsage) {
+                    let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                    freshRow.isEnabled = false
+                    menu.addItem(freshRow)
+                }
             } else {
                 let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
                 unavailRow.isEnabled = false

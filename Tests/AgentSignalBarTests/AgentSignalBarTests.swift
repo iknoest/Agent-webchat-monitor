@@ -1221,21 +1221,45 @@ final class AgentSignalBarTests: XCTestCase {
         let menuMgr = MenuBarManager.shared
         let now = Date()
 
-        // 1. Live source -> "updated ..."
+        // 1. Live fresh source -> nil (hides routine freshness text)
         let liveCdx = AgentUsageData(agent: .codex, weeklyLimitPercent: 60.0, isLiveSource: true, lastSuccessfulRefresh: now)
         let liveTag = menuMgr.makeProviderFreshnessTag(usage: liveCdx)
-        XCTAssertTrue(liveTag.hasPrefix("updated "), "Live sample must start with 'updated ': \(liveTag)")
-        XCTAssertFalse(liveTag.contains("last known"), "Live sample must not say 'last known'")
+        XCTAssertNil(liveTag, "Fresh sample must hide routine freshness text")
 
-        // 2. Retained sample with failed source -> "last known · updated ..."
+        // 2. Retained sample with failed source -> "last known · ..."
         let cachedCdx = AgentUsageData(agent: .codex, weeklyLimitPercent: 60.0, isLiveSource: false, lastSuccessfulRefresh: now.addingTimeInterval(-7200))
         let cachedTag = menuMgr.makeProviderFreshnessTag(usage: cachedCdx)
-        XCTAssertTrue(cachedTag.hasPrefix("last known · updated "), "Cached sample must start with 'last known · updated ': \(cachedTag)")
+        XCTAssertTrue(cachedTag?.hasPrefix("last known ·") == true, "Cached sample must start with 'last known · ': \(String(describing: cachedTag))")
 
         // 3. No sample ever -> "Quota unavailable"
         let noSample = AgentUsageData(agent: .chatgpt, isLiveSource: false, quotaSource: "none")
         let noSampleTag = menuMgr.makeProviderFreshnessTag(usage: noSample)
         XCTAssertEqual(noSampleTag, "Quota unavailable")
+    }
+
+    func testUXConsolidationClosedLidDefaultAndRelay() throws {
+        let priv = SleepManager.checkPrivilegeStatus()
+        var cfg = ConfigManager.shared.config
+        cfg.isClosedLidEnabled = nil
+        ConfigManager.shared.saveConfig(cfg)
+
+        let effective = SleepManager.shared.isClosedLidModeEnabled
+        if priv.hasPrivilege {
+            XCTAssertTrue(effective, "Privilege present + no preference -> Closed-Lid defaults ON")
+        } else {
+            XCTAssertFalse(effective, "Privilege absent -> Closed-Lid defaults OFF")
+        }
+
+        // Explicit override persists
+        SleepManager.shared.isClosedLidModeEnabled = false
+        XCTAssertFalse(SleepManager.shared.isClosedLidModeEnabled)
+        SleepManager.shared.isClosedLidModeEnabled = true
+        XCTAssertTrue(SleepManager.shared.isClosedLidModeEnabled)
+
+        // Relay text sanitizer
+        let dirty = "2026-08-17 21:00:00 [info] Response text\n{\"type\":\"event_msg\"}\nEdited file.txt"
+        let clean = OutputRelayManager.shared.sanitizeOutputText(dirty)
+        XCTAssertEqual(clean, "Response text")
     }
 }
 #endif

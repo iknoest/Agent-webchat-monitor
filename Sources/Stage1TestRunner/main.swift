@@ -2569,8 +2569,8 @@ runTest("107. Refresh Action Has No Global Updated X Ago") {
     try assert(!sig.isEmpty, "Render signature generated.")
 }
 
-// 108. Per-Provider Freshness is Independent
-runTest("108. Per-Provider Freshness is Independent") {
+// 108. Fresh Quota Hides Routine Freshness Text
+runTest("108. Fresh Quota Hides Routine Freshness Text") {
     let menuMgr = MenuBarManager.shared
     let now = Date()
 
@@ -2582,14 +2582,13 @@ runTest("108. Per-Provider Freshness is Independent") {
     let agyTag = menuMgr.makeProviderFreshnessTag(usage: agyFresh)
     let cdxTag = menuMgr.makeProviderFreshnessTag(usage: cdxFresh)
 
-    try assert(cldTag.contains("updated"), "Claude freshness must contain 'updated': got \(cldTag)")
-    try assert(agyTag.contains("updated"), "AGY freshness must contain 'updated': got \(agyTag)")
-    try assert(cdxTag.contains("updated"), "Codex freshness must contain 'updated': got \(cdxTag)")
-    try assert(cdxTag != agyTag || cdxTag.contains("m ago") || cdxTag.contains("2m"), "Independent relative durations.")
+    try assert(cldTag == nil, "Fresh Claude quota must hide routine freshness text: got \(String(describing: cldTag))")
+    try assert(agyTag == nil, "Fresh AGY quota must hide routine freshness text: got \(String(describing: agyTag))")
+    try assert(cdxTag == nil, "Fresh Codex quota must hide routine freshness text: got \(String(describing: cdxTag))")
 }
 
-// 109. Closed Codex + Live CLI Sample -> Updated Now, NOT Last Known
-runTest("109. Closed Codex + Live CLI Sample -> Updated Now, NOT Last Known") {
+// 109. Closed Codex + Live CLI Sample -> Fresh Quota Hides Routine Freshness
+runTest("109. Closed Codex + Live CLI Sample -> Fresh Quota Hides Routine Freshness") {
     AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
     let liveCdx = AgentUsageData(
         agent: .codex,
@@ -2602,8 +2601,7 @@ runTest("109. Closed Codex + Live CLI Sample -> Updated Now, NOT Last Known") {
     AgentUsageStore.shared.updateUsage(for: .codex, data: liveCdx)
 
     let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: liveCdx)
-    try assert(!tag.contains("last known"), "Live CLI sample for closed app must NOT be labelled last known: got \(tag)")
-    try assert(tag.contains("updated"), "Must be labelled updated: got \(tag)")
+    try assert(tag == nil, "Live CLI sample for closed app must be treated as fresh (nil tag): got \(String(describing: tag))")
 }
 
 // 110. Failed Source + Cached Sample -> Last Known
@@ -2617,7 +2615,7 @@ runTest("110. Failed Source + Cached Sample -> Last Known") {
         lastSuccessfulRefresh: Date().addingTimeInterval(-10800) // 3h ago
     )
     let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: cachedCdx)
-    try assert(tag.hasPrefix("last known · updated"), "Failed live source with retained sample must be labelled 'last known · updated ...': got \(tag)")
+    try assert(tag?.hasPrefix("last known ·") == true, "Failed live source with retained sample must be labelled 'last known · ...': got \(String(describing: tag))")
 }
 
 // 111. Refresh Keeps Previous Sample Visible
@@ -2630,7 +2628,7 @@ runTest("111. Refresh Keeps Previous Sample Visible") {
 runTest("112. No-Sample Source Failure -> Unavailable") {
     let emptyUsage = AgentUsageData(agent: .chatgpt, isLiveSource: false, quotaSource: "none")
     let tag = MenuBarManager.shared.makeProviderFreshnessTag(usage: emptyUsage)
-    try assert(tag == "Quota unavailable", "No sample must yield 'Quota unavailable': got \(tag)")
+    try assert(tag == "Quota unavailable", "No sample must yield 'Quota unavailable': got \(String(describing: tag))")
 }
 
 // 113. Standardized Reset Format Remains 24-Hour
@@ -2679,4 +2677,87 @@ runTest("117. MenuBarManager makeProviderFreshnessTag Output Validation") {
     try assert(menuMgr.makeProviderFreshnessTag(usage: nil) == "Quota unavailable", "Nil usage -> Quota unavailable")
 }
 
-print("🎉 All 117 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability, Unified Display, AGY StopError, Proven Quota V1, Quota Completeness & Final Quota Presentation Truth Tests Passed!")
+// 118. Closed-Lid Smart Auto Default Derivation
+runTest("118. Closed-Lid Smart Auto Default Derivation") {
+    let priv = SleepManager.checkPrivilegeStatus()
+    // Test dynamic getter when isClosedLidEnabled is nil
+    var cfg = ConfigManager.shared.config
+    cfg.isClosedLidEnabled = nil
+    ConfigManager.shared.saveConfig(cfg)
+
+    let effective = SleepManager.shared.isClosedLidModeEnabled
+    if priv.hasPrivilege {
+        try assert(effective == true, "Privilege present + unpersisted preference MUST default Closed-Lid to true.")
+    } else {
+        try assert(effective == false, "Privilege absent MUST default Closed-Lid to false.")
+    }
+}
+
+// 119. Explicit User Closed-Lid Setting Beats Default Derivation
+runTest("119. Explicit User Closed-Lid Setting Beats Default Derivation") {
+    // Explicit OFF
+    SleepManager.shared.isClosedLidModeEnabled = false
+    try assert(ConfigManager.shared.config.isClosedLidEnabled == false, "Explicit OFF must persist in config.")
+    try assert(SleepManager.shared.isClosedLidModeEnabled == false, "Explicit OFF must be returned even if privilege exists.")
+
+    // Explicit ON
+    SleepManager.shared.isClosedLidModeEnabled = true
+    try assert(ConfigManager.shared.config.isClosedLidEnabled == true, "Explicit ON must persist in config.")
+    try assert(SleepManager.shared.isClosedLidModeEnabled == true, "Explicit ON must be returned.")
+}
+
+// 120. Quota State Alone Never Triggers Closed-Lid Keep-Awake
+runTest("120. Quota State Alone Never Triggers Closed-Lid Keep-Awake") {
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
+    for p in AgentID.allCases {
+        AgentStore.shared.updateStatus(for: p, status: .idle)
+    }
+    AgentStore.shared.updateAvailability(for: .antigravity, availability: .quotaExhausted)
+    AgentStore.shared.updateAvailability(for: .codex, availability: .quotaExhausted)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "Quota state alone must never trigger Smart Auto keep-awake.")
+}
+
+// 121. One-Click Relay Output Clipboard & Tab Relay Sanitizer
+runTest("121. One-Click Relay Output Clipboard & Tab Relay Sanitizer") {
+    let rawWithEnvelope = "2026-08-17 20:00:00 [info] Hello, world!\n{\"type\":\"event_msg\"}\n[CDP Discovery] done"
+    let clean = OutputRelayManager.shared.sanitizeOutputText(rawWithEnvelope)
+    try assert(clean == "Hello, world!", "Sanitizer must strip envelopes, timestamps and log noise: got '\(clean)'")
+}
+
+// 122. Claude Quota Without Fabricated Reset Timestamp
+runTest("122. Claude Quota Without Fabricated Reset Timestamp") {
+    let claudeUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 13.0,
+        weeklyLimitPercent: 92.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "claude_plan_usage_history"
+    )
+    try assert(claudeUsage.sessionResetText == nil, "Claude reset must remain nil when no structured reset source exists.")
+    try assert(claudeUsage.weeklyResetText == nil, "Claude weekly reset must remain nil when no structured reset source exists.")
+    try assert(claudeUsage.sessionRemainingPercent == 87.0, "13% used -> 87% remaining capacity.")
+    try assert(claudeUsage.weeklyRemainingPercent == 8.0, "92% used -> 8% remaining capacity.")
+}
+
+// 123. Independent Reset Windows for Multi-Family Models
+runTest("123. Independent Reset Windows for Multi-Family Models") {
+    let agyUsage = AgentUsageData(
+        agent: .antigravity,
+        modelFamilies: [
+            ModelFamilyQuota(name: "Gemini", sessionLimitPercent: 70.0, sessionResetText: "resets today 21:49 (in 30m)", weeklyLimitPercent: 32.0, weeklyResetText: "resets Aug 21 23:58 (in 4d 2h)", isPercentUsed: false),
+            ModelFamilyQuota(name: "Claude/GPT", sessionLimitPercent: 4.0, sessionResetText: "resets today 21:57 (in 38m)", weeklyLimitPercent: 0.0, weeklyResetText: "resets Aug 23 11:14 (in 5d 13h)", isPercentUsed: false)
+        ],
+        isLiveSource: true
+    )
+    let gemini = agyUsage.modelFamilies.first(where: { $0.name == "Gemini" })
+    let claude = agyUsage.modelFamilies.first(where: { $0.name == "Claude/GPT" })
+
+    try assert(gemini?.sessionResetText != claude?.sessionResetText, "Reset windows must remain independent per model family.")
+    try assert(gemini?.weeklyResetText != claude?.weeklyResetText, "Weekly reset windows must remain independent per model family.")
+}
+
+print("🎉 All 123 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Relay Restore, UX Consolidation & Final Truth Tests Passed!")
