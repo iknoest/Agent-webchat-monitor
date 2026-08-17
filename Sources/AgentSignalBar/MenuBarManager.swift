@@ -26,6 +26,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.autosaveName = "AgentSignalBarStatusItem"
             self.statusItem = item
 
             if let button = item.button {
@@ -52,6 +53,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
     private var isUpdateScheduled = false
     private var imageCache: [AgentStatus: NSImage] = [:]
+    private var displayImageCache: [EffectiveDisplayStatus: NSImage] = [:]
     private var lastRenderedSignature: String = ""
     private var lastRebuildTime: Date = Date.distantPast
     private var pendingThrottledTimer: Timer?
@@ -62,6 +64,15 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
         let img = status.statusDotImage()
         imageCache[status] = img
+        return img
+    }
+
+    private func cachedDisplayDotImage(for status: EffectiveDisplayStatus) -> NSImage {
+        if let cached = displayImageCache[status] {
+            return cached
+        }
+        let img = status.statusDotImage()
+        displayImageCache[status] = img
         return img
     }
 
@@ -118,8 +129,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         guard let item = statusItem, let button = item.button else { return }
 
-        let summary = AgentStore.shared.overallSummary()
-        button.title = "[\(summary)]"
+        let displayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
+        if displayMode.lowercased() == "compact" {
+            let compact = AgentStore.shared.compactSummary()
+            button.title = "[\(compact)]"
+        } else {
+            let summary = AgentStore.shared.overallSummary()
+            button.title = "[\(summary)]"
+        }
 
         let currentSignature = computeRenderSignature()
         if currentSignature == lastRenderedSignature {
@@ -132,7 +149,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
 
     public func computeRenderSignature() -> String {
+        let displayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
         let summary = AgentStore.shared.overallSummary()
+        let compact = AgentStore.shared.compactSummary()
         let theme = AgentStore.shared.currentTheme.rawValue
         let overwork = AgentStore.shared.overworkThresholdMinutes
 
@@ -165,7 +184,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false);"
         }
-        return "\(summary)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(autoRelay)|\(usageRefreshTs)|\(sessionsStr)|\(stateDetails)"
     }
 
 
@@ -313,11 +332,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let nameTag = (!rawTitle.isEmpty) ? " — \(rawTitle.prefix(25))\(rawTitle.count > 25 ? "..." : "")" : ""
 
             let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
-            let badge = info.status.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
-            let title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(statusLabel)]\(durationTag)"
+            let displayStatus = info.effectiveDisplayStatus
+            let badge = displayStatus.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
+            let displayStatusLabel = (displayStatus == .quotaExhausted) ? "Quota Exhausted" : statusLabel
+            let title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(displayStatusLabel)]\(durationTag)"
 
             let item = NSMenuItem(title: title, action: #selector(agentItemClicked(_:)), keyEquivalent: "")
-            item.image = cachedStatusDotImage(for: info.status)
+            item.image = cachedDisplayDotImage(for: displayStatus)
             item.target = self
             item.representedObject = agent
 
@@ -565,6 +586,25 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let overworkToggleItem = NSMenuItem(title: overworkTitle, action: #selector(cycleOverworkThresholdClicked), keyEquivalent: "")
         overworkToggleItem.target = self
         settingsSubmenu.addItem(overworkToggleItem)
+
+        // Menu Bar View (Detailed vs Compact)
+        let currentDisplayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
+        let isDetailedView = currentDisplayMode.lowercased() != "compact"
+        let viewMenuItem = NSMenuItem(title: "Menu Bar View", action: nil, keyEquivalent: "")
+        let viewSubmenu = NSMenu()
+
+        let detailedItem = NSMenuItem(title: "Detailed (All Providers)", action: #selector(setMenuBarModeDetailedClicked), keyEquivalent: "")
+        detailedItem.target = self
+        detailedItem.state = isDetailedView ? .on : .off
+        viewSubmenu.addItem(detailedItem)
+
+        let compactItem = NSMenuItem(title: "Compact (Single Indicator)", action: #selector(setMenuBarModeCompactClicked), keyEquivalent: "")
+        compactItem.target = self
+        compactItem.state = !isDetailedView ? .on : .off
+        viewSubmenu.addItem(compactItem)
+
+        viewMenuItem.submenu = viewSubmenu
+        settingsSubmenu.addItem(viewMenuItem)
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
@@ -927,6 +967,22 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let current = SleepManager.shared.isClosedLidModeEnabled
         SleepManager.shared.isClosedLidModeEnabled = !current
         print("🛡️ Closed-Lid / Clamshell Mode toggled to: \(!current)")
+        updateTitleAndMenu()
+    }
+
+    @objc private func setMenuBarModeCompactClicked() {
+        var cfg = ConfigManager.shared.config
+        cfg.menuBarDisplayMode = "compact"
+        ConfigManager.shared.saveConfig(cfg)
+        print("🖥️ Menu Bar View set to: compact")
+        updateTitleAndMenu()
+    }
+
+    @objc private func setMenuBarModeDetailedClicked() {
+        var cfg = ConfigManager.shared.config
+        cfg.menuBarDisplayMode = "detailed"
+        ConfigManager.shared.saveConfig(cfg)
+        print("🖥️ Menu Bar View set to: detailed")
         updateTitleAndMenu()
     }
 

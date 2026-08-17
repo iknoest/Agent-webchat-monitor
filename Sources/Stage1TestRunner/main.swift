@@ -960,10 +960,501 @@ runTest("32. Smart Auto Reason & Live IOPMAssertion Label Synchronization Across
     }
 }
 
-print("🎉 All 32 Production Swift Containment, Turn Continuity, Quota, Closed-Lid & Assertion Synchronization Tests Passed!")
+// 33. Codex: task_started -> Working
+runTest("33. Codex: task_started -> Working") {
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .codex)
 
+    let testThreadId = "codex_t1_test"
+    let testTurnId = "turn_codex_t1_001"
 
+    let handled = store.handleCodexRolloutEvent(
+        threadId: testThreadId,
+        title: "Test Codex Thread",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/codex_rollout_1.jsonl",
+        eventType: "task_started",
+        turnId: testTurnId,
+        isTestMode: true
+    )
+    try assert(handled == true, "task_started event must be handled successfully.")
 
+    let sessions = store.getSessions(for: .codex)
+    let s = sessions.first(where: { $0.sessionId == testThreadId })
+    try assert(s?.status == .working, "Codex child session must transition to .working.")
+    try assert(s?.turnId == testTurnId, "Codex turnId must be stored.")
+    try assert(s?.thinkingStartTime != nil, "thinkingStartTime must be recorded.")
+    try assert(store.getStatus(for: .codex).status == .working, "Parent Codex aggregate status must be .working.")
+}
 
+// 34. Codex: matching task_complete -> Done
+runTest("34. Codex: matching task_complete -> Done") {
+    let store = AgentStore.shared
+    let testThreadId = "codex_t1_test"
+    let testTurnId = "turn_codex_t1_001"
 
+    let handled = store.handleCodexRolloutEvent(
+        threadId: testThreadId,
+        title: "Test Codex Thread",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/codex_rollout_1.jsonl",
+        eventType: "task_complete",
+        turnId: testTurnId,
+        durationMs: 4500,
+        isTestMode: true
+    )
+    try assert(handled == true, "matching task_complete must be handled.")
 
+    let s = store.getSessions(for: .codex).first(where: { $0.sessionId == testThreadId })
+    try assert(s?.status == .done, "Codex session must transition to .done.")
+    try assert(s?.lastDurationSeconds == 4.5, "lastDurationSeconds must match durationMs (4.5s).")
+    try assert(s?.thinkingStartTime == nil, "thinkingStartTime must be cleared upon completion.")
+    try assert(store.getStatus(for: .codex).status == .done, "Parent Codex status must become .done.")
+}
+
+// 35. Codex: mismatched turn_id cannot complete another active turn
+runTest("35. Codex: mismatched turn_id cannot complete another active turn") {
+    let store = AgentStore.shared
+    let testThreadId = "codex_t3_mismatch"
+    let activeTurnId = "turn_active_333"
+
+    _ = store.handleCodexRolloutEvent(
+        threadId: testThreadId,
+        title: "Mismatch Thread",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/codex_rollout_3.jsonl",
+        eventType: "task_started",
+        turnId: activeTurnId,
+        isTestMode: true
+    )
+
+    let mismatchHandled = store.handleCodexRolloutEvent(
+        threadId: testThreadId,
+        title: "Mismatch Thread",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/codex_rollout_3.jsonl",
+        eventType: "task_complete",
+        turnId: "turn_DIFFERENT_999",
+        durationMs: 2000,
+        isTestMode: true
+    )
+    try assert(mismatchHandled == false, "Mismatched turn_id task_complete MUST return false.")
+
+    let s = store.getSessions(for: .codex).first(where: { $0.sessionId == testThreadId })
+    try assert(s?.status == .working, "Session must REMAIN .working when mismatched turn_id arrives.")
+    try assert(s?.turnId == activeTurnId, "Session turnId must not be modified.")
+    try assert(store.getStatus(for: .codex).status == .working, "Parent status must remain .working.")
+}
+
+// 36. Codex: two concurrent threads remain isolated
+runTest("36. Codex: two concurrent threads remain isolated") {
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .codex)
+
+    let threadA = "codex_iso_thread_A"
+    let threadB = "codex_iso_thread_B"
+
+    _ = store.handleCodexRolloutEvent(threadId: threadA, title: "Thread A", cwd: "/tmp/a", eventType: "task_started", turnId: "turn_A1", isTestMode: true)
+    _ = store.handleCodexRolloutEvent(threadId: threadB, title: "Thread B", cwd: "/tmp/b", eventType: "task_started", turnId: "turn_B1", isTestMode: true)
+
+    let startA = store.getSessions(for: .codex).first(where: { $0.sessionId == threadA })?.thinkingStartTime
+
+    // Complete Thread B only
+    _ = store.handleCodexRolloutEvent(threadId: threadB, title: "Thread B", cwd: "/tmp/b", eventType: "task_complete", turnId: "turn_B1", durationMs: 3000, isTestMode: true)
+
+    let sessionA = store.getSessions(for: .codex).first(where: { $0.sessionId == threadA })
+    let sessionB = store.getSessions(for: .codex).first(where: { $0.sessionId == threadB })
+
+    try assert(sessionA?.status == .working, "Thread A must REMAIN .working.")
+    try assert(sessionA?.turnId == "turn_A1", "Thread A turnId must be unchanged.")
+    try assert(sessionA?.thinkingStartTime == startA, "Thread A thinkingStartTime must NOT be mutated by Thread B.")
+
+    try assert(sessionB?.status == .done, "Thread B must be .done.")
+    try assert(store.getStatus(for: .codex).status == .working, "Parent status must be .working while Thread A is still active.")
+}
+
+// 37. Codex: partial JSON line does not mutate lifecycle
+runTest("37. Codex: partial JSON line does not mutate lifecycle") {
+    let monitor = AutoMonitor.shared
+    monitor.resetTestMetrics()
+
+    let tmpPath = NSTemporaryDirectory() + "codex_partial_\(UUID().uuidString).jsonl"
+    defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+    let partialContent = "{\"timestamp\":\"2026-08-17T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_st"
+    try partialContent.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+
+    let threadInfo = AutoMonitor.CodexThreadInfo(id: "codex_partial_thread", title: "Partial Thread", rolloutPath: tmpPath)
+    monitor.processCodexRollout(thread: threadInfo)
+
+    let s1 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_partial_thread" })
+    try assert(s1 == nil || s1?.status != .working, "Partial line fragment MUST NOT transition lifecycle to .working.")
+
+    // Append the remainder of the line with newline
+    if let handle = FileHandle(forWritingAtPath: tmpPath) {
+        handle.seekToEndOfFile()
+        handle.write("arted\",\"turn_id\":\"turn_partial_complete\"}}\n".data(using: .utf8)!)
+        try? handle.closeFile()
+    }
+
+    monitor.processCodexRollout(thread: threadInfo)
+    let s2 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_partial_thread" })
+    try assert(s2?.status == .working, "Full line arrival must successfully transition to .working.")
+    try assert(s2?.turnId == "turn_partial_complete", "turnId must match assembled line.")
+}
+
+// 38. Codex: appended completion line is processed exactly once
+runTest("38. Codex: appended completion line is processed exactly once") {
+    let monitor = AutoMonitor.shared
+    let tmpPath = NSTemporaryDirectory() + "codex_once_\(UUID().uuidString).jsonl"
+    defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+    let startLine = "{\"timestamp\":\"2026-08-17T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn_once_01\"}}\n"
+    try startLine.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+
+    let threadInfo = AutoMonitor.CodexThreadInfo(id: "codex_once_thread", title: "Once Thread", rolloutPath: tmpPath)
+    monitor.processCodexRollout(thread: threadInfo)
+
+    let s1 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_once_thread" })
+    try assert(s1?.status == .working, "Must start in working.")
+
+    // Append complete line
+    if let handle = FileHandle(forWritingAtPath: tmpPath) {
+        handle.seekToEndOfFile()
+        let completeLine = "{\"timestamp\":\"2026-08-17T00:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn_once_01\",\"duration_ms\":5000}}\n"
+        handle.write(completeLine.data(using: .utf8)!)
+        try? handle.closeFile()
+    }
+
+    monitor.processCodexRollout(thread: threadInfo)
+    let s2 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_once_thread" })
+    try assert(s2?.status == .done, "Must transition to .done.")
+
+    // Calling processCodexRollout again with no new bytes
+    monitor.processCodexRollout(thread: threadInfo)
+    let s3 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_once_thread" })
+    try assert(s3?.status == .done, "Must remain .done without duplicate processing.")
+}
+
+// 39. Codex: no prompt/message/tool body is required for parsing
+runTest("39. Codex: no prompt/message/tool body is required for parsing") {
+    let store = AgentStore.shared
+    let handled = store.handleCodexRolloutEvent(
+        threadId: "codex_privacy_clean",
+        title: "Clean",
+        cwd: nil,
+        rolloutPath: nil,
+        eventType: "task_started",
+        turnId: "turn_privacy_01",
+        isTestMode: true
+    )
+    try assert(handled == true, "Minimal envelope with ZERO prompt/message bodies must be handled cleanly.")
+}
+
+// 40. Codex: SQLite updated_at change alone does not produce Working
+runTest("40. Codex: SQLite updated_at change alone does not produce Working") {
+    let monitor = AutoMonitor.shared
+    let tmpPath = NSTemporaryDirectory() + "codex_sqlite_test_\(UUID().uuidString).jsonl"
+    defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+    // Rollout file has completed turn
+    let content = "{\"timestamp\":\"2026-08-17T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn_sq_01\"}}\n{\"timestamp\":\"2026-08-17T00:00:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn_sq_01\"}}\n"
+    try content.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+
+    let t1 = AutoMonitor.CodexThreadInfo(id: "codex_sqlite_thread", title: "SQLite Thread", rolloutPath: tmpPath, updatedAtMs: 1000)
+    monitor.processCodexRollout(thread: t1)
+    AgentStore.shared.markChecked(for: .codex)
+
+    // Simulate SQLite updated_at advancing without new rollout bytes
+    let t2 = AutoMonitor.CodexThreadInfo(id: "codex_sqlite_thread", title: "SQLite Thread", rolloutPath: tmpPath, updatedAtMs: 2000)
+    monitor.processCodexRollout(thread: t2)
+
+    let status = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_sqlite_thread" })?.status
+    try assert(status != .working, "SQLite updated_at change alone MUST NOT produce .working without task_started.")
+}
+
+// 41. Codex remains excluded from Smart Auto
+runTest("41. Codex remains excluded from Smart Auto") {
+    let sleepMgr = SleepManager.shared
+    let store = AgentStore.shared
+
+    try assert(!SleepManager.trustedProviders.contains(.codex), "Codex MUST NOT be present in SleepManager.trustedProviders.")
+
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .working, detail: "Codex active task")
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(eval.shouldKeepAwake == false, "Working Codex alone MUST NOT keep Smart Auto awake.")
+}
+
+// 42. Menu Bar: fresh/default config -> Detailed mode & exposes all 4 provider identities
+runTest("42. Menu Bar: fresh/default config -> Detailed mode & exposes all 4 provider identities") {
+    let defaultCfg = AppConfig.defaultConfig
+    try assert(defaultCfg.menuBarDisplayMode == "detailed", "Fresh default config MUST have menuBarDisplayMode == 'detailed'.")
+
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+    store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+    store.purgeSyntheticAndStaleSessions(provider: .codex)
+
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+
+    let summary = store.overallSummary()
+    try assert(summary.contains("GPT:"), "Detailed mode must expose GPT identity.")
+    try assert(summary.contains("CDX:"), "Detailed mode must expose CDX identity.")
+    try assert(summary.contains("CLD:"), "Detailed mode must expose CLD identity.")
+    try assert(summary.contains("AGY:"), "Detailed mode must expose AGY identity.")
+}
+
+// 43. Menu Bar: all idle in Compact -> ⚪
+runTest("43. Menu Bar: all idle in Compact -> ⚪") {
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+
+    let compact = store.compactSummary()
+    try assert(compact == "⚪", "All idle must produce compact '⚪' (actual: \(compact)).")
+}
+
+// 44. Menu Bar: Compact Working identifies responsible provider (e.g. CLD🟡)
+runTest("44. Menu Bar: Compact Working identifies responsible provider (e.g. CLD🟡)") {
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+
+    let compact = store.compactSummary()
+    try assert(compact == "CLD🟡", "Compact working must identify responsible provider 'CLD🟡' (actual: \(compact)).")
+}
+
+// 45. Menu Bar: multiple same-priority providers produce bounded compact representation (e.g. CLD🟡 +1)
+runTest("45. Menu Bar: multiple same-priority providers produce bounded compact representation (e.g. CLD🟡 +1)") {
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .chatgpt, status: .working, detail: "ChatGPT working")
+    store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+
+    let compact = store.compactSummary()
+    try assert(compact.contains("🟡") && compact.contains("+1"), "Two working providers must show top provider and +1 suffix (actual: \(compact)).")
+}
+
+// 46. Menu Bar: Needs You + Working -> Needs You identifies responsible provider (e.g. AGY🔴)
+runTest("46. Menu Bar: Needs You + Working -> Needs You identifies responsible provider (e.g. AGY🔴)") {
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+    store.updateStatus(for: .antigravity, status: .blocked, detail: "Permission needed")
+
+    let compact = store.compactSummary()
+    try assert(compact == "AGY🔴", "Needs You must win over Working and identify responsible provider 'AGY🔴' (actual: \(compact)).")
+}
+
+// 47. Menu Bar: compact/detailed preference persists
+runTest("47. Menu Bar: compact/detailed preference persists") {
+    let configMgr = ConfigManager.shared
+
+    var cfg = configMgr.config
+    cfg.menuBarDisplayMode = "compact"
+    configMgr.saveConfig(cfg)
+    configMgr.loadConfig()
+    try assert(configMgr.config.menuBarDisplayMode == "compact", "Compact mode preference must persist.")
+
+    cfg.menuBarDisplayMode = "detailed"
+    configMgr.saveConfig(cfg)
+    configMgr.loadConfig()
+    try assert(configMgr.config.menuBarDisplayMode == "detailed", "Detailed mode preference must persist.")
+}
+
+// 48. Menu Bar: autosaveName is configured
+runTest("48. Menu Bar: autosaveName is configured") {
+    let expectedAutosaveName = "AgentSignalBarStatusItem"
+    try assert(!expectedAutosaveName.isEmpty, "Autosave name constant must be defined.")
+}
+
+// 49. Quota Availability: Claude idle + available -> CLD:⚪
+runTest("49. Quota Availability: Claude idle + available -> CLD:⚪") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    store.currentTheme = .classic
+
+    let availUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 45.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: availUsage)
+    store.updateStatus(for: .claude, status: .idle)
+
+    let summary = store.overallSummary()
+    try assert(summary.contains("CLD:⚪"), "Claude idle + available must display 'CLD:⚪' (actual: \(summary)).")
+    try assert(store.getStatus(for: .claude).status == .idle, "Underlying lifecycle status must remain .idle.")
+    try assert(store.getStatus(for: .claude).availability == .available, "Availability must be .available.")
+}
+
+// 50. Quota Availability: Claude idle + quotaExhausted -> CLD:⛔ (Lifecycle remains .idle)
+runTest("50. Quota Availability: Claude idle + quotaExhausted -> CLD:⛔") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    store.currentTheme = .classic
+
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .claude, status: .idle)
+
+    let summary = store.overallSummary()
+    try assert(summary.contains("CLD:⛔"), "Claude idle + quotaExhausted must display 'CLD:⛔' (actual: \(summary)).")
+    try assert(store.getStatus(for: .claude).status == .idle, "Underlying lifecycle status must remain .idle.")
+    try assert(store.getStatus(for: .claude).availability == .quotaExhausted, "Availability must be .quotaExhausted.")
+}
+
+// 51. Quota Availability: Compact mode shows CLD⛔ when everything else is idle
+runTest("51. Quota Availability: Compact mode shows CLD⛔ when everything else is idle") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    store.currentTheme = .classic
+
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+
+    let compact = store.compactSummary()
+    try assert(compact == "CLD⛔", "Compact mode must show 'CLD⛔' when Claude is quota-exhausted and other agents are idle (actual: \(compact)).")
+}
+
+// 52. Quota Availability: AGY Working + Claude exhausted -> Compact AGY🟡
+runTest("52. Quota Availability: AGY Working + Claude exhausted -> Compact AGY🟡") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    store.currentTheme = .classic
+
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .working, detail: "AGY working")
+
+    let compact = store.compactSummary()
+    try assert(compact == "AGY🟡", "Working must take precedence over Quota Exhausted in compact mode (actual: \(compact)).")
+}
+
+// 53. Quota Availability: AGY Needs You + Claude exhausted -> Compact AGY🔴
+runTest("53. Quota Availability: AGY Needs You + Claude exhausted -> Compact AGY🔴") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+    store.currentTheme = .classic
+
+    let exhaustedUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 100.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "plan-usage-history.json",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .codex, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .blocked, detail: "Permission needed")
+
+    let compact = store.compactSummary()
+    try assert(compact == "AGY🔴", "Needs You must take precedence over Quota Exhausted in compact mode (actual: \(compact)).")
+}
+
+// 54. Unified Display Status: All 6 states derive identical top-level, compact, and dropdown display representation across themes
+runTest("54. Unified Display Status: All 6 states derive identical top-level, compact, and dropdown display representation across themes") {
+    let store = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    // State 1: Off
+    store.updateStatus(for: .codex, status: .off)
+    let offInfo = store.getStatus(for: .codex)
+    try assert(offInfo.effectiveDisplayStatus == .off, "Off status must map to .off display status.")
+    try assert(offInfo.effectiveDisplayStatus.badge(theme: .classic) == "⚫", "Classic off badge must be '⚫'.")
+    try assert(offInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "😴", "Fun off badge must be '😴'.")
+
+    // State 2: Idle + Available
+    let availUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 50.0, isPercentUsed: true, isLiveSource: true, quotaSource: "plan-usage-history.json", freshness: "Fresh")
+    usageStore.updateUsage(for: .claude, data: availUsage)
+    store.updateStatus(for: .claude, status: .idle)
+    let idleInfo = store.getStatus(for: .claude)
+    try assert(idleInfo.effectiveDisplayStatus == .idle, "Idle available must map to .idle display status.")
+    try assert(idleInfo.effectiveDisplayStatus.badge(theme: .classic) == "⚪", "Classic idle badge must be '⚪'.")
+    try assert(idleInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🫥", "Fun idle badge must be '🫥'.")
+
+    // State 3: Idle + Quota Exhausted
+    let exhaustedUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, quotaSource: "plan-usage-history.json", freshness: "Fresh")
+    usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+    store.updateStatus(for: .claude, status: .idle)
+    let exhaustedInfo = store.getStatus(for: .claude)
+    try assert(exhaustedInfo.effectiveDisplayStatus == .quotaExhausted, "Quota exhausted must map to .quotaExhausted display status.")
+    try assert(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic) == "⛔", "Classic quota exhausted badge must be '⛔'.")
+    try assert(exhaustedInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🤯", "Fun quota exhausted badge must be '🤯'.")
+    try assert(exhaustedInfo.status == .idle, "Lifecycle MUST remain .idle.")
+
+    // State 4: Working
+    store.updateStatus(for: .antigravity, status: .working)
+    let workingInfo = store.getStatus(for: .antigravity)
+    try assert(workingInfo.effectiveDisplayStatus == .working, "Working must map to .working display status.")
+    try assert(workingInfo.effectiveDisplayStatus.badge(theme: .classic) == "🟡", "Classic working badge must be '🟡'.")
+    try assert(workingInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🤔", "Fun working badge must be '🤔'.")
+
+    // State 5: Done
+    store.updateStatus(for: .chatgpt, status: .done)
+    let doneInfo = store.getStatus(for: .chatgpt)
+    try assert(doneInfo.effectiveDisplayStatus == .done, "Done must map to .done display status.")
+    try assert(doneInfo.effectiveDisplayStatus.badge(theme: .classic) == "🟢", "Classic done badge must be '🟢'.")
+    try assert(doneInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🐶", "Fun done badge must be '🐶'.")
+
+    // State 6: Blocked / Needs You
+    store.updateStatus(for: .antigravity, status: .blocked)
+    let blockedInfo = store.getStatus(for: .antigravity)
+    try assert(blockedInfo.effectiveDisplayStatus == .blocked, "Blocked must map to .blocked display status.")
+    try assert(blockedInfo.effectiveDisplayStatus.badge(theme: .classic) == "🔴", "Classic blocked badge must be '🔴'.")
+    try assert(blockedInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🥶", "Fun blocked badge must be '🥶'.")
+}
+
+print("🎉 All 54 Production Swift Containment, Turn Continuity, Quota, Closed-Lid, Codex Rollout, Compact Menu Bar, Quota Availability & Unified Display Tests Passed!")

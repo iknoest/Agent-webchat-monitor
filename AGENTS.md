@@ -647,3 +647,18 @@ Next: Create local commit `checkpoint: accept closed-lid Smart Auto keep-awake`.
 Blockers: none
 
 [RELEASE] Closed-Lid V2 Final Closeout & IOPMAssertion Synchronization Fix — antigravity — 2026-08-16T19:55:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Multi-Provider Monitor Stabilization, Codex v1 Lifecycle & Unified Display
+Done:
+1. Codex Desktop v1 Lifecycle: Implemented parent rollout stream watcher (`rollout-*.jsonl`) pairing `task_started` (turn_id = X) -> `.working` and matching `task_complete` (turn_id = X) -> `.done` with atomic thread isolation and seek-offset incremental tracking. Decoupled from `notify` helper turns and SQLite `updated_at_ms`. Status: `IMPLEMENTED — HUMAN ACCEPTANCE PARKED` (Ava does not plan to use Codex again until its quota becomes available around Aug 20; Codex remains strictly excluded from Smart Auto `trustedProviders`).
+2. Detailed & Compact Menu Bar Modes: Refined Detailed mode (`[GPT:⚪ CDX:⚫ CLD:⚪ AGY:🟡]`) as the default. Preserved optional provider-aware Compact mode (`[CLD🟡]`, `[AGY🔴]`, `[CDX🟢]`, `[CLD🟡 +1]`, `[CLD⛔]`, `[⚪]`, `[⚫]`) with persistent user preference and `statusItem.autosaveName = "AgentSignalBarStatusItem"`.
+3. Unified Provider Display Status: Implemented single shared `EffectiveDisplayStatus` enum unifying top-level Detailed badge, Compact indicator, and dropdown menu provider row titles and vector status dots (`Needs You 🔴 > Working 🟡 > Done 🟢 > Quota Exhausted ⛔ > Idle ⚪ > Off ⚫`).
+4. Claude Quota Milestone: Recorded `Claude 100% quota exhausted UI: HUMAN ACCEPTED` (truthful `⛔` indicator with live `5-hour usage: 100%`, zero fake reset guessing, and zero lifecycle/Smart Auto interference).
+5. Comprehensive Automated Verification: Added Tests 33–54 to `Stage1TestRunner` (54/54 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS extension tests in `background_test.js` (28/28 passed), and built release bundle (`./build_app.sh`).
+Verified: `swift run Stage1TestRunner` (54/54 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Push stable checkpoint to origin.
+Blockers: none
+
+[RELEASE] Multi-Provider Monitor Stabilization, Codex v1 Lifecycle & Unified Display — antigravity — 2026-08-17T11:55:00+02:00

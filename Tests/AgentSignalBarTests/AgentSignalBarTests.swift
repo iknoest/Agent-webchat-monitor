@@ -708,6 +708,258 @@ final class AgentSignalBarTests: XCTestCase {
             XCTAssertTrue(liveName2.contains("Claude Code"))
         }
     }
+
+    func testCodexRolloutTaskStartedAndCompletedLifecycle() throws {
+        let store = AgentStore.shared
+        store.purgeSyntheticAndStaleSessions(provider: .codex)
+
+        let threadId = "codex_xct_t1"
+        let turnId = "turn_xct_001"
+
+        let started = store.handleCodexRolloutEvent(
+            threadId: threadId,
+            title: "XCTest Codex",
+            cwd: "/tmp",
+            rolloutPath: "/tmp/codex_xct.jsonl",
+            eventType: "task_started",
+            turnId: turnId,
+            isTestMode: true
+        )
+        XCTAssertTrue(started, "task_started must return true.")
+        XCTAssertEqual(store.getStatus(for: .codex).status, .working, "Codex status must be working.")
+
+        // Mismatched completion must fail and preserve working
+        let mismatched = store.handleCodexRolloutEvent(
+            threadId: threadId,
+            title: "XCTest Codex",
+            cwd: "/tmp",
+            rolloutPath: "/tmp/codex_xct.jsonl",
+            eventType: "task_complete",
+            turnId: "turn_xct_mismatch",
+            durationMs: 3000,
+            isTestMode: true
+        )
+        XCTAssertFalse(mismatched, "Mismatched turnId must return false.")
+        XCTAssertEqual(store.getStatus(for: .codex).status, .working, "Codex status must remain working.")
+
+        // Matching completion succeeds
+        let completed = store.handleCodexRolloutEvent(
+            threadId: threadId,
+            title: "XCTest Codex",
+            cwd: "/tmp",
+            rolloutPath: "/tmp/codex_xct.jsonl",
+            eventType: "task_complete",
+            turnId: turnId,
+            durationMs: 5000,
+            isTestMode: true
+        )
+        XCTAssertTrue(completed, "Matching turnId task_complete must return true.")
+        XCTAssertEqual(store.getStatus(for: .codex).status, .done, "Codex status must transition to done.")
+    }
+
+    func testCodexConcurrentThreadIsolation() throws {
+        let store = AgentStore.shared
+        store.purgeSyntheticAndStaleSessions(provider: .codex)
+
+        let threadA = "codex_xct_A"
+        let threadB = "codex_xct_B"
+
+        _ = store.handleCodexRolloutEvent(threadId: threadA, title: "Thread A", cwd: "/tmp", eventType: "task_started", turnId: "turn_A", isTestMode: true)
+        _ = store.handleCodexRolloutEvent(threadId: threadB, title: "Thread B", cwd: "/tmp", eventType: "task_started", turnId: "turn_B", isTestMode: true)
+
+        let startA = store.getSessions(for: .codex).first(where: { $0.sessionId == threadA })?.thinkingStartTime
+
+        // Complete thread B
+        _ = store.handleCodexRolloutEvent(threadId: threadB, title: "Thread B", cwd: "/tmp", eventType: "task_complete", turnId: "turn_B", durationMs: 2500, isTestMode: true)
+
+        let sessionA = store.getSessions(for: .codex).first(where: { $0.sessionId == threadA })
+        let sessionB = store.getSessions(for: .codex).first(where: { $0.sessionId == threadB })
+
+        XCTAssertEqual(sessionA?.status, .working, "Thread A must remain working.")
+        XCTAssertEqual(sessionA?.turnId, "turn_A", "Thread A turnId must be intact.")
+        XCTAssertEqual(sessionA?.thinkingStartTime, startA, "Thread A start time must be intact.")
+        XCTAssertEqual(sessionB?.status, .done, "Thread B must be done.")
+        XCTAssertEqual(store.getStatus(for: .codex).status, .working, "Parent status must be working while thread A is active.")
+    }
+
+    func testCodexPartialJSONLineAndOnceAppended() throws {
+        let monitor = AutoMonitor.shared
+        monitor.resetTestMetrics()
+
+        let tmpPath = NSTemporaryDirectory() + "codex_xct_partial_\(UUID().uuidString).jsonl"
+        defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+        let partial = "{\"timestamp\":\"2026-08-17T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_st"
+        try partial.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+
+        let threadInfo = AutoMonitor.CodexThreadInfo(id: "codex_xct_part_t", title: "Partial", rolloutPath: tmpPath)
+        monitor.processCodexRollout(thread: threadInfo)
+
+        let s1 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_xct_part_t" })
+        XCTAssertTrue(s1 == nil || s1?.status != .working, "Partial fragment must not trigger working.")
+
+        if let handle = FileHandle(forWritingAtPath: tmpPath) {
+            handle.seekToEndOfFile()
+            handle.write("arted\",\"turn_id\":\"turn_xct_part_1\"}}\n".data(using: .utf8)!)
+            try? handle.closeFile()
+        }
+
+        monitor.processCodexRollout(thread: threadInfo)
+        let s2 = AgentStore.shared.getSessions(for: .codex).first(where: { $0.sessionId == "codex_xct_part_t" })
+        XCTAssertEqual(s2?.status, .working, "Complete line must trigger working.")
+        XCTAssertEqual(s2?.turnId, "turn_xct_part_1")
+    }
+
+    func testCompactSummaryHierarchyAndPreferencePersistence() throws {
+        let store = AgentStore.shared
+        store.currentTheme = .classic
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+        store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+        store.purgeSyntheticAndStaleSessions(provider: .codex)
+
+        // All idle -> ⚪
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .claude, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        store.updateStatus(for: .codex, status: .idle)
+        XCTAssertEqual(store.compactSummary(), "⚪")
+
+        // One working (Claude) -> CLD🟡
+        store.updateStatus(for: .claude, status: .working)
+        XCTAssertEqual(store.compactSummary(), "CLD🟡")
+
+        // Two working (Claude & ChatGPT) -> CLD🟡 +1 (or GPT🟡 +1)
+        store.updateStatus(for: .chatgpt, status: .working)
+        let twoWorking = store.compactSummary()
+        XCTAssertTrue(twoWorking.contains("🟡") && twoWorking.contains("+1"), "Two working providers must show top provider and +1: \(twoWorking)")
+
+        // Done + Working -> Working wins (CLD🟡)
+        store.updateStatus(for: .chatgpt, status: .done)
+        XCTAssertEqual(store.compactSummary(), "CLD🟡")
+
+        // Needs You + Working -> Needs You wins (AGY🔴)
+        store.updateStatus(for: .antigravity, status: .blocked)
+        XCTAssertEqual(store.compactSummary(), "AGY🔴")
+
+        // Config persistence
+        let configMgr = ConfigManager.shared
+        var cfg = configMgr.config
+        cfg.menuBarDisplayMode = "compact"
+        configMgr.saveConfig(cfg)
+        configMgr.loadConfig()
+        XCTAssertEqual(configMgr.config.menuBarDisplayMode, "compact")
+
+        cfg.menuBarDisplayMode = "detailed"
+        configMgr.saveConfig(cfg)
+        configMgr.loadConfig()
+        XCTAssertEqual(configMgr.config.menuBarDisplayMode, "detailed")
+    }
+
+    func testCodexExcludedFromSmartAuto() throws {
+        XCTAssertFalse(SleepManager.trustedProviders.contains(.codex), "Codex must not be in trustedProviders.")
+    }
+
+    func testQuotaAvailabilityDisplayDetailedAndCompact() throws {
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+        store.currentTheme = .classic
+
+        // Available -> CLD:⚪
+        let availUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 45.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: availUsage)
+        store.updateStatus(for: .claude, status: .idle)
+        XCTAssertTrue(store.overallSummary().contains("CLD:⚪"))
+        XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
+        XCTAssertEqual(store.getStatus(for: .claude).availability, .available)
+
+        // Quota Exhausted -> CLD:⛔
+        let exhaustedUsage = AgentUsageData(
+            agent: .claude,
+            sessionLimitPercent: 100.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "plan-usage-history.json",
+            freshness: "Fresh"
+        )
+        usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+        store.updateStatus(for: .claude, status: .idle)
+        XCTAssertTrue(store.overallSummary().contains("CLD:⛔"))
+        XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
+        XCTAssertEqual(store.getStatus(for: .claude).availability, .quotaExhausted)
+
+        // Compact when all else idle -> CLD⛔
+        store.updateStatus(for: .chatgpt, status: .idle)
+        store.updateStatus(for: .codex, status: .idle)
+        store.updateStatus(for: .antigravity, status: .idle)
+        XCTAssertEqual(store.compactSummary(), "CLD⛔")
+
+        // Compact when AGY Working -> AGY🟡
+        store.updateStatus(for: .antigravity, status: .working)
+        XCTAssertEqual(store.compactSummary(), "AGY🟡")
+
+        // Compact when AGY Needs You -> AGY🔴
+        store.updateStatus(for: .antigravity, status: .blocked)
+        XCTAssertEqual(store.compactSummary(), "AGY🔴")
+    }
+
+    func testUnifiedDisplayStatusDerivationAcrossAllStates() throws {
+        let store = AgentStore.shared
+        let usageStore = AgentUsageStore.shared
+
+        // Off
+        store.updateStatus(for: .codex, status: .off)
+        let offInfo = store.getStatus(for: .codex)
+        XCTAssertEqual(offInfo.effectiveDisplayStatus, .off)
+        XCTAssertEqual(offInfo.effectiveDisplayStatus.badge(theme: .classic), "⚫")
+        XCTAssertEqual(offInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "😴")
+
+        // Idle + Available
+        let availUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 50.0, isPercentUsed: true, isLiveSource: true, quotaSource: "plan-usage-history.json", freshness: "Fresh")
+        usageStore.updateUsage(for: .claude, data: availUsage)
+        store.updateStatus(for: .claude, status: .idle)
+        let idleInfo = store.getStatus(for: .claude)
+        XCTAssertEqual(idleInfo.effectiveDisplayStatus, .idle)
+        XCTAssertEqual(idleInfo.effectiveDisplayStatus.badge(theme: .classic), "⚪")
+        XCTAssertEqual(idleInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🫥")
+
+        // Idle + Quota Exhausted
+        let exhaustedUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, quotaSource: "plan-usage-history.json", freshness: "Fresh")
+        usageStore.updateUsage(for: .claude, data: exhaustedUsage)
+        store.updateStatus(for: .claude, status: .idle)
+        let exhaustedInfo = store.getStatus(for: .claude)
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🤯")
+        XCTAssertEqual(exhaustedInfo.status, .idle)
+
+        // Working
+        store.updateStatus(for: .antigravity, status: .working)
+        let workingInfo = store.getStatus(for: .antigravity)
+        XCTAssertEqual(workingInfo.effectiveDisplayStatus, .working)
+        XCTAssertEqual(workingInfo.effectiveDisplayStatus.badge(theme: .classic), "🟡")
+        XCTAssertEqual(workingInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🤔")
+
+        // Done
+        store.updateStatus(for: .chatgpt, status: .done)
+        let doneInfo = store.getStatus(for: .chatgpt)
+        XCTAssertEqual(doneInfo.effectiveDisplayStatus, .done)
+        XCTAssertEqual(doneInfo.effectiveDisplayStatus.badge(theme: .classic), "🟢")
+        XCTAssertEqual(doneInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🐶")
+
+        // Blocked / Needs You
+        store.updateStatus(for: .antigravity, status: .blocked)
+        let blockedInfo = store.getStatus(for: .antigravity)
+        XCTAssertEqual(blockedInfo.effectiveDisplayStatus, .blocked)
+        XCTAssertEqual(blockedInfo.effectiveDisplayStatus.badge(theme: .classic), "🔴")
+        XCTAssertEqual(blockedInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🥶")
+    }
 }
 #endif
 

@@ -85,6 +85,8 @@ public final class AutoMonitor: @unchecked Sendable {
         readTailCallCount = 0
         lastClaudeTranscriptPath = nil
         lastClaudeModDate = nil
+        codexRolloutOffsets.removeAll()
+        codexPendingLineBuffers.removeAll()
         pollBodyHandler = nil
         checkLock.unlock()
         resetProcessTracking()
@@ -540,17 +542,23 @@ public final class AutoMonitor: @unchecked Sendable {
         public let id: String
         public let title: String
         public let rolloutPath: String
+        public let cwd: String
         public let updatedAtMs: Int64
 
-        public init(id: String, title: String, rolloutPath: String, updatedAtMs: Int64) {
+        public init(id: String, title: String, rolloutPath: String, cwd: String = "", updatedAtMs: Int64 = 0) {
             self.id = id
             self.title = title
             self.rolloutPath = rolloutPath
+            self.cwd = cwd
             self.updatedAtMs = updatedAtMs
         }
     }
 
-    public func fetchCodexThreads(limit: Int = 5) -> [CodexThreadInfo] {
+    // Codex Incremental Rollout Tracking Offsets and Partial-Line Buffers
+    public private(set) var codexRolloutOffsets: [String: UInt64] = [:]
+    public private(set) var codexPendingLineBuffers: [String: String] = [:]
+
+    public func fetchCodexThreads(limit: Int = 10) -> [CodexThreadInfo] {
         let fm = FileManager.default
         let dbPath = NSString(string: "~/.codex/state_5.sqlite").expandingTildeInPath
         let globalStatePath = NSString(string: "~/.codex/.codex-global-state.json").expandingTildeInPath
@@ -569,42 +577,33 @@ public final class AutoMonitor: @unchecked Sendable {
             targetThreadId = topId
         }
 
-        if targetThreadId == nil {
-            let locksDir = NSString(string: "~/.codex/thread-writer-locks").expandingTildeInPath
-            if let lockFiles = try? fm.contentsOfDirectory(atPath: locksDir) {
-                let activeLocks = lockFiles.filter { $0.hasSuffix(".lock") && !$0.hasPrefix(".") && $0 != ".coordination.lock" }
-                if let newestLock = activeLocks.first {
-                    targetThreadId = newestLock.replacingOccurrences(of: ".lock", with: "")
-                }
-            }
-        }
-
         var results: [CodexThreadInfo] = []
         var seenIds = Set<String>()
 
         if fm.fileExists(atPath: dbPath) {
             if let tid = targetThreadId {
-                let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || updated_at_ms FROM threads WHERE id='\(tid)';"
+                let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0;"
                 if let output = runProcessWithTimeout(
                     executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                     arguments: [dbPath, query],
                     timeoutSeconds: 1.0
                 ) {
                     let parts = output.components(separatedBy: "|||")
-                    if parts.count >= 4 {
+                    if parts.count >= 5 {
                         let tidStr = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
                         let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
                         let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let cwd = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                         if !tidStr.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) {
                             seenIds.insert(tidStr)
-                            results.append(CodexThreadInfo(id: tidStr, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, updatedAtMs: updated))
+                            results.append(CodexThreadInfo(id: tidStr, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
                         }
                     }
                 }
             }
 
-            let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
+            let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
             if let output = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                 arguments: [dbPath, query],
@@ -613,42 +612,17 @@ public final class AutoMonitor: @unchecked Sendable {
                 let lines = output.components(separatedBy: "\n")
                 for line in lines {
                     let parts = line.components(separatedBy: "|||")
-                    if parts.count >= 4 {
+                    if parts.count >= 5 {
                         let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
                         let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
                         let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let cwd = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
                         if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
                             seenIds.insert(tid)
-                            results.append(CodexThreadInfo(id: tid, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, updatedAtMs: updated))
+                            results.append(CodexThreadInfo(id: tid, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
                         }
                     }
-                }
-            }
-        }
-
-        if results.isEmpty {
-            let sessionsDir = NSString(string: "~/.codex/sessions").expandingTildeInPath
-            if let enumerator = fm.enumerator(atPath: sessionsDir) {
-                var newestFile: String?
-                var newestDate: Date = Date.distantPast
-
-                while let file = enumerator.nextObject() as? String {
-                    if file.hasSuffix(".jsonl") {
-                        let fullPath = (sessionsDir as NSString).appendingPathComponent(file)
-                        if let attrs = try? fm.attributesOfItem(atPath: fullPath),
-                           let modDate = attrs[.modificationDate] as? Date {
-                            if modDate > newestDate {
-                                newestDate = modDate
-                                newestFile = fullPath
-                            }
-                        }
-                    }
-                }
-
-                if let activeFile = newestFile {
-                    let filename = (activeFile as NSString).lastPathComponent
-                    results.append(CodexThreadInfo(id: filename, title: "Codex Session", rolloutPath: activeFile, updatedAtMs: Int64(newestDate.timeIntervalSince1970 * 1000.0)))
                 }
             }
         }
@@ -667,53 +641,95 @@ public final class AutoMonitor: @unchecked Sendable {
         return nil
     }
 
-    // Helper: Bounded Backward-Chunk Turn Reader for Large Codex Rollouts (>128 KB)
-    public func readTurnFromRollout(atPath path: String, maxBytesToScan: UInt64 = 2097152) -> (turnLines: [String], turnId: String?)? {
+    // Helper: Incremental Rollout Stream Parser for Codex Parent Turns
+    public func processCodexRollout(thread: CodexThreadInfo) {
         let fm = FileManager.default
-        guard let attrs = try? fm.attributesOfItem(atPath: path),
-              let fileSize = attrs[.size] as? UInt64, fileSize > 0,
-              let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.closeFile() }
-
-        readTailCallCount += 1
-
-        let bytesToRead = min(fileSize, maxBytesToScan)
-        let startOffset = fileSize - bytesToRead
-
-        handle.seek(toFileOffset: startOffset)
-        let data = handle.readDataToEndOfFile()
-        guard let content = String(data: data, encoding: .utf8) else { return nil }
-
-        let lines = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-
-        var lastTaskStartIdx = -1
-        var extractedTurnId: String? = nil
-
-        for (idx, line) in lines.enumerated() {
-            if line.contains("task_started") || line.contains("user_message") {
-                lastTaskStartIdx = idx
-                if let data = line.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let payload = json["payload"] as? [String: Any] {
-                        if let tid = payload["turn_id"] as? String { extractedTurnId = tid }
-                        else if let id = payload["id"] as? String { extractedTurnId = id }
-                    }
-                }
-            }
+        let path = thread.rolloutPath
+        guard fm.fileExists(atPath: path),
+              let attrs = try? fm.attributesOfItem(atPath: path),
+              let fileSize = attrs[.size] as? UInt64 else {
+            return
         }
 
-        if lastTaskStartIdx >= 0 {
-            let turnLines = Array(lines[lastTaskStartIdx...])
-            return (turnLines, extractedTurnId ?? "\(lastTaskStartIdx)")
-        } else {
-            return (lines, nil)
+        var lastOffset = codexRolloutOffsets[thread.id]
+        if lastOffset == nil {
+            // First time seeing this thread rollout file:
+            // Scan the recent window (up to 65KB) to catch in-progress turns
+            let startOffset = fileSize > 65536 ? fileSize - 65536 : 0
+            lastOffset = startOffset
+        }
+
+        guard fileSize > lastOffset! else {
+            return
+        }
+
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        defer { try? handle.closeFile() }
+
+        handle.seek(toFileOffset: lastOffset!)
+        let newData = handle.readDataToEndOfFile()
+        codexRolloutOffsets[thread.id] = fileSize
+
+        guard let text = String(data: newData, encoding: .utf8), !text.isEmpty else { return }
+
+        let existingBuffer = codexPendingLineBuffers[thread.id] ?? ""
+        let combined = existingBuffer + text
+        let lines = combined.components(separatedBy: "\n")
+
+        if combined.hasSuffix("\n") {
+            codexPendingLineBuffers[thread.id] = ""
+        } else if let last = lines.last {
+            codexPendingLineBuffers[thread.id] = last
+        }
+
+        let completeLines = combined.hasSuffix("\n") ? lines : Array(lines.dropLast())
+
+        for line in completeLines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.hasPrefix("{") && trimmed.hasSuffix("}") else { continue }
+
+            guard let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let payload = json["payload"] as? [String: Any],
+                  let payloadType = payload["type"] as? String else {
+                continue
+            }
+
+            let turnId = payload["turn_id"] as? String
+            let durationMs = payload["duration_ms"] as? Double
+
+            if payloadType == "task_started" {
+                _ = AgentStore.shared.handleCodexRolloutEvent(
+                    threadId: thread.id,
+                    title: thread.title,
+                    cwd: thread.cwd,
+                    rolloutPath: thread.rolloutPath,
+                    eventType: "task_started",
+                    turnId: turnId,
+                    durationMs: nil
+                )
+            } else if payloadType == "task_complete" {
+                _ = AgentStore.shared.handleCodexRolloutEvent(
+                    threadId: thread.id,
+                    title: thread.title,
+                    cwd: thread.cwd,
+                    rolloutPath: thread.rolloutPath,
+                    eventType: "task_complete",
+                    turnId: turnId,
+                    durationMs: durationMs
+                )
+            }
         }
     }
 
-    // 3. Codex Process Watcher (Session automation disabled for baseline recovery)
+    // 3. Codex Process & Rollout Watcher (Parent Rollout Event Truth)
     private func checkCodexLogAndProcess() {
         let workspace = NSWorkspace.shared
-        let codexApp = workspace.runningApplications.first(where: { $0.bundleIdentifier == "com.openai.codex" || $0.localizedName?.lowercased() == "codex" || $0.localizedName?.lowercased() == "chatgpt" })
+        let codexApp = workspace.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.openai.codex" ||
+            $0.localizedName?.lowercased() == "codex" ||
+            $0.localizedName?.lowercased() == "chatgpt"
+        })
 
         guard codexApp != nil else {
             AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
@@ -721,10 +737,19 @@ public final class AutoMonitor: @unchecked Sendable {
             return
         }
 
-        AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Monitoring unavailable / Experimental")
-        AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
-    }
+        let threads = fetchCodexThreads(limit: 10)
+        for thread in threads {
+            processCodexRollout(thread: thread)
+        }
 
+        AgentStore.shared.pruneStaleCodexSessions()
+
+        let currentCodexSessions = AgentStore.shared.getSessions(for: .codex)
+        if currentCodexSessions.isEmpty {
+            AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop ready")
+            AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+        }
+    }
 
     private func fetchCodexSessionTitle() -> String? {
         return fetchCodexThreadInfo()?.title

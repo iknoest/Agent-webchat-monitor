@@ -19,22 +19,21 @@
 
 ### ACCEPTED
 - [x] **ChatGPT**: Exact Chrome return routing (`[x] Ava accepted`: exact Chrome tabId activation without opening new tabs/windows)
-- [x] **Claude Quota Semantics**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, Smart Auto keep-awake excluded when exhausted (`[x] Implementation Accepted`; 100% exhausted UI natural-event confirmation pending)
+- [x] **Claude Lifecycle**: Provider-native lifecycle hooks (`[x] Ava accepted`: real-use accepted)
+- [x] **Claude Quota Semantics & 100% Exhausted UI**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, Smart Auto keep-awake excluded when exhausted (`[x] Ava accepted`: real-use 100% 5-hour quota exhaustion observed, verified unified `⛔` badge, truthful 100% display, and clean lifecycle isolation)
 - [x] **Closed-Lid V2 Smart Auto Keep-Awake**: Privileged `pmset disablesleep 1`/`0` integration under Smart Auto policy, battery floor safety (<20%), automatic restoration upon work completion (`[x] Ava accepted`: verified real 4-minute closed-lid continuous execution and automatic clean restoration to `SleepDisabled 0`; crash recovery automated verified)
+- [x] **Unified Display Status & Menu Bar Modes**: Shared `EffectiveDisplayStatus` derivation across Detailed (default) and Compact (optional provider-aware), persistent user preference, and stable status item autosave name (`[x] Implemented & Verified`)
 
 ### TESTING / HUMAN ACCEPTANCE PENDING
-- [ ] **Antigravity Permission**: Native hooks + AX notification center probe (`IMPLEMENTED — HUMAN ACCEPTANCE PENDING`)
-- [ ] **Claude 100% Quota Exhausted UI**: Natural-event human confirmation pending next natural exhaustion
-- [ ] **Claude Lifecycle**: Provider-native hooks undergoing final Ava real-use acceptance
-
-### OPEN
-- [ ] **Codex**: Codex Desktop session detector
-- [ ] **Smart Keep-Awake**: Open-Lid validation across multi-agent active turns
-- [ ] **Telegram mobile notification**: Remote attention push notifications
-- [ ] **Quota tracking**: Live quota sources for Codex and Antigravity
+- [ ] **Antigravity Permission**: Native hooks + AX notification center probe (`IMPLEMENTED — HUMAN ACCEPTANCE PENDING` pending next natural event)
 
 ### PARKED
+- [ ] **Codex Desktop v1 Working/Done Lifecycle**: `IMPLEMENTED — HUMAN ACCEPTANCE PARKED` (Parent rollout watcher `task_started`/`task_complete` per-thread isolation implemented; human acceptance parked until quota availability around Aug 20; strictly excluded from Smart Auto `trustedProviders`)
 - [ ] **AGY extended provider-task lifetime tracking**: Parked to prioritize reliable Needs You (🔴) permission detection
 - [ ] **Relay**: Clean AI output relay enhancements
 - [ ] **Desktop exact-session navigation**: Parked until native accessibility / URL schemes exist
 - [ ] **Multi-agent autonomous turn orchestration**: Parked for future milestone
+
+### OPEN
+- [ ] **Telegram mobile notification**: Remote attention push notifications
+- [ ] **Quota tracking**: Live quota sources for Codex and Antigravity

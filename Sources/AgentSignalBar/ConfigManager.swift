@@ -69,6 +69,7 @@ public struct AppConfig: Codable {
     public var doneSoundName: String? // default "Glass"
     public var attentionSoundName: String? // default "Basso"
     public var antiSleepMode: String? // default "smartAuto"
+    public var menuBarDisplayMode: String? // default "detailed" ("detailed" or "compact")
     public var isClosedLidEnabled: Bool? // default false
     public var minBatteryPercentForClosedLid: Int? // default 20
     public var customMainIconPath: String?
@@ -85,6 +86,7 @@ public struct AppConfig: Codable {
             doneSoundName: "Glass",
             attentionSoundName: "Basso",
             antiSleepMode: "smartAuto",
+            menuBarDisplayMode: "detailed",
             isClosedLidEnabled: false,
             minBatteryPercentForClosedLid: 20,
             customMainIconPath: nil,

@@ -151,6 +151,78 @@ public enum AgentStatus: String, Codable, Sendable {
     }
 }
 
+public enum EffectiveDisplayStatus: String, Codable, Sendable {
+    case blocked = "blocked"
+    case working = "working"
+    case done = "done"
+    case quotaExhausted = "quotaExhausted"
+    case idle = "idle"
+    case off = "off"
+
+    public func badge(theme: BadgeThemeMode = .classic, thinkingDuration: TimeInterval? = nil, overworkThresholdMinutes: Int = 10) -> String {
+        switch theme {
+        case .classic:
+            switch self {
+            case .off: return "⚫"
+            case .idle: return "⚪"
+            case .working: return "🟡"
+            case .done: return "🟢"
+            case .blocked: return "🔴"
+            case .quotaExhausted: return "⛔"
+            }
+        case .funEmoji:
+            switch self {
+            case .off: return "😴"
+            case .idle: return "🫥"
+            case .working:
+                if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
+                    return "🥵"
+                }
+                return "🤔"
+            case .done: return "🐶"
+            case .blocked: return "🥶"
+            case .quotaExhausted: return "🤯"
+            }
+        }
+    }
+
+    public func statusDotImage() -> NSImage {
+        let size = NSSize(width: 12, height: 12)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let color: NSColor
+        switch self {
+        case .off: color = NSColor.secondaryLabelColor
+        case .idle: color = NSColor.labelColor.withAlphaComponent(0.4)
+        case .working: color = NSColor.systemYellow
+        case .done: color = NSColor.systemGreen
+        case .blocked: color = NSColor.systemRed
+        case .quotaExhausted: color = NSColor.systemOrange
+        }
+
+        let rect = NSRect(x: 1, y: 1, width: 10, height: 10)
+        let path = NSBezierPath(ovalIn: rect)
+        color.setFill()
+        path.fill()
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    public var statusTitle: String {
+        switch self {
+        case .off: return "Closed"
+        case .idle: return "Idle"
+        case .working: return "Working..."
+        case .done: return "NEW Output Ready!"
+        case .blocked: return "ATTENTION NEEDED!"
+        case .quotaExhausted: return "Quota Exhausted"
+        }
+    }
+}
+
 public struct ChatGPTTabInfo: Codable {
     public let tabId: Int?
     public let title: String
@@ -288,6 +360,26 @@ public struct AgentInfo: Codable {
         self.openTabs = openTabs
         self.revision = revision
         self.turnId = turnId
+    }
+
+    public var effectiveDisplayStatus: EffectiveDisplayStatus {
+        if status == .off {
+            return .off
+        }
+        if status == .blocked {
+            return .blocked
+        }
+        if status == .working {
+            return .working
+        }
+        if status == .done {
+            return .done
+        }
+        let isExhausted = (availability == .quotaExhausted) || (AgentUsageStore.shared.getUsage(for: id)?.isQuotaExhausted == true)
+        if isExhausted {
+            return .quotaExhausted
+        }
+        return .idle
     }
 }
 
@@ -963,6 +1055,129 @@ public final class AgentStore: @unchecked Sendable {
         return true
     }
 
+    // 2B. Codex Rollout Lifecycle Handler (Parent Rollout Event Truth)
+    public func handleCodexRolloutEvent(
+        threadId: String,
+        title: String? = nil,
+        cwd: String? = nil,
+        rolloutPath: String? = nil,
+        eventType: String,
+        turnId: String?,
+        durationMs: Double? = nil,
+        isTestMode: Bool = false
+    ) -> Bool {
+        guard !threadId.isEmpty else { return false }
+
+        // Test Isolation Guard: Reject synthetic test threads in production monitor mode
+        if !isTestMode && AgentStore.isSyntheticTestSessionId(threadId) {
+            return true
+        }
+
+        lock.lock()
+        var currentSessions = trackedSessions[.codex] ?? [:]
+        let rawCwd = cwd ?? ""
+        let folderName = (rawCwd as NSString).lastPathComponent
+        let defaultTitle = folderName.isEmpty ? "Codex (\(threadId.prefix(8)))" : "[\(folderName)]"
+        let sessionTitle = (title?.isEmpty == false) ? title! : defaultTitle
+        let now = Date()
+
+        var session = currentSessions[threadId] ?? AgentSessionInfo(
+            provider: .codex,
+            sessionId: threadId,
+            title: sessionTitle,
+            status: .idle,
+            turnId: turnId,
+            sourceEvidence: "Codex Rollout: Registered",
+            lastUpdated: now
+        )
+
+        session.title = sessionTitle
+        session.lastUpdated = now
+
+        switch eventType {
+        case "task_started":
+            session.status = .working
+            session.turnId = turnId
+            session.thinkingStartTime = now
+            session.attentionReason = nil
+            session.acknowledgedTurnId = nil
+            session.acknowledgedAt = nil
+            session.sourceEvidence = "Codex Rollout: task_started"
+            session.sensorReason = "Codex Rollout: task_started"
+            currentSessions[threadId] = session
+            trackedSessions[.codex] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .codex, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        case "task_complete":
+            // Turn-ID matching invariant: Only complete if turnId matches that session's current active turn!
+            guard let incomingTurnId = turnId, !incomingTurnId.isEmpty, incomingTurnId == session.turnId else {
+                // Mismatched task_complete -> ignore for lifecycle mutation!
+                lock.unlock()
+                return false
+            }
+
+            session.status = .done
+            session.attentionReason = nil
+            if let dMs = durationMs, dMs > 0 {
+                session.lastDurationSeconds = dMs / 1000.0
+            } else if let start = session.thinkingStartTime {
+                session.lastDurationSeconds = now.timeIntervalSince(start)
+            }
+            session.thinkingStartTime = nil
+            session.sourceEvidence = "Codex Rollout: task_complete"
+            session.sensorReason = "Codex Rollout: task_complete"
+            currentSessions[threadId] = session
+            trackedSessions[.codex] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .codex, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        default:
+            lock.unlock()
+            return false
+        }
+    }
+
+    public func pruneStaleCodexSessions(maxAgeSeconds: TimeInterval = 300) {
+        lock.lock()
+        var currentSessions = trackedSessions[.codex] ?? [:]
+        let now = Date()
+        var changed = false
+
+        for (sessionId, session) in currentSessions {
+            // MUST NEVER prune working or blocked sessions due to age!
+            if session.status == .working || session.status == .blocked {
+                continue
+            }
+
+            // Prune synthetic test sessions immediately if any exist
+            if AgentStore.isSyntheticTestSessionId(sessionId) {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+                continue
+            }
+
+            // Prune completed (.done) or idle (.idle) sessions older than maxAgeSeconds (5 minutes)
+            if now.timeIntervalSince(session.lastUpdated) > maxAgeSeconds {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+            }
+        }
+
+        if changed {
+            trackedSessions[.codex] = currentSessions
+        }
+        lock.unlock()
+
+        if changed {
+            syncSessions(for: .codex, activeSessions: Array(currentSessions.values), processRunning: true)
+        }
+    }
+
     // 3. Disambiguated Notification Center Correlation: Binds uniquely strongest candidate with unresolved native pending-tool evidence
     public func updateAntigravityPermissionFromNotification(reason: String) {
         lock.lock()
@@ -1275,10 +1490,59 @@ public final class AgentStore: @unchecked Sendable {
             let customCfg = ConfigManager.shared.getAgentConfig(for: agent)
 
             let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
-            let badge = info.status.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkThresholdMinutes)
+            let displayStatus = info.effectiveDisplayStatus
+            let badge = displayStatus.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkThresholdMinutes)
 
             let tag = customCfg?.shortTag ?? agent.shortTag
             return "\(tag):\(badge)"
         }.joined(separator: " ")
+    }
+
+    public func compactSummary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Priority hierarchy: Blocked (Needs You) > Working > Done > Quota Exhausted > Idle > Off
+        let priorityOrder: [EffectiveDisplayStatus] = [.blocked, .working, .done, .quotaExhausted]
+
+        for targetDisplayStatus in priorityOrder {
+            var matchingProviders: [AgentID] = []
+            for agent in AgentID.allCases {
+                let info = states[agent] ?? AgentInfo(id: agent, status: .off)
+                if info.effectiveDisplayStatus == targetDisplayStatus {
+                    matchingProviders.append(agent)
+                }
+            }
+
+            if !matchingProviders.isEmpty {
+                // Prioritize the provider that was updated most recently
+                matchingProviders.sort { a, b in
+                    let infoA = states[a] ?? AgentInfo(id: a)
+                    let infoB = states[b] ?? AgentInfo(id: b)
+                    return infoA.lastUpdated > infoB.lastUpdated
+                }
+
+                let topAgent = matchingProviders.first!
+                let customCfg = ConfigManager.shared.getAgentConfig(for: topAgent)
+                let tag = customCfg?.shortTag ?? topAgent.shortTag
+                let badge = targetDisplayStatus.badge(theme: currentTheme)
+
+                let extraCount = matchingProviders.count - 1
+                if extraCount > 0 {
+                    return "\(tag)\(badge) +\(extraCount)"
+                } else {
+                    return "\(tag)\(badge)"
+                }
+            }
+        }
+
+        // Check normal Idle providers
+        let anyIdle = states.values.contains { $0.status == .idle && $0.effectiveDisplayStatus == .idle }
+        if anyIdle {
+            return "⚪"
+        }
+
+        // Off
+        return "⚫"
     }
 }
