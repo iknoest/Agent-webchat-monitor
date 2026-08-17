@@ -258,36 +258,51 @@ public final class AutoMonitor: @unchecked Sendable {
     private var lastAgyQuotaFetch: Date = .distantPast
     private var lastCodexQuotaFetch: Date = .distantPast
 
+    public func refreshUsageNow() {
+        lastAgyQuotaFetch = .distantPast
+        lastCodexQuotaFetch = .distantPast
+        updateClaudeUsageFromLocalHistory()
+        updateAntigravityUsageFromLocalFiles()
+        updateCodexUsageFromLocalFiles()
+    }
+
     // Dynamic Antigravity Usage Sync from local language_server Connect RPC
     private func updateAntigravityUsageFromLocalFiles() {
         let now = Date()
         if now.timeIntervalSince(lastAgyQuotaFetch) >= 10.0 {
             lastAgyQuotaFetch = now
             if let liveUsage = AntigravityLocalQuotaConnector.shared.fetchQuota() {
-                AgentUsageStore.shared.updateUsage(for: .antigravity, data: liveUsage)
-                AgentStore.shared.updateAvailability(for: .antigravity, availability: liveUsage.availability)
+                var updated = liveUsage
+                updated.lastSuccessfulRefresh = now
+                AgentUsageStore.shared.updateUsage(for: .antigravity, data: updated)
+                AgentStore.shared.updateAvailability(for: .antigravity, availability: updated.availability)
                 return
             }
         }
 
-        var usage = AgentUsageStore.shared.getUsage(for: .antigravity) ?? AgentUsageData(agent: .antigravity)
-        if !usage.isLiveSource {
-            usage.sessionLimitPercent = nil
-            usage.sessionResetText = nil
-            usage.weeklyLimitPercent = nil
-            usage.weeklyResetText = nil
-            usage.extraMetricText = "Live source unavailable"
-            usage.modelFamilies = []
-            usage.isPercentUsed = false
-            usage.isLiveSource = false
-            usage.quotaSource = "none"
-            usage.sourceAuthority = "loaded_from_config"
-            usage.quotaTimestamp = nil
-            usage.parserDecision = "no_live_disk_file"
-            usage.freshness = "Unavailable"
-            usage.lastUpdated = now
-            AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
+        // Stale-while-revalidate: if existing live usage exists, preserve it!
+        let existing = AgentUsageStore.shared.getUsage(for: .antigravity)
+        if let existing = existing, existing.isLiveSource || !existing.modelFamilies.isEmpty {
+            AgentStore.shared.updateAvailability(for: .antigravity, availability: existing.availability)
+            return
         }
+
+        var usage = existing ?? AgentUsageData(agent: .antigravity)
+        usage.sessionLimitPercent = nil
+        usage.sessionResetText = nil
+        usage.weeklyLimitPercent = nil
+        usage.weeklyResetText = nil
+        usage.extraMetricText = "Live source unavailable"
+        usage.modelFamilies = []
+        usage.isPercentUsed = false
+        usage.isLiveSource = false
+        usage.quotaSource = "none"
+        usage.sourceAuthority = "loaded_from_config"
+        usage.quotaTimestamp = nil
+        usage.parserDecision = "no_live_disk_file"
+        usage.freshness = "Unavailable"
+        usage.lastUpdated = now
+        AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
         AgentStore.shared.updateAvailability(for: .antigravity, availability: usage.availability)
     }
 
@@ -325,6 +340,7 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.sourceAuthority = "live_first_party"
         usage.quotaSource = "claude_plan_usage_history"
         usage.quotaTimestamp = sampleDate
+        usage.lastSuccessfulRefresh = Date()
         usage.parserDecision = isStale ? "stale_sample_history" : "parsed_live_sample"
         usage.freshness = isStale ? "Stale" : "Fresh"
         usage.lastUpdated = Date()
@@ -339,29 +355,36 @@ public final class AutoMonitor: @unchecked Sendable {
         if now.timeIntervalSince(lastCodexQuotaFetch) >= 30.0 {
             lastCodexQuotaFetch = now
             if let liveUsage = CodexAppServerQuotaConnector.shared.fetchQuota() {
-                AgentUsageStore.shared.updateUsage(for: .codex, data: liveUsage)
+                var updated = liveUsage
+                updated.lastSuccessfulRefresh = now
+                AgentUsageStore.shared.updateUsage(for: .codex, data: updated)
                 AgentStore.shared.updateAvailability(for: .codex, availability: liveUsage.availability)
                 return
             }
         }
 
-        var usage = AgentUsageStore.shared.getUsage(for: .codex) ?? AgentUsageData(agent: .codex)
-        if !usage.isLiveSource {
-            let q = ConfigManager.shared.config.quotas?["codex"]
-            usage.weeklyLimitPercent = q?.weeklyPercent
-            usage.weeklyResetText = q?.weeklyResetText
-            usage.resetCardCount = q?.resetCardCount
-            usage.resetCardExpiryText = q?.resetCardExpiryText
-            usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
-            usage.isPercentUsed = q?.isPercentUsed ?? false
-            usage.isLiveSource = false
-            usage.quotaSource = "none"
-            usage.quotaTimestamp = nil
-            usage.parserDecision = "no_live_disk_file"
-            usage.freshness = "Unavailable"
-            usage.lastUpdated = now
-            AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
+        // Stale-while-revalidate: if existing live usage exists, preserve it!
+        let existing = AgentUsageStore.shared.getUsage(for: .codex)
+        if let existing = existing, existing.isLiveSource || existing.weeklyLimitPercent != nil {
+            AgentStore.shared.updateAvailability(for: .codex, availability: existing.availability)
+            return
         }
+
+        var usage = existing ?? AgentUsageData(agent: .codex)
+        let q = ConfigManager.shared.config.quotas?["codex"]
+        usage.weeklyLimitPercent = q?.weeklyPercent
+        usage.weeklyResetText = q?.weeklyResetText
+        usage.resetCardCount = q?.resetCardCount
+        usage.resetCardExpiryText = q?.resetCardExpiryText
+        usage.extraMetricText = q?.extraMetricText ?? "Live disk quota unavailable"
+        usage.isPercentUsed = q?.isPercentUsed ?? false
+        usage.isLiveSource = false
+        usage.quotaSource = "none"
+        usage.quotaTimestamp = nil
+        usage.parserDecision = "no_live_disk_file"
+        usage.freshness = "Unavailable"
+        usage.lastUpdated = now
+        AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
         AgentStore.shared.updateAvailability(for: .codex, availability: usage.availability)
     }
 
@@ -1137,7 +1160,53 @@ public final class AntigravityLocalQuotaConnector: NSObject, URLSessionDelegate,
         return usage
     }
 
-    public func formatResetText(from isoString: String?) -> String? {
+    public static func formatResetDateTime(date: Date, now: Date = Date(), timeZone: TimeZone = .current) -> String {
+        let calendar = Calendar.current
+        let diff = date.timeIntervalSince(now)
+
+        if diff <= 0 {
+            return "soon"
+        }
+
+        let relString: String
+        if diff < 3600 {
+            let mins = max(1, Int(round(diff / 60.0)))
+            relString = "in \(mins)m"
+        } else if diff < 86400 {
+            let hours = Int(diff / 3600.0)
+            let mins = (Int(diff) / 60) % 60
+            if mins > 0 {
+                relString = "in \(hours)h \(String(format: "%02dm", mins))"
+            } else {
+                relString = "in \(hours)h"
+            }
+        } else {
+            let days = Int(diff / 86400.0)
+            let hours = Int((diff.truncatingRemainder(dividingBy: 86400.0)) / 3600.0)
+            if hours > 0 {
+                relString = "in \(days)d \(hours)h"
+            } else {
+                relString = "in \(days)d"
+            }
+        }
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeZone = timeZone
+        timeFormatter.dateFormat = "HH:mm"
+        let timeStr = timeFormatter.string(from: date)
+
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "today \(timeStr) (\(relString))"
+        } else {
+            let dateFormatter = DateFormatter()
+            dateFormatter.timeZone = timeZone
+            dateFormatter.dateFormat = "MMM d"
+            let dateStr = dateFormatter.string(from: date)
+            return "\(dateStr) \(timeStr) (\(relString))"
+        }
+    }
+
+    public func formatResetText(from isoString: String?, now: Date = Date(), timeZone: TimeZone = .current) -> String? {
         guard let isoString = isoString, !isoString.isEmpty else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1147,22 +1216,7 @@ public final class AntigravityLocalQuotaConnector: NSObject, URLSessionDelegate,
             date = formatter.date(from: isoString)
         }
         guard let targetDate = date else { return isoString }
-        let diff = targetDate.timeIntervalSince(Date())
-        if diff <= 0 {
-            return "resets soon"
-        }
-        if diff > 86400 {
-            let days = Int(diff / 86400)
-            let hours = Int((diff.truncatingRemainder(dividingBy: 86400)) / 3600)
-            return "resets in \(days)d \(hours)h"
-        }
-        let minutes = (Int(diff) / 60) % 60
-        let hours = Int(diff) / 3600
-        if hours > 0 {
-            return "resets in \(hours)h \(minutes)m"
-        } else {
-            return "resets in \(minutes)m"
-        }
+        return "resets \(AntigravityLocalQuotaConnector.formatResetDateTime(date: targetDate, now: now, timeZone: timeZone))"
     }
 }
 
@@ -1333,22 +1387,8 @@ public final class CodexAppServerQuotaConnector: @unchecked Sendable {
         return usage
     }
 
-    public func formatCodexResetText(resetsAt: Int64) -> String {
+    public func formatCodexResetText(resetsAt: Int64, now: Date = Date(), timeZone: TimeZone = .current) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
-        let diff = date.timeIntervalSince(Date())
-        let df = DateFormatter()
-        df.dateFormat = "MMM d, h:mm a"
-        let formattedDate = df.string(from: date)
-        if diff > 86400 {
-            let days = Int(diff / 86400)
-            let hours = Int((diff.truncatingRemainder(dividingBy: 86400)) / 3600)
-            return "resets \(formattedDate) (in \(days)d \(hours)h)"
-        } else if diff > 0 {
-            let hours = Int(diff / 3600)
-            let minutes = Int((diff.truncatingRemainder(dividingBy: 3600)) / 60)
-            return "resets in \(hours)h \(minutes)m"
-        } else {
-            return "resets soon"
-        }
+        return "resets \(AntigravityLocalQuotaConnector.formatResetDateTime(date: date, now: now, timeZone: timeZone))"
     }
 }

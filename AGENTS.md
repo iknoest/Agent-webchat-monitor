@@ -706,3 +706,19 @@ Next: Commit and push `fix: complete AGY weekly quota and normalize quota displa
 Blockers: none
 
 [RELEASE] Quota Completeness & Display Normalization Closeout — antigravity — 2026-08-17T17:00:00+02:00
+
+## 2026-08-17 — antigravity — macos
+Status: DONE
+Phase: Quota UX Finalization & Roadmap Closeout
+Done:
+1. Stale-While-Revalidate Refresh: Fixed "Refresh Usage Limits" so existing valid quota data is never cleared or flashed to "Unknown / Live quota source unavailable". Manual refresh now updates asynchronously, displaying "Refreshing..." while preserving last-good quota samples.
+2. Removed Misleading "(Available)" Headers: Cleaned quota dashboard headers to display pure provider titles (`Claude Code`, `Antigravity`, `Codex Desktop`) with quota states (`(Quota Exhausted)`, `(Limited)`) only where materially useful, removing all confusing generic "(Available)" tags.
+3. Last-Known Quota Policy for Closed Apps: When a provider (e.g. Codex Desktop) is closed, its last-known quota remains visible with a truthful subtitle (`[Last known quota · updated Xm ago]`).
+4. Standardized 24-Hour Reset Times: Implemented unified reset time formatting (`resets today 18:42 (in 1h 34m)` / `resets Aug 20 09:06 (in 2d 16h)`) using 24-hour time, user local timezone, and zero seconds across all providers.
+5. Future Roadmap Item: Added `Quota Resume Orchestration` (`INVESTIGATION / P1 — NOT IMPLEMENTED`) with 3-level progression and 9 strict safety requirements to `PLAN.md`.
+6. Comprehensive Automated Verification: Added Tests 92–105 to `Stage1TestRunner` (105/105 passed), unit tests in `AgentSignalBarTests` (`swift test` passed), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` validation.
+Verified: `swift run Stage1TestRunner` (105/105 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/status`.
+Next: Commit and push `fix: finalize quota freshness and reset-time UX` to origin/main.
+Blockers: none
+
+[RELEASE] Quota UX Finalization & Roadmap Closeout — antigravity — 2026-08-17T17:18:00+02:00

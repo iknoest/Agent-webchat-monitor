@@ -70,6 +70,7 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
     public var parserDecision: String           // e.g. "parsed_live_sample", "no_live_disk_file", "user_config"
     public var sourceAuthority: String?         // "live_first_party", "injected_test", "loaded_from_config"
     public var freshness: String                // "Fresh", "Stale", or "Unavailable"
+    public var lastSuccessfulRefresh: Date?     // Timestamp of the last successful live query
     public var lastUpdated: Date
 
     public var sessionRemainingPercent: Double? {
@@ -95,6 +96,7 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
         quotaSource: String = "none",
         sourceAuthority: String? = nil,
         quotaTimestamp: Date? = nil,
+        lastSuccessfulRefresh: Date? = nil,
         parserDecision: String = "no_live_disk_file",
         freshness: String? = nil,
         lastUpdated: Date = Date()
@@ -113,6 +115,7 @@ public struct AgentUsageData: Codable, Sendable, Equatable {
         self.quotaSource = quotaSource
         self.sourceAuthority = sourceAuthority ?? (isLiveSource ? "live_first_party" : "loaded_from_config")
         self.quotaTimestamp = quotaTimestamp
+        self.lastSuccessfulRefresh = lastSuccessfulRefresh ?? (isLiveSource ? lastUpdated : nil)
         self.parserDecision = parserDecision
         self.lastUpdated = lastUpdated
 
@@ -211,6 +214,7 @@ public final class AgentUsageStore: @unchecked Sendable {
                 quotaSource: "none",
                 sourceAuthority: "loaded_from_config",
                 quotaTimestamp: nil,
+                lastSuccessfulRefresh: nil,
                 parserDecision: "no_live_disk_file",
                 freshness: "Unavailable",
                 lastUpdated: Date()
@@ -228,9 +232,16 @@ public final class AgentUsageStore: @unchecked Sendable {
             return
         }
 
-        let hasChanged = existing != data
+        var toStore = data
+        if toStore.isLiveSource && toStore.lastSuccessfulRefresh == nil {
+            toStore.lastSuccessfulRefresh = Date()
+        } else if !toStore.isLiveSource, let existing = existing, existing.lastSuccessfulRefresh != nil {
+            toStore.lastSuccessfulRefresh = existing.lastSuccessfulRefresh
+        }
 
-        usageData[agent] = data
+        let hasChanged = existing != toStore
+
+        usageData[agent] = toStore
         lock.unlock()
 
         // Only save to disk if values have genuinely changed

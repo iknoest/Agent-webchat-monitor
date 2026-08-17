@@ -107,6 +107,10 @@ public enum AgentStatus: String, Codable, Sendable {
         }
     }
 
+    public func statusDot(theme: BadgeThemeMode = .classic) -> String {
+        return badge(theme: theme)
+    }
+
     public func statusDotImage() -> NSImage {
         let size = NSSize(width: 12, height: 12)
         let image = NSImage(size: size)
@@ -224,6 +228,26 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         case .blocked: return "ATTENTION NEEDED!"
         case .quotaExhausted: return "Quota Exhausted"
         }
+    }
+
+    public static func from(lifecycle: AgentStatus, availability: ProviderAvailability) -> EffectiveDisplayStatus {
+        switch lifecycle {
+        case .blocked: return .blocked
+        case .working: return .working
+        case .done: return .done
+        case .quotaExceeded: return .quotaExhausted
+        case .idle:
+            if availability == .quotaExhausted {
+                return .quotaExhausted
+            }
+            return .idle
+        case .off: return .off
+        }
+    }
+
+    public static func from(lifecycle: String, availability: ProviderAvailability) -> EffectiveDisplayStatus {
+        let status = AgentStatus(rawValue: lifecycle) ?? .idle
+        return from(lifecycle: status, availability: availability)
     }
 }
 

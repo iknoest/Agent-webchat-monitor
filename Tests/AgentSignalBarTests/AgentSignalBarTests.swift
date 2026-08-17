@@ -1188,6 +1188,37 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(claude?.isExhausted ?? false)
         XCTAssertEqual(usage?.availability, .limited)
     }
+
+    func testQuotaUXFinalizationAndResetTimeFormatting() throws {
+        let now = Date()
+        let todayTarget = now.addingTimeInterval(5640) // +1h 34m
+        let formattedToday = AntigravityLocalQuotaConnector.formatResetDateTime(date: todayTarget, now: now)
+        XCTAssertTrue(formattedToday.hasPrefix("today "), "Reset today must start with 'today '")
+        XCTAssertTrue(formattedToday.contains("(in 1h 34m)"), "Reset today must show relative '(in 1h 34m)': \(formattedToday)")
+        XCTAssertFalse(formattedToday.contains("AM") || formattedToday.contains("PM"), "Must use 24-hour time")
+
+        let futureTarget = now.addingTimeInterval(86400 * 2 + 3600 * 16) // +2d 16h
+        let formattedFuture = AntigravityLocalQuotaConnector.formatResetDateTime(date: futureTarget, now: now)
+        XCTAssertFalse(formattedFuture.hasPrefix("today "))
+        XCTAssertTrue(formattedFuture.contains("(in 2d 16h)"), "Future reset relative format: \(formattedFuture)")
+
+        // Stale-while-revalidate preservation
+        let liveUsage = AgentUsageData(
+            agent: .codex,
+            weeklyLimitPercent: 79.0,
+            isPercentUsed: true,
+            isLiveSource: true,
+            quotaSource: "codex_app_server"
+        )
+        AgentUsageStore.shared.updateUsage(for: .codex, data: liveUsage)
+
+        let failedUsage = AgentUsageData(agent: .codex, isLiveSource: false, quotaSource: "none")
+        AgentUsageStore.shared.updateUsage(for: .codex, data: failedUsage)
+
+        let preserved = AgentUsageStore.shared.getUsage(for: .codex)
+        XCTAssertEqual(preserved?.weeklyRemainingPercent, 21.0, "Last-good quota must be preserved during failed refresh.")
+        XCTAssertEqual(preserved?.isLiveSource, true)
+    }
 }
 #endif
 
