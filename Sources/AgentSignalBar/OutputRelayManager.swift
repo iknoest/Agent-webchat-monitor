@@ -296,6 +296,14 @@ public final class OutputRelayManager: @unchecked Sendable {
             } else {
                 rawText = "ChatGPT Web Output"
             }
+
+        case .copilot:
+            let sessions = AutoMonitor.shared.fetchCopilotSessions(limit: 1)
+            if let top = sessions.first, let tail = AutoMonitor.shared.readTailOfFile(atPath: top.eventsPath, maxBytes: 16384) {
+                rawText = tail
+            } else {
+                rawText = "GitHub Copilot Output"
+            }
         }
 
         let clean = sanitizeOutputText(rawText)

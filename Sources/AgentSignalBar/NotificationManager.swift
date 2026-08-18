@@ -5,9 +5,13 @@ import UserNotifications
 public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate {
     public static let shared = NotificationManager()
 
-    public var soundEnabled: Bool = true
+    public var soundEnabled: Bool {
+        let done = ConfigManager.shared.config.doneSoundName ?? "Glass"
+        let attention = ConfigManager.shared.config.attentionSoundName ?? "Basso"
+        return done != "Mute (No Sound)" || attention != "Mute (No Sound)"
+    }
     private var currentSound: NSSound?
-    private var lastNotifiedStatus: [AgentID: AgentStatus] = [:]
+    public private(set) var lastNotifiedStatus: [AgentID: AgentStatus] = [:]
     private var lastSoundTime: [AgentID: Date] = [:]
     private let soundCooldownSeconds: TimeInterval = 3.0
 
@@ -40,11 +44,25 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
     }
 
     public func toggleSound() -> Bool {
-        soundEnabled.toggle()
-        return soundEnabled
+        if soundEnabled {
+            var cfg = ConfigManager.shared.config
+            cfg.doneSoundName = "Mute (No Sound)"
+            cfg.attentionSoundName = "Mute (No Sound)"
+            ConfigManager.shared.saveConfig(cfg)
+            return false
+        } else {
+            var cfg = ConfigManager.shared.config
+            cfg.doneSoundName = "Glass"
+            cfg.attentionSoundName = "Basso"
+            ConfigManager.shared.saveConfig(cfg)
+            return true
+        }
     }
 
     public func notify(agent: AgentID, oldStatus: AgentStatus, newStatus: AgentStatus, detail: String? = nil) {
+        // Disabled agents are excluded from notifications and sound
+        guard ConfigManager.shared.isAgentMonitored(agent) else { return }
+
         lastNotifiedStatus[agent] = newStatus
 
         guard newStatus == .done || newStatus == .blocked else { return }
@@ -99,7 +117,8 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
         // Audio Alert with 3.0s Anti-Beeping Cooldown Protection
         let now = Date()
         let lastTime = lastSoundTime[agent] ?? Date.distantPast
-        if soundEnabled && defaultSoundName != "Mute (No Sound)" && now.timeIntervalSince(lastTime) >= soundCooldownSeconds {
+        let isMuted = defaultSoundName == "Mute (No Sound)" || defaultSoundName == "None" || defaultSoundName.isEmpty
+        if !isMuted && now.timeIntervalSince(lastTime) >= soundCooldownSeconds {
             lastSoundTime[agent] = now
             playSound(named: defaultSoundName)
         }
@@ -107,7 +126,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable, UNUserNot
 
 
     public func playSound(named soundName: String) {
-        guard soundName != "Mute (No Sound)" else { return }
+        guard soundName != "Mute (No Sound)" && soundName != "None" && !soundName.isEmpty else { return }
         stopCurrentSound()
         if let sound = NSSound(named: soundName) {
             currentSound = sound

@@ -130,15 +130,32 @@ public final class AutoMonitor: @unchecked Sendable {
         let frontmostBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         AgentStore.shared.checkAutoInspect(frontmostBundleId: frontmostBundleId)
 
-        checkClaudeLog()
-        checkAntigravityLog()
-        checkCodexLogAndProcess()
-        checkChatGPTExpiry()
+        if ConfigManager.shared.isAgentMonitored(.claude) {
+            checkClaudeLog()
+        }
+        if ConfigManager.shared.isAgentMonitored(.antigravity) {
+            checkAntigravityLog()
+        }
+        if ConfigManager.shared.isAgentMonitored(.codex) {
+            checkCodexLogAndProcess()
+        }
+        if ConfigManager.shared.isAgentMonitored(.copilot) {
+            checkCopilotLogAndProcess()
+        }
+        if ConfigManager.shared.isAgentMonitored(.chatgpt) {
+            checkChatGPTExpiry()
+        }
 
         // Real-time usage limit update from structured connectors
-        updateClaudeUsage()
-        updateCodexUsageFromLocalFiles()
-        updateAntigravityUsageFromLocalFiles()
+        if ConfigManager.shared.isAgentMonitored(.claude) {
+            updateClaudeUsage()
+        }
+        if ConfigManager.shared.isAgentMonitored(.codex) {
+            updateCodexUsageFromLocalFiles()
+        }
+        if ConfigManager.shared.isAgentMonitored(.antigravity) {
+            updateAntigravityUsageFromLocalFiles()
+        }
     }
 
     // Helper: Bounded file tail reader (Max 64KB)
@@ -807,11 +824,197 @@ public final class AutoMonitor: @unchecked Sendable {
         }
     }
 
-    private func fetchCodexSessionTitle() -> String? {
-        return fetchCodexThreadInfo()?.title
+    // 4. GitHub Copilot Process & Events Watcher
+    public struct CopilotSessionSummary {
+        public let id: String
+        public let title: String
+        public let cwd: String
+        public let eventsPath: String
+        public let modDate: Date
+
+        public init(id: String, title: String, cwd: String, eventsPath: String, modDate: Date) {
+            self.id = id
+            self.title = title
+            self.cwd = cwd
+            self.eventsPath = eventsPath
+            self.modDate = modDate
+        }
     }
 
-    // 4. ChatGPT Expiry check
+    public private(set) var copilotEventsOffsets: [String: UInt64] = [:]
+    public private(set) var copilotPendingLineBuffers: [String: String] = [:]
+
+    public func fetchCopilotSessions(limit: Int = 10) -> [CopilotSessionSummary] {
+        let fm = FileManager.default
+        let sessionStateDir = NSString(string: "~/.copilot/session-state").expandingTildeInPath
+        let sessionStoreDbPath = NSString(string: "~/.copilot/session-store.db").expandingTildeInPath
+
+        var results: [CopilotSessionSummary] = []
+        var dbTitles: [String: (title: String, cwd: String)] = [:]
+
+        // Query session-store.db for titles & cwds if available
+        if fm.fileExists(atPath: sessionStoreDbPath) {
+            let query = "SELECT id || '|||' || COALESCE(summary, '') || '|||' || COALESCE(cwd, '') FROM sessions ORDER BY updated_at DESC LIMIT 20;"
+            if let output = runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+                arguments: [sessionStoreDbPath, query],
+                timeoutSeconds: 1.0
+            ) {
+                for line in output.components(separatedBy: "\n") {
+                    let parts = line.components(separatedBy: "|||")
+                    if parts.count >= 3 {
+                        let id = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let summary = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let cwd = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !id.isEmpty {
+                            dbTitles[id] = (title: summary, cwd: cwd)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Scan session-state directory
+        if let subdirs = try? fm.contentsOfDirectory(atPath: sessionStateDir) {
+            for subdir in subdirs {
+                if subdir.hasPrefix("pending-session:") || subdir.hasPrefix("optimistic-chat-") {
+                    // Skip drafts without finalized session state
+                    continue
+                }
+                let fullDirPath = (sessionStateDir as NSString).appendingPathComponent(subdir)
+                let eventsPath = (fullDirPath as NSString).appendingPathComponent("events.jsonl")
+                let workspaceYamlPath = (fullDirPath as NSString).appendingPathComponent("workspace.yaml")
+
+                guard fm.fileExists(atPath: eventsPath),
+                      let attrs = try? fm.attributesOfItem(atPath: eventsPath),
+                      let modDate = attrs[.modificationDate] as? Date else {
+                    continue
+                }
+
+                var title = dbTitles[subdir]?.title ?? ""
+                var cwd = dbTitles[subdir]?.cwd ?? ""
+
+                // Check workspace.yaml for title if missing
+                if title.isEmpty, fm.fileExists(atPath: workspaceYamlPath),
+                   let yamlContent = try? String(contentsOfFile: workspaceYamlPath, encoding: .utf8) {
+                    for yLine in yamlContent.components(separatedBy: "\n") {
+                        if yLine.hasPrefix("name:") {
+                            title = yLine.replacingOccurrences(of: "name:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        } else if yLine.hasPrefix("cwd:") {
+                            cwd = yLine.replacingOccurrences(of: "cwd:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                }
+
+                if title.isEmpty {
+                    let folderName = (cwd as NSString).lastPathComponent
+                    title = folderName.isEmpty ? "Copilot Session (\(subdir.prefix(8)))" : "[\(folderName)]"
+                }
+
+                results.append(CopilotSessionSummary(id: subdir, title: title, cwd: cwd, eventsPath: eventsPath, modDate: modDate))
+            }
+        }
+
+        results.sort(by: { $0.modDate > $1.modDate })
+        return Array(results.prefix(limit))
+    }
+
+    public func processCopilotEvents(session: CopilotSessionSummary) {
+        let fm = FileManager.default
+        let path = session.eventsPath
+        guard fm.fileExists(atPath: path),
+              let attrs = try? fm.attributesOfItem(atPath: path),
+              let fileSize = attrs[.size] as? UInt64 else {
+            return
+        }
+
+        var lastOffset = copilotEventsOffsets[session.id]
+        if lastOffset == nil {
+            let startOffset = fileSize > 65536 ? fileSize - 65536 : 0
+            lastOffset = startOffset
+        }
+
+        guard fileSize > lastOffset! else {
+            return
+        }
+
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        defer { try? handle.closeFile() }
+
+        handle.seek(toFileOffset: lastOffset!)
+        let newData = handle.readDataToEndOfFile()
+        copilotEventsOffsets[session.id] = fileSize
+
+        guard let text = String(data: newData, encoding: .utf8), !text.isEmpty else { return }
+
+        let existingBuffer = copilotPendingLineBuffers[session.id] ?? ""
+        let combined = existingBuffer + text
+        let lines = combined.components(separatedBy: "\n")
+
+        if combined.hasSuffix("\n") {
+            copilotPendingLineBuffers[session.id] = ""
+        } else if let last = lines.last {
+            copilotPendingLineBuffers[session.id] = last
+        }
+
+        let completeLines = combined.hasSuffix("\n") ? lines : Array(lines.dropLast())
+
+        for line in completeLines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.hasPrefix("{") && trimmed.hasSuffix("}") else { continue }
+
+            guard let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let eventType = json["type"] as? String else {
+                continue
+            }
+
+            let dataObj = json["data"] as? [String: Any] ?? [:]
+            let turnId = dataObj["turnId"] as? String
+            let toolName = dataObj["toolName"] as? String
+
+            _ = AgentStore.shared.handleCopilotEvent(
+                sessionId: session.id,
+                title: session.title,
+                cwd: session.cwd,
+                eventType: eventType,
+                toolName: toolName,
+                turnId: turnId
+            )
+        }
+    }
+
+    public func checkCopilotLogAndProcess() {
+        let workspace = NSWorkspace.shared
+        let copilotApp = workspace.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.github.githubapp" ||
+            $0.localizedName?.lowercased() == "github" ||
+            $0.localizedName?.lowercased() == "github copilot" ||
+            $0.bundleIdentifier == "com.microsoft.VSCode" ||
+            $0.localizedName?.lowercased() == "code"
+        })
+
+        guard copilotApp != nil else {
+            AgentStore.shared.updateStatus(for: .copilot, status: .off, detail: "GitHub Copilot closed")
+            AgentStore.shared.syncSessions(for: .copilot, activeSessions: [], processRunning: false)
+            return
+        }
+
+        let sessions = fetchCopilotSessions(limit: 10)
+        for s in sessions {
+            processCopilotEvents(session: s)
+        }
+
+        AgentStore.shared.pruneStaleCopilotSessions()
+
+        let currentCopilotSessions = AgentStore.shared.getSessions(for: .copilot)
+        if currentCopilotSessions.isEmpty {
+            AgentStore.shared.updateStatus(for: .copilot, status: .idle, detail: "GitHub Copilot ready")
+            AgentStore.shared.syncSessions(for: .copilot, activeSessions: [], processRunning: true)
+        }
+    }
+
+    // 5. ChatGPT Expiry check
     private func checkChatGPTExpiry() {
         let workspace = NSWorkspace.shared
         let isChromeRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.Chrome" })

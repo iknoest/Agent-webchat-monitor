@@ -145,6 +145,7 @@ public final class HTTPServer: @unchecked Sendable {
                         "parserDecision": usage?.parserDecision ?? "no_live_disk_file",
                         "freshness": usage?.freshness ?? "Unavailable",
                         "isQuotaExhausted": usage?.isQuotaExhausted ?? false,
+                        "isMonitored": ConfigManager.shared.isAgentMonitored(agent),
                         "modelFamilies": modelFamiliesList
                     ]
                     if let sRem = usage?.sessionRemainingPercent { agentDict["sessionRemainingPercent"] = sRem }

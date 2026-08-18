@@ -2482,8 +2482,8 @@ runTest("97. Quota Dashboard: Does not label closed Codex Available") {
 // 98. Standardized Reset: Today reset formatting (24-hour, no seconds)
 runTest("98. Standardized Reset: Today reset formatting (today HH:mm (in ...))") {
     let calendar = Calendar.current
-    let now = Date()
-    let todayTarget = now.addingTimeInterval(5640) // +1h 34m
+    let now = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
+    let todayTarget = now.addingTimeInterval(5640) // +1h 34m -> 11:34 AM today
     let formatted = AntigravityLocalQuotaConnector.formatResetDateTime(date: todayTarget, now: now)
     try assert(formatted.hasPrefix("today "), "Reset today must start with 'today ': got \(formatted)")
     try assert(formatted.contains("(in 1h 34m)"), "Relative text must be '(in 1h 34m)': got \(formatted)")
@@ -2645,8 +2645,9 @@ runTest("112. No-Sample Source Failure -> Unavailable") {
 
 // 113. Standardized Reset Format Remains 24-Hour
 runTest("113. Standardized Reset Format Remains 24-Hour") {
-    let now = Date()
-    let todayDate = now.addingTimeInterval(2760) // 46m
+    let calendar = Calendar.current
+    let now = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: Date()) ?? Date()
+    let todayDate = now.addingTimeInterval(2760) // 46m -> 10:46 AM today
     let formattedToday = AntigravityLocalQuotaConnector.formatResetDateTime(date: todayDate, now: now)
     try assert(formattedToday.hasPrefix("today "), "Today prefix: \(formattedToday)")
     try assert(formattedToday.contains("(in 46m)"), "46m relative: \(formattedToday)")
@@ -3267,4 +3268,251 @@ runTest("160. Safe quota metadata debug info exposes required fields without lea
     try assert(!info.resetSource.isEmpty, "resetSource must not be empty")
 }
 
-print("🎉 All 160 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend & Structured Claude Quota Tests Passed!")
+// 161. Monitored Agents: All detected providers default to monitored (enabled)
+runTest("161. Monitored Agents: All detected providers default to monitored (enabled)") {
+    var cfg = ConfigManager.shared.config
+    cfg.disabledAgents = []
+    ConfigManager.shared.saveConfig(cfg)
+
+    for agent in AgentID.allCases {
+        try assert(ConfigManager.shared.isAgentMonitored(agent), "\(agent.displayName) must be monitored by default")
+    }
+}
+
+// 162. Monitored Agents: Disabling an agent persists in config.disabledAgents
+runTest("162. Monitored Agents: Disabling an agent persists in config.disabledAgents") {
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: false)
+    try assert(!ConfigManager.shared.isAgentMonitored(.codex), "Codex must now be disabled")
+    try assert(ConfigManager.shared.isAgentMonitored(.chatgpt), "ChatGPT must remain enabled")
+    try assert(ConfigManager.shared.isAgentMonitored(.copilot), "Copilot must remain enabled")
+
+    let disabled = ConfigManager.shared.config.disabledAgents ?? []
+    try assert(disabled.contains("codex"), "disabledAgents in config must contain 'codex'")
+}
+
+// 163. Monitored Agents: Disabled provider is excluded from overallSummary and compactSummary
+runTest("163. Monitored Agents: Disabled provider is excluded from overallSummary and compactSummary") {
+    AgentStore.shared.updateStatus(for: .codex, status: .working)
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .idle)
+
+    let summaryDisabled = AgentStore.shared.overallSummary()
+    try assert(!summaryDisabled.contains("CDX"), "overallSummary must omit disabled Codex: got \(summaryDisabled)")
+    try assert(summaryDisabled.contains("GPT"), "overallSummary must include enabled ChatGPT: got \(summaryDisabled)")
+
+    let compactDisabled = AgentStore.shared.compactSummary()
+    try assert(!compactDisabled.contains("CDX"), "compactSummary must omit disabled Codex: got \(compactDisabled)")
+
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+    let summaryEnabled = AgentStore.shared.overallSummary()
+    try assert(summaryEnabled.contains("CDX"), "overallSummary must include re-enabled Codex: got \(summaryEnabled)")
+}
+
+// 164. Monitored Agents: Disabled provider cannot acquire Smart Auto keep-awake even if working
+runTest("164. Monitored Agents: Disabled provider cannot acquire Smart Auto keep-awake even if working") {
+    SleepManager.shared.mode = .smartAuto
+
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+    AgentStore.shared.updateStatus(for: .antigravity, status: .working)
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(SleepManager.shared.isAssertionActive, "Enabled working Antigravity acquires keep-awake")
+
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: false)
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(!SleepManager.shared.isAssertionActive, "Disabled working Antigravity must NOT acquire keep-awake")
+
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+    AgentStore.shared.updateStatus(for: .antigravity, status: .idle)
+    SleepManager.shared.updateSleepAssertionState()
+}
+
+// 165. Monitored Agents: Codex & Copilot monitored state does NOT imply Smart Auto eligibility
+runTest("165. Monitored Agents: Codex & Copilot monitored state does NOT imply Smart Auto eligibility") {
+    SleepManager.shared.mode = .smartAuto
+
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    AgentStore.shared.updateStatus(for: .codex, status: .working)
+    _ = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(!SleepManager.shared.isAssertionActive, "Codex is not in trustedProviders and must not acquire Smart Auto")
+    AgentStore.shared.updateStatus(for: .codex, status: .idle)
+
+    AgentStore.shared.updateStatus(for: .copilot, status: .working)
+    _ = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(!SleepManager.shared.isAssertionActive, "Copilot is not in trustedProviders and must not acquire Smart Auto")
+    AgentStore.shared.updateStatus(for: .copilot, status: .idle)
+}
+
+// 166. GitHub Copilot Lifecycle: user.message & assistant.turn_start -> Working state
+runTest("166. GitHub Copilot Lifecycle: user.message & assistant.turn_start -> Working state") {
+    let sessId = "test-copilot-sess-01"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Feature implementation",
+        cwd: "/Users/ava/Projects/demo",
+        eventType: "user.message",
+        toolName: nil,
+        turnId: "turn-01",
+        durationMs: nil
+    )
+
+    let info = AgentStore.shared.getStatus(for: .copilot)
+    try assert(info.status == .working, "Copilot status must be working after user.message: got \(info.status)")
+    try assert(info.sessionTitle == "Feature implementation", "Copilot session title must match: got \(String(describing: info.sessionTitle))")
+
+    let sessions = AgentStore.shared.getSessions(for: .copilot)
+    let matched = sessions.first(where: { $0.sessionId == sessId })
+    try assert(matched != nil, "Tracked session must exist")
+    try assert(matched?.status == .working, "Tracked session must be working")
+}
+
+// 167. GitHub Copilot Lifecycle: tool.execution_start (ask_user) -> Needs You / Blocked state
+runTest("167. GitHub Copilot Lifecycle: tool.execution_start (ask_user) -> Needs You / Blocked state") {
+    let sessId = "test-copilot-sess-01"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Feature implementation",
+        cwd: "/Users/ava/Projects/demo",
+        eventType: "tool.execution_start",
+        toolName: "ask_user",
+        turnId: "turn-01",
+        durationMs: nil
+    )
+
+    let info = AgentStore.shared.getStatus(for: .copilot)
+    try assert(info.status == .blocked, "Copilot status must be blocked when ask_user tool starts: got \(info.status)")
+    let sessions = AgentStore.shared.getSessions(for: .copilot)
+    let matched = sessions.first(where: { $0.sessionId == sessId })
+    try assert(matched?.status == .blocked, "Tracked session must be blocked")
+    try assert(matched?.attentionReason == "Waiting for user response", "Attention reason must be set on session")
+}
+
+// 168. GitHub Copilot Lifecycle: tool.execution_complete -> Working state recovery
+runTest("168. GitHub Copilot Lifecycle: tool.execution_complete -> Working state recovery") {
+    let sessId = "test-copilot-sess-01"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Feature implementation",
+        cwd: "/Users/ava/Projects/demo",
+        eventType: "tool.execution_complete",
+        toolName: "ask_user",
+        turnId: "turn-01",
+        durationMs: nil
+    )
+
+    let info = AgentStore.shared.getStatus(for: .copilot)
+    try assert(info.status == .working, "Copilot status must resume working after ask_user tool completes: got \(info.status)")
+}
+
+// 169. GitHub Copilot Lifecycle: assistant.turn_end -> Done state with duration
+runTest("169. GitHub Copilot Lifecycle: assistant.turn_end -> Done state with duration") {
+    let sessId = "test-copilot-sess-01"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Feature implementation",
+        cwd: "/Users/ava/Projects/demo",
+        eventType: "assistant.turn_end",
+        toolName: nil,
+        turnId: "turn-01",
+        durationMs: 45000
+    )
+
+    let info = AgentStore.shared.getStatus(for: .copilot)
+    try assert(info.status == .done, "Copilot status must be done after assistant.turn_end: got \(info.status)")
+    try assert(info.lastDurationSeconds == 45.0, "Copilot lastDurationSeconds must be 45s: got \(String(describing: info.lastDurationSeconds))")
+}
+
+// 170. GitHub Copilot Lifecycle: Session shutdown -> Idle
+runTest("170. GitHub Copilot Lifecycle: Session shutdown -> Idle") {
+    let sessId = "test-copilot-sess-01"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Feature implementation",
+        cwd: "/Users/ava/Projects/demo",
+        eventType: "session.shutdown",
+        toolName: nil,
+        turnId: "turn-01",
+        durationMs: nil
+    )
+
+    let sessions = AgentStore.shared.getSessions(for: .copilot)
+    let matched = sessions.first(where: { $0.sessionId == sessId })
+    try assert(matched?.status == .idle, "Tracked session must transition to idle on shutdown")
+}
+
+// 171. GitHub Copilot: Events.jsonl fixture parsing via AutoMonitor
+runTest("171. GitHub Copilot: Events.jsonl fixture parsing via AutoMonitor") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("copilot_test_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let sessDir = tempDir.appendingPathComponent("sess-fixture-99")
+    try FileManager.default.createDirectory(at: sessDir, withIntermediateDirectories: true)
+
+    let workspaceYaml = "name: \"Bugfix #404\"\ncwd: \"/Users/ava/test\"\ncreated_at: 1723000000\n"
+    try workspaceYaml.write(to: sessDir.appendingPathComponent("workspace.yaml"), atomically: true, encoding: .utf8)
+
+    let eventsLines = """
+    {"type":"session.start","data":{"sessionId":"sess-fixture-99"}}
+    {"type":"user.message","data":{"content":"Fix issue"}}
+    {"type":"tool.execution_start","data":{"toolName":"ask_user","turnId":"t1"}}
+
+    """
+    let eventsFile = sessDir.appendingPathComponent("events.jsonl")
+    try eventsLines.write(to: eventsFile, atomically: true, encoding: .utf8)
+
+    let summary = AutoMonitor.CopilotSessionSummary(id: "sess-fixture-99", title: "Bugfix #404", cwd: "/Users/ava/test", eventsPath: eventsFile.path, modDate: Date())
+    AutoMonitor.shared.processCopilotEvents(session: summary)
+
+    let info = AgentStore.shared.getStatus(for: .copilot)
+    try assert(info.status == .blocked, "AutoMonitor fixture processing must yield blocked for ask_user: got \(info.status)")
+    try assert(info.sessionTitle == "Bugfix #404", "Title from workspace.yaml must be used")
+
+    // Clean up
+    AgentStore.shared.updateStatus(for: .copilot, status: .idle)
+}
+
+// 172. Monitored Agents: Disabled agent excluded from NotificationManager
+runTest("172. Monitored Agents: Disabled agent excluded from NotificationManager") {
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: false)
+    NotificationManager.shared.notify(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Claude finished task")
+    try assert(NotificationManager.shared.lastNotifiedStatus[.claude] != .done, "Disabled Claude must NOT trigger notification dispatch")
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+}
+
+// 173. Sound Preferences: Mute (No Sound) state cleanly representation
+runTest("173. Sound Preferences: Mute (No Sound) state cleanly representation") {
+    var cfg = ConfigManager.shared.config
+    cfg.doneSoundName = "Mute (No Sound)"
+    cfg.attentionSoundName = "Mute (No Sound)"
+    ConfigManager.shared.saveConfig(cfg)
+
+    try assert(!NotificationManager.shared.soundEnabled, "soundEnabled must be false when both sounds are Mute")
+
+    cfg.doneSoundName = "Glass"
+    ConfigManager.shared.saveConfig(cfg)
+    try assert(NotificationManager.shared.soundEnabled, "soundEnabled must be true when at least one sound is unmuted")
+}
+
+// 174. Render Signature responds to disabledAgents changes
+runTest("174. Render Signature responds to disabledAgents changes") {
+    let sigBefore = MenuBarManager.shared.computeRenderSignature()
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
+    let sigAfter = MenuBarManager.shared.computeRenderSignature()
+    try assert(sigBefore != sigAfter, "Render signature must change when disabledAgents changes")
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+}
+
+// 175. Monitored Agents: All providers restored to monitored default
+runTest("175. Monitored Agents: All providers restored to monitored default") {
+    var cfg = ConfigManager.shared.config
+    cfg.disabledAgents = []
+    ConfigManager.shared.saveConfig(cfg)
+    for agent in AgentID.allCases {
+        try assert(ConfigManager.shared.isAgentMonitored(agent), "\(agent.displayName) must be monitored")
+    }
+}
+
+print("🎉 All 175 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents & GitHub Copilot Tests Passed!")

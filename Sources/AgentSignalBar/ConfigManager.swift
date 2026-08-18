@@ -121,13 +121,14 @@ public struct AppConfig: Codable {
     public var isClosedLidEnabled: Bool? // default false
     public var minBatteryPercentForClosedLid: Int? // default 20
     public var customMainIconPath: String?
+    public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
     public var agents: [String: AgentCustomConfig]
     public var quotas: [String: AgentQuotaConfig]?
     public var statusBadges: StatusBadgesConfig
 
     public static var defaultConfig: AppConfig {
         return AppConfig(
-            summaryFormat: "[{GPT} {CDX} {CLD} {AGY}]",
+            summaryFormat: "[{GPT} {CDX} {CLD} {AGY} {COP}]",
             badgeTheme: "classic",
             overworkThresholdMinutes: 10,
             notificationsEnabled: true,
@@ -138,11 +139,13 @@ public struct AppConfig: Codable {
             isClosedLidEnabled: nil,
             minBatteryPercentForClosedLid: 20,
             customMainIconPath: nil,
+            disabledAgents: [],
             agents: [
                 "chatgpt": AgentCustomConfig(displayName: "ChatGPT Web", symbol: "💬", shortTag: "GPT", customIconPath: "~/.config/AgentSignalBar/icons/chatgpt.png"),
                 "codex": AgentCustomConfig(displayName: "Codex Desktop", symbol: "💻", shortTag: "CDX", customIconPath: "~/.config/AgentSignalBar/icons/codex.png"),
                 "claude": AgentCustomConfig(displayName: "Claude Code", symbol: "🤖", shortTag: "CLD", customIconPath: "~/.config/AgentSignalBar/icons/claude.png"),
-                "antigravity": AgentCustomConfig(displayName: "Antigravity", symbol: "🚀", shortTag: "AGY", customIconPath: "~/.config/AgentSignalBar/icons/antigravity.png")
+                "antigravity": AgentCustomConfig(displayName: "Antigravity", symbol: "🚀", shortTag: "AGY", customIconPath: "~/.config/AgentSignalBar/icons/antigravity.png"),
+                "copilot": AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: "~/.config/AgentSignalBar/icons/copilot.png")
             ],
             quotas: [
                 "antigravity": AgentQuotaConfig(
@@ -196,6 +199,28 @@ public final class ConfigManager: @unchecked Sendable {
         return config.agents[agent.rawValue]
     }
 
+    public func isAgentMonitored(_ agent: AgentID) -> Bool {
+        let disabled = config.disabledAgents ?? []
+        return !disabled.contains(agent.rawValue)
+    }
+
+    public func setAgentMonitored(_ agent: AgentID, monitored: Bool) {
+        var cfg = config
+        var disabled = Set(cfg.disabledAgents ?? [])
+        if monitored {
+            disabled.remove(agent.rawValue)
+        } else {
+            disabled.insert(agent.rawValue)
+        }
+        cfg.disabledAgents = Array(disabled).sorted()
+        saveConfig(cfg)
+        SleepManager.shared.updateSleepAssertionState()
+    }
+
+    public func getMonitoredAgents() -> [AgentID] {
+        return AgentID.allCases.filter { isAgentMonitored($0) }
+    }
+
     public func loadConfig() {
         let fm = FileManager.default
 
@@ -226,6 +251,10 @@ public final class ConfigManager: @unchecked Sendable {
             }
             if decoded.statusBadges.quotaDepleted == nil {
                 decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "🔴⚠️", funEmoji: "🤯")
+                needsSave = true
+            }
+            if decoded.agents["copilot"] == nil {
+                decoded.agents["copilot"] = AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: "~/.config/AgentSignalBar/icons/copilot.png")
                 needsSave = true
             }
 

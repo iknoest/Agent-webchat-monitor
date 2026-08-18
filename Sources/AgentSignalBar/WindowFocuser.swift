@@ -12,6 +12,8 @@ public struct WindowFocuser {
             focusByBundleIdentifier("com.anthropic.claudefordesktop", fallbackNames: ["Claude"])
         case .antigravity:
             focusByBundleIdentifier("com.google.antigravity", fallbackNames: ["Antigravity"])
+        case .copilot:
+            focusByBundleIdentifier("com.github.githubapp", fallbackNames: ["GitHub Copilot", "github", "Visual Studio Code", "Code"])
         }
     }
 

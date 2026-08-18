@@ -18,6 +18,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
     case codex = "codex"
     case claude = "claude"
     case antigravity = "antigravity"
+    case copilot = "copilot"
 
     public var displayName: String {
         switch self {
@@ -25,6 +26,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
         case .codex: return "Codex Desktop"
         case .claude: return "Claude Code"
         case .antigravity: return "Antigravity"
+        case .copilot: return "GitHub Copilot"
         }
     }
 
@@ -34,6 +36,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
         case .codex: return "💻"
         case .claude: return "🤖"
         case .antigravity: return "🚀"
+        case .copilot: return "🐙"
         }
     }
 
@@ -43,6 +46,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
         case .codex: return "CDX"
         case .claude: return "CLD"
         case .antigravity: return "AGY"
+        case .copilot: return "COP"
         }
     }
 
@@ -52,6 +56,7 @@ public enum AgentID: String, Codable, CaseIterable, Sendable {
         case .codex: return "com.openai.codex"
         case .claude: return "com.anthropic.claudefordesktop"
         case .antigravity: return "com.google.antigravity"
+        case .copilot: return "com.github.githubapp"
         }
     }
 }
@@ -1304,6 +1309,168 @@ public final class AgentStore: @unchecked Sendable {
         }
     }
 
+    public func handleCopilotEvent(
+        sessionId: String,
+        title: String,
+        cwd: String = "",
+        eventType: String,
+        toolName: String? = nil,
+        turnId: String? = nil,
+        durationMs: Double? = nil
+    ) -> Bool {
+        guard !sessionId.isEmpty else { return false }
+
+        lock.lock()
+        var currentSessions = trackedSessions[.copilot] ?? [:]
+        let now = Date()
+
+        let folderName = (cwd as NSString).lastPathComponent
+        let sessionTitle = title.isEmpty ? (folderName.isEmpty ? "Copilot Session (\(sessionId.prefix(8)))" : "[\(folderName)]") : title
+
+        var session = currentSessions[sessionId] ?? AgentSessionInfo(
+            provider: .copilot,
+            sessionId: sessionId,
+            title: sessionTitle,
+            status: .idle,
+            turnId: turnId ?? "turn_init_\(sessionId.prefix(8))",
+            sourceEvidence: "Copilot Events: Registered",
+            lastUpdated: now
+        )
+
+        session.title = sessionTitle
+        session.lastUpdated = now
+
+        switch eventType {
+        case "user.message", "assistant.turn_start", "hook.start":
+            session.status = .working
+            if let tid = turnId, !tid.isEmpty {
+                session.turnId = tid
+            }
+            if session.thinkingStartTime == nil {
+                session.thinkingStartTime = now
+            }
+            session.attentionReason = nil
+            session.acknowledgedTurnId = nil
+            session.acknowledgedAt = nil
+            session.sourceEvidence = "Copilot Event: \(eventType)"
+            session.sensorReason = "Copilot Event: \(eventType)"
+            currentSessions[sessionId] = session
+            trackedSessions[.copilot] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        case "tool.execution_start":
+            if toolName == "ask_user" {
+                session.status = .blocked
+                let reasonStr = "Waiting for user response"
+                session.attentionReason = reasonStr
+                session.sensorReason = reasonStr
+                session.sourceEvidence = "Copilot Tool: ask_user"
+                if let tid = turnId, !tid.isEmpty {
+                    session.turnId = tid
+                }
+            } else {
+                session.status = .working
+                if session.thinkingStartTime == nil {
+                    session.thinkingStartTime = now
+                }
+                session.attentionReason = nil
+                session.sourceEvidence = toolName != nil ? "Copilot Tool: \(toolName!)" : "Copilot Tool"
+                session.sensorReason = session.sourceEvidence
+            }
+            currentSessions[sessionId] = session
+            trackedSessions[.copilot] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        case "tool.execution_complete":
+            if session.status == .blocked && session.attentionReason == "Waiting for user response" {
+                session.status = .working
+                session.attentionReason = nil
+                session.sourceEvidence = "Copilot Tool: ask_user completed"
+                session.sensorReason = session.sourceEvidence
+                currentSessions[sessionId] = session
+                trackedSessions[.copilot] = currentSessions
+                lock.unlock()
+
+                syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+                return true
+            }
+            lock.unlock()
+            return false
+
+        case "assistant.turn_end":
+            session.status = .done
+            session.attentionReason = nil
+            if let dMs = durationMs, dMs > 0 {
+                session.lastDurationSeconds = dMs / 1000.0
+            } else if let start = session.thinkingStartTime {
+                session.lastDurationSeconds = now.timeIntervalSince(start)
+            }
+            session.thinkingStartTime = nil
+            session.sourceEvidence = "Copilot Event: \(eventType)"
+            session.sensorReason = "Copilot Event: \(eventType)"
+            currentSessions[sessionId] = session
+            trackedSessions[.copilot] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        case "session.shutdown":
+            session.status = .idle
+            session.attentionReason = nil
+            session.thinkingStartTime = nil
+            session.sourceEvidence = "Copilot Event: session.shutdown"
+            session.sensorReason = "Copilot Event: session.shutdown"
+            currentSessions[sessionId] = session
+            trackedSessions[.copilot] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+
+        default:
+            lock.unlock()
+            return false
+        }
+    }
+
+    public func pruneStaleCopilotSessions(maxAgeSeconds: TimeInterval = 300) {
+        lock.lock()
+        var currentSessions = trackedSessions[.copilot] ?? [:]
+        let now = Date()
+        var changed = false
+
+        for (sessionId, session) in currentSessions {
+            if session.status == .working || session.status == .blocked {
+                continue
+            }
+            if AgentStore.isSyntheticTestSessionId(sessionId) {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+                continue
+            }
+            if now.timeIntervalSince(session.lastUpdated) > maxAgeSeconds {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+            }
+        }
+
+        if changed {
+            trackedSessions[.copilot] = currentSessions
+        }
+        lock.unlock()
+
+        if changed {
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+        }
+    }
+
     // 3. Disambiguated Notification Center Correlation: Binds uniquely strongest candidate with unresolved native pending-tool evidence
     public func updateAntigravityPermissionFromNotification(reason: String) {
         lock.lock()
@@ -1563,7 +1730,7 @@ public final class AgentStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         var resolvedStates: [AgentID: AgentInfo] = [:]
-        for agent in AgentID.allCases {
+        for agent in AgentID.allCases where ConfigManager.shared.isAgentMonitored(agent) {
             var info = states[agent] ?? AgentInfo(id: agent, status: .off)
             if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
                 info.availability = .quotaExhausted
@@ -1573,9 +1740,10 @@ public final class AgentStore: @unchecked Sendable {
             resolvedStates[agent] = info
         }
 
-        let candidateBlocked = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .blocked && $0.availability != .quotaExhausted })
-        let candidateDone = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .done && $0.availability != .quotaExhausted })
-        let candidateWorking = AgentID.allCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .working && $0.availability != .quotaExhausted })
+        let monitoredCases = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
+        let candidateBlocked = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .blocked && $0.availability != .quotaExhausted })
+        let candidateDone = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .done && $0.availability != .quotaExhausted })
+        let candidateWorking = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .working && $0.availability != .quotaExhausted })
 
         let candidate = candidateBlocked ?? candidateDone ?? candidateWorking
 
@@ -1615,7 +1783,12 @@ public final class AgentStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        return AgentID.allCases.map { agent in
+        let monitored = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
+        if monitored.isEmpty {
+            return "[-]"
+        }
+
+        return monitored.map { agent in
             let info = states[agent] ?? AgentInfo(id: agent, status: .off)
             let customCfg = ConfigManager.shared.getAgentConfig(for: agent)
 
@@ -1637,7 +1810,7 @@ public final class AgentStore: @unchecked Sendable {
 
         for targetDisplayStatus in priorityOrder {
             var matchingProviders: [AgentID] = []
-            for agent in AgentID.allCases {
+            for agent in AgentID.allCases where ConfigManager.shared.isAgentMonitored(agent) {
                 let info = states[agent] ?? AgentInfo(id: agent, status: .off)
                 if info.effectiveDisplayStatus == targetDisplayStatus {
                     matchingProviders.append(agent)
@@ -1666,8 +1839,11 @@ public final class AgentStore: @unchecked Sendable {
             }
         }
 
-        // Check normal Idle providers
-        let anyIdle = states.values.contains { $0.status == .idle && $0.effectiveDisplayStatus == .idle }
+        // Check normal Idle providers among monitored agents
+        let anyIdle = AgentID.allCases.filter({ ConfigManager.shared.isAgentMonitored($0) }).contains { agent in
+            let st = states[agent]
+            return st?.status == .idle && st?.effectiveDisplayStatus == .idle
+        }
         if anyIdle {
             return "⚪"
         }

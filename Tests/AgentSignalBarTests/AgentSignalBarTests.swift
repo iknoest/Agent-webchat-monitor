@@ -1338,5 +1338,127 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(cliUsage?.weeklyRemainingPercent, 60.0)
         XCTAssertEqual(cliUsage?.quotaSource, "claude_cli_usage")
     }
+
+    func testMonitoredAgentsAndDisabledPersistence() throws {
+        // 1. Default monitored state
+        var cfg = ConfigManager.shared.config
+        cfg.disabledAgents = []
+        ConfigManager.shared.saveConfig(cfg)
+        for agent in AgentID.allCases {
+            XCTAssertTrue(ConfigManager.shared.isAgentMonitored(agent))
+        }
+
+        // 2. Disable codex and verify persistence
+        ConfigManager.shared.setAgentMonitored(.codex, monitored: false)
+        XCTAssertFalse(ConfigManager.shared.isAgentMonitored(.codex))
+        XCTAssertTrue(ConfigManager.shared.isAgentMonitored(.chatgpt))
+        XCTAssertTrue(ConfigManager.shared.isAgentMonitored(.copilot))
+        XCTAssertTrue(ConfigManager.shared.config.disabledAgents?.contains("codex") == true)
+
+        // 3. Summary ignores disabled codex
+        AgentStore.shared.updateStatus(for: .codex, status: .working)
+        AgentStore.shared.updateStatus(for: .chatgpt, status: .idle)
+        let summary = AgentStore.shared.overallSummary()
+        XCTAssertFalse(summary.contains("CDX"))
+        XCTAssertTrue(summary.contains("GPT"))
+
+        // 4. Restore
+        ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+        let summaryRestored = AgentStore.shared.overallSummary()
+        XCTAssertTrue(summaryRestored.contains("CDX"))
+    }
+
+    func testGitHubCopilotLifecycleEventsAndSessionState() throws {
+        let store = AgentStore.shared
+        let sessId = "xctest_copilot_01"
+
+        // 1. user.message -> Working
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Test Task",
+            cwd: "/Users/ava/test",
+            eventType: "user.message",
+            toolName: nil,
+            turnId: "t1",
+            durationMs: nil
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .working)
+        XCTAssertEqual(store.getStatus(for: .copilot).sessionTitle, "Unit Test Task")
+
+        // 2. ask_user tool -> Blocked (Needs You)
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Test Task",
+            cwd: "/Users/ava/test",
+            eventType: "tool.execution_start",
+            toolName: "ask_user",
+            turnId: "t1",
+            durationMs: nil
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .blocked)
+        let sessBlocked = store.getSessions(for: .copilot).first(where: { $0.sessionId == sessId })
+        XCTAssertEqual(sessBlocked?.status, .blocked)
+        XCTAssertEqual(sessBlocked?.attentionReason, "Waiting for user response")
+
+        // 3. Tool complete -> Working resume
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Test Task",
+            cwd: "/Users/ava/test",
+            eventType: "tool.execution_complete",
+            toolName: "ask_user",
+            turnId: "t1",
+            durationMs: nil
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .working)
+
+        // 4. assistant.turn_end -> Done with duration
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Test Task",
+            cwd: "/Users/ava/test",
+            eventType: "assistant.turn_end",
+            toolName: nil,
+            turnId: "t1",
+            durationMs: 12000
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .done)
+        XCTAssertEqual(store.getStatus(for: .copilot).lastDurationSeconds, 12.0)
+
+        // 5. Clean shutdown -> Idle
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Test Task",
+            cwd: "/Users/ava/test",
+            eventType: "session.shutdown",
+            toolName: nil,
+            turnId: "t1",
+            durationMs: nil
+        )
+        let sessIdle = store.getSessions(for: .copilot).first(where: { $0.sessionId == sessId })
+        XCTAssertEqual(sessIdle?.status, .idle)
+    }
+
+    func testSoundPreferencesAndRenderSignatureDisabledAgents() throws {
+        // 1. Mute (No Sound) representation
+        var cfg = ConfigManager.shared.config
+        cfg.doneSoundName = "Mute (No Sound)"
+        cfg.attentionSoundName = "Mute (No Sound)"
+        ConfigManager.shared.saveConfig(cfg)
+        XCTAssertFalse(NotificationManager.shared.soundEnabled)
+
+        cfg.doneSoundName = "Glass"
+        ConfigManager.shared.saveConfig(cfg)
+        XCTAssertTrue(NotificationManager.shared.soundEnabled)
+
+        // 2. Render signature changes when disabledAgents changes
+        let sig1 = MenuBarManager.shared.computeRenderSignature()
+        ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
+        let sig2 = MenuBarManager.shared.computeRenderSignature()
+        XCTAssertNotEqual(sig1, sig2)
+
+        // Restore
+        ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+    }
 }
 #endif

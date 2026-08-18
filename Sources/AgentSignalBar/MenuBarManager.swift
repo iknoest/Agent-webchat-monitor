@@ -199,6 +199,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let closedLid = "\(SleepManager.shared.isClosedLidModeEnabled):\(SleepManager.shared.isDisableSleepActive)"
         let refreshingTag = isRefreshingUsage
         let axTrusted = AXIsProcessTrusted()
+        let disabledAgents = (ConfigManager.shared.config.disabledAgents ?? []).sorted().joined(separator: ",")
 
         var sessionsStr = ""
         for s in AgentStore.shared.getAllSessions() {
@@ -223,7 +224,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false):\(usage?.lastSuccessfulRefresh?.timeIntervalSince1970 ?? 0);"
         }
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -303,9 +304,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Direct 1-Click Agent & Session Rows
+        // 2. Direct 1-Click Agent & Session Rows (Filtered by Monitored Agents)
         let allStates = AgentStore.shared.getAllStates()
         for agent in AgentID.allCases {
+            guard ConfigManager.shared.isAgentMonitored(agent) else { continue }
             let info = allStates[agent] ?? AgentInfo(id: agent)
             let providerSessions = AgentStore.shared.getSessions(for: agent)
 
@@ -443,7 +445,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let allUsage = AgentUsageStore.shared.getAllUsage()
 
         // 3A. Claude Code Usage Rows
-        if let claudeUsage = allUsage[.claude] {
+        if ConfigManager.shared.isAgentMonitored(.claude), let claudeUsage = allUsage[.claude] {
             let hdr = NSMenuItem(title: "  Claude Code", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
@@ -474,7 +476,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
 
         // 3B. Antigravity Usage Rows
-        if let agyUsage = allUsage[.antigravity] {
+        if ConfigManager.shared.isAgentMonitored(.antigravity), let agyUsage = allUsage[.antigravity] {
             let hdr = NSMenuItem(title: "  Antigravity", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
@@ -515,7 +517,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
 
         // 3C. Codex Desktop Usage Rows
-        if let cdxUsage = allUsage[.codex] {
+        if ConfigManager.shared.isAgentMonitored(.codex), let cdxUsage = allUsage[.codex] {
             let hdr = NSMenuItem(title: "  Codex Desktop", action: nil, keyEquivalent: "")
             hdr.isEnabled = false
             menu.addItem(hdr)
@@ -553,51 +555,42 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Clean Settings & Preferences Submenu
-        let settingsItem = NSMenuItem(title: "Settings & Audio Preferences...", action: nil, keyEquivalent: ",")
+        // 4. Consolidated Settings & Preferences Submenu
+        let settingsItem = NSMenuItem(title: "Settings & Preferences...", action: nil, keyEquivalent: ",")
         let settingsSubmenu = NSMenu()
 
-        // Theme Switcher Item (Shows the ACTION option to switch TO)
-        let themeActionTitle: String
-        if currentTheme == .classic {
-            themeActionTitle = "Switch Badge Theme to: Fun Emojis (🫥🤔🥵🐶🥶😴🤯)"
-        } else {
-            themeActionTitle = "Switch Badge Theme to: Classic Colored Balls (⚪🟡🟢🔴⚫)"
+        // 4A. Monitored Agents Submenu
+        let monitoredAgentsItem = NSMenuItem(title: "Monitored Agents", action: nil, keyEquivalent: "")
+        let monitoredAgentsSubmenu = NSMenu()
+        for agent in AgentID.allCases {
+            let isMonitored = ConfigManager.shared.isAgentMonitored(agent)
+            let agentItem = NSMenuItem(title: agent.displayName, action: #selector(toggleAgentMonitoredClicked(_:)), keyEquivalent: "")
+            agentItem.target = self
+            agentItem.representedObject = agent
+            agentItem.state = isMonitored ? .on : .off
+            monitoredAgentsSubmenu.addItem(agentItem)
         }
-        let themeToggleItem = NSMenuItem(title: themeActionTitle, action: #selector(toggleBadgeThemeClicked), keyEquivalent: "")
-        themeToggleItem.target = self
-        settingsSubmenu.addItem(themeToggleItem)
-
-        let overworkTitle = "Overworking Threshold: \(overworkMins) mins (Click to Cycle 5m/10m/15m)"
-        let overworkToggleItem = NSMenuItem(title: overworkTitle, action: #selector(cycleOverworkThresholdClicked), keyEquivalent: "")
-        overworkToggleItem.target = self
-        settingsSubmenu.addItem(overworkToggleItem)
-
-        // Menu Bar View (Detailed vs Compact)
-        let currentDisplayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
-        let isDetailedView = currentDisplayMode.lowercased() != "compact"
-        let viewMenuItem = NSMenuItem(title: "Menu Bar View", action: nil, keyEquivalent: "")
-        let viewSubmenu = NSMenu()
-
-        let detailedItem = NSMenuItem(title: "Detailed (All Providers)", action: #selector(setMenuBarModeDetailedClicked), keyEquivalent: "")
-        detailedItem.target = self
-        detailedItem.state = isDetailedView ? .on : .off
-        viewSubmenu.addItem(detailedItem)
-
-        let compactItem = NSMenuItem(title: "Compact (Single Indicator)", action: #selector(setMenuBarModeCompactClicked), keyEquivalent: "")
-        compactItem.target = self
-        compactItem.state = !isDetailedView ? .on : .off
-        viewSubmenu.addItem(compactItem)
-
-        viewMenuItem.submenu = viewSubmenu
-        settingsSubmenu.addItem(viewMenuItem)
+        monitoredAgentsItem.submenu = monitoredAgentsSubmenu
+        settingsSubmenu.addItem(monitoredAgentsItem)
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
-        // Mac Clamshell Anti-Sleep Controls
+        // 4B. Monitoring Behavior Submenu
+        let behaviorItem = NSMenuItem(title: "Monitoring Behavior", action: nil, keyEquivalent: "")
+        let behaviorSubmenu = NSMenu()
+
+        // Smart Keep-Awake Submenu
         let currentSleepMode = SleepManager.shared.mode
         let sleepStateTag = SleepManager.shared.isAssertionActive ? " [☕ ACTIVE]" : " [💤 IDLE]"
-        let sleepMainItem = NSMenuItem(title: "Mac Anti-Sleep Mode (\(currentSleepMode.displayName))\(sleepStateTag)...", action: nil, keyEquivalent: "")
+        let sleepTitle: String
+        switch currentSleepMode {
+        case .smartAuto: sleepTitle = "Smart Keep-Awake: Smart Auto\(sleepStateTag)"
+        case .alwaysOn: sleepTitle = "Smart Keep-Awake: Always Awake"
+        case .timer1h: sleepTitle = "Smart Keep-Awake: 1 Hour"
+        case .timer3h: sleepTitle = "Smart Keep-Awake: 3 Hours"
+        case .disabled: sleepTitle = "Smart Keep-Awake: Off"
+        }
+        let sleepMainItem = NSMenuItem(title: sleepTitle, action: nil, keyEquivalent: "")
         let sleepSubmenu = NSMenu()
         for modeOption in AntiSleepMode.allCases {
             var optionTitle = modeOption.displayName
@@ -623,35 +616,50 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let isClosedLid = SleepManager.shared.isClosedLidModeEnabled
         let privStatus = SleepManager.checkPrivilegeStatus()
         let privTag = privStatus.hasPrivilege ? "" : " [Requires Sudoers Setup]"
-        let closedLidTitle = isClosedLid ? "Closed-Lid / Clamshell Mode (pmset): ON (Click to Disable)\(privTag)" : "Closed-Lid / Clamshell Mode (pmset): OFF (Click to Enable)\(privTag)"
+        let closedLidTitle = isClosedLid ? "Closed-Lid / Clamshell Mode (pmset): ON\(privTag)" : "Closed-Lid / Clamshell Mode (pmset): OFF\(privTag)"
         let closedLidItem = NSMenuItem(title: closedLidTitle, action: #selector(toggleClosedLidModeClicked), keyEquivalent: "")
         closedLidItem.target = self
         if isClosedLid {
             closedLidItem.state = .on
         }
         sleepSubmenu.addItem(closedLidItem)
-
         sleepMainItem.submenu = sleepSubmenu
-        settingsSubmenu.addItem(sleepMainItem)
+        behaviorSubmenu.addItem(sleepMainItem)
 
-        settingsSubmenu.addItem(NSMenuItem.separator())
+        // Overworking Threshold Submenu
+        let overworkThresholdItem = NSMenuItem(title: "Overworking Threshold: \(overworkMins) min", action: nil, keyEquivalent: "")
+        let overworkSubmenu = NSMenu()
+        let availableThresholds = [5, 10, 15, 20, 30]
+        for mins in availableThresholds {
+            let item = NSMenuItem(title: "\(mins) min", action: #selector(selectOverworkThresholdClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mins
+            if mins == overworkMins {
+                item.state = .on
+            }
+            overworkSubmenu.addItem(item)
+        }
+        overworkThresholdItem.submenu = overworkSubmenu
+        behaviorSubmenu.addItem(overworkThresholdItem)
 
-        // macOS Banner Notifications Toggle Item
+        behaviorItem.submenu = behaviorSubmenu
+        settingsSubmenu.addItem(behaviorItem)
+
+        // 4C. Alerts Submenu
+        let alertsItem = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")
+        let alertsSubmenu = NSMenu()
+
+        // macOS Pop-up Notifications
         let isNotifyEnabled = ConfigManager.shared.config.notificationsEnabled ?? true
-        let notifyTitle = isNotifyEnabled ? "macOS Pop-up Banners: ON (Click to Disable)" : "macOS Pop-up Banners: OFF (Click to Enable)"
+        let notifyTitle = isNotifyEnabled ? "Pop-up Notifications: On" : "Pop-up Notifications: Off"
         let notifyToggleItem = NSMenuItem(title: notifyTitle, action: #selector(toggleNotificationsClicked), keyEquivalent: "")
         notifyToggleItem.target = self
-        settingsSubmenu.addItem(notifyToggleItem)
+        notifyToggleItem.state = isNotifyEnabled ? .on : .off
+        alertsSubmenu.addItem(notifyToggleItem)
 
-        let soundEnabled = NotificationManager.shared.soundEnabled
-        let soundTitle = soundEnabled ? "Sound Alerts: ON (Click to Mute)" : "Sound Alerts: OFF (Click to Unmute)"
-        let soundToggleItem = NSMenuItem(title: soundTitle, action: #selector(toggleSoundClicked), keyEquivalent: "")
-        soundToggleItem.target = self
-        settingsSubmenu.addItem(soundToggleItem)
-
-        // Completion Sound Selector Submenu (Directly under Settings)
+        // Completion Sound Selector Submenu
         let currentDoneSound = ConfigManager.shared.config.doneSoundName ?? "Glass"
-        let doneSoundItem = NSMenuItem(title: "Completion Sound (\(currentDoneSound))...", action: nil, keyEquivalent: "")
+        let doneSoundItem = NSMenuItem(title: "Completion Sound: \(currentDoneSound)", action: nil, keyEquivalent: "")
         let doneSoundSubmenu = NSMenu()
         let availableDoneSounds = ["Mute (No Sound)", "Glass", "Tink", "Pop", "Hero", "Purr", "Blow", "Bottle"]
         for soundName in availableDoneSounds {
@@ -664,11 +672,11 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             doneSoundSubmenu.addItem(item)
         }
         doneSoundItem.submenu = doneSoundSubmenu
-        settingsSubmenu.addItem(doneSoundItem)
+        alertsSubmenu.addItem(doneSoundItem)
 
-        // Attention Required Sound Selector Submenu (Directly under Settings)
+        // Attention Required Sound Selector Submenu
         let currentAttentionSound = ConfigManager.shared.config.attentionSoundName ?? "Basso"
-        let attentionSoundItem = NSMenuItem(title: "Attention Required Sound (\(currentAttentionSound))...", action: nil, keyEquivalent: "")
+        let attentionSoundItem = NSMenuItem(title: "Attention Sound: \(currentAttentionSound)", action: nil, keyEquivalent: "")
         let attentionSoundSubmenu = NSMenu()
         let availableAttentionSounds = ["Mute (No Sound)", "Basso", "Sosumi", "Ping", "Funk", "Submarine", "Frog", "Morse"]
         for soundName in availableAttentionSounds {
@@ -681,21 +689,75 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             attentionSoundSubmenu.addItem(item)
         }
         attentionSoundItem.submenu = attentionSoundSubmenu
-        settingsSubmenu.addItem(attentionSoundItem)
+        alertsSubmenu.addItem(attentionSoundItem)
 
-        settingsSubmenu.addItem(NSMenuItem.separator())
+        alertsItem.submenu = alertsSubmenu
+        settingsSubmenu.addItem(alertsItem)
 
-        let openConfigItem = NSMenuItem(title: "Edit Custom Logos & Badges (config.json)...", action: #selector(openConfigClicked), keyEquivalent: "")
+        // 4D. Appearance Submenu
+        let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let appearanceSubmenu = NSMenu()
+
+        // Menu Bar View (Detailed vs Compact)
+        let currentDisplayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
+        let isDetailedView = currentDisplayMode.lowercased() != "compact"
+        let viewMenuItem = NSMenuItem(title: "Menu Bar View: \(isDetailedView ? "Detailed" : "Compact")", action: nil, keyEquivalent: "")
+        let viewSubmenu = NSMenu()
+
+        let detailedItem = NSMenuItem(title: "Detailed (All Providers)", action: #selector(setMenuBarModeDetailedClicked), keyEquivalent: "")
+        detailedItem.target = self
+        detailedItem.state = isDetailedView ? .on : .off
+        viewSubmenu.addItem(detailedItem)
+
+        let compactItem = NSMenuItem(title: "Compact (Single Indicator)", action: #selector(setMenuBarModeCompactClicked), keyEquivalent: "")
+        compactItem.target = self
+        compactItem.state = !isDetailedView ? .on : .off
+        viewSubmenu.addItem(compactItem)
+
+        viewMenuItem.submenu = viewSubmenu
+        appearanceSubmenu.addItem(viewMenuItem)
+
+        // Badge Theme Submenu
+        let themeTitle = currentTheme == .funEmoji ? "Badge Theme: Fun" : "Badge Theme: Classic"
+        let themeMenuItem = NSMenuItem(title: themeTitle, action: nil, keyEquivalent: "")
+        let themeSubmenu = NSMenu()
+
+        let funThemeItem = NSMenuItem(title: "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
+        funThemeItem.target = self
+        funThemeItem.representedObject = BadgeThemeMode.funEmoji
+        funThemeItem.state = currentTheme == .funEmoji ? .on : .off
+        themeSubmenu.addItem(funThemeItem)
+
+        let classicThemeItem = NSMenuItem(title: "Classic Colored Balls (⚪🟡🟢🔴⚫)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
+        classicThemeItem.target = self
+        classicThemeItem.representedObject = BadgeThemeMode.classic
+        classicThemeItem.state = currentTheme == .classic ? .on : .off
+        themeSubmenu.addItem(classicThemeItem)
+
+        themeMenuItem.submenu = themeSubmenu
+        appearanceSubmenu.addItem(themeMenuItem)
+
+        // Custom Icons Submenu
+        let customIconsItem = NSMenuItem(title: "Custom Icons", action: nil, keyEquivalent: "")
+        let customIconsSubmenu = NSMenu()
+
+        let openConfigItem = NSMenuItem(title: "Edit Config… (config.json)", action: #selector(openConfigClicked), keyEquivalent: "")
         openConfigItem.target = self
-        settingsSubmenu.addItem(openConfigItem)
+        customIconsSubmenu.addItem(openConfigItem)
 
         let openIconsFolderItem = NSMenuItem(title: "Open Icons Folder (~/.config/AgentSignalBar/icons)", action: #selector(openIconsFolderClicked), keyEquivalent: "")
         openIconsFolderItem.target = self
-        settingsSubmenu.addItem(openIconsFolderItem)
+        customIconsSubmenu.addItem(openIconsFolderItem)
 
-        let reloadConfigItem = NSMenuItem(title: "Reload Custom Config & Icons", action: #selector(reloadConfigClicked), keyEquivalent: "")
+        let reloadConfigItem = NSMenuItem(title: "Reload Icons", action: #selector(reloadConfigClicked), keyEquivalent: "")
         reloadConfigItem.target = self
-        settingsSubmenu.addItem(reloadConfigItem)
+        customIconsSubmenu.addItem(reloadConfigItem)
+
+        customIconsItem.submenu = customIconsSubmenu
+        appearanceSubmenu.addItem(customIconsItem)
+
+        appearanceItem.submenu = appearanceSubmenu
+        settingsSubmenu.addItem(appearanceItem)
 
         settingsItem.submenu = settingsSubmenu
         menu.addItem(settingsItem)
@@ -704,6 +766,37 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let quitItem = NSMenuItem(title: "Quit AgentSignalBar", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    @objc private func toggleAgentMonitoredClicked(_ sender: NSMenuItem) {
+        if let agent = sender.representedObject as? AgentID {
+            let current = ConfigManager.shared.isAgentMonitored(agent)
+            ConfigManager.shared.setAgentMonitored(agent, monitored: !current)
+            print("👁️ Monitored state for \(agent.displayName) toggled to: \(!current)")
+            updateTitleAndMenu()
+        }
+    }
+
+    @objc private func selectOverworkThresholdClicked(_ sender: NSMenuItem) {
+        if let mins = sender.representedObject as? Int {
+            AgentStore.shared.overworkThresholdMinutes = mins
+            var cfg = ConfigManager.shared.config
+            cfg.overworkThresholdMinutes = mins
+            ConfigManager.shared.saveConfig(cfg)
+            print("⏱️ Overworking threshold set to: \(mins) min and saved to config.json")
+            updateTitleAndMenu()
+        }
+    }
+
+    @objc private func selectBadgeThemeClicked(_ sender: NSMenuItem) {
+        if let theme = sender.representedObject as? BadgeThemeMode {
+            AgentStore.shared.currentTheme = theme
+            var cfg = ConfigManager.shared.config
+            cfg.badgeTheme = theme.rawValue
+            ConfigManager.shared.saveConfig(cfg)
+            print("🎨 Badge Theme set to: \(theme.displayName) and saved to config.json")
+            updateTitleAndMenu()
+        }
     }
 
     @objc private func toggleBadgeThemeClicked() {
@@ -888,12 +981,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             print("🚨 Attention Sound Effect updated to: \(soundName) and saved to config.json")
             updateTitleAndMenu()
         }
-    }
-
-    @objc private func toggleSoundClicked() {
-        let newState = NotificationManager.shared.toggleSound()
-        print("🔊 Sound toggled: \(newState)")
-        updateTitleAndMenu()
     }
 
     @objc private func stopSoundClicked() {

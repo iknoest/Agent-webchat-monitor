@@ -813,5 +813,34 @@ Blockers: none
 
 [RELEASE] Replace Claude Accessibility Quota Sensor with Structured API / CLI — antigravity — 2026-08-18T10:14:00+02:00
 
+## 2026-08-18 — antigravity — macos
+Status: DONE
+Phase: Per-Provider Monitoring Selection, Settings UX Consolidation & GitHub Copilot Support
+Done:
+1. Per-Provider Monitoring Enable/Disable:
+   - Added user-facing submenu `Settings & Preferences > Monitored Agents` with checkable items for each supported agent (`ChatGPT Web`, `Claude Code`, `Antigravity`, `Codex Desktop`, `GitHub Copilot`).
+   - Persisted `disabledAgents` in `config.json` so existing and newly supported providers default to monitored.
+   - When a provider is disabled: lifecycle is not tracked, quota is not polled, session rows are hidden from the menu dropdown, summary metrics (`overallSummary` and `compactSummary`) omit the provider, notification/sound events are suppressed, and Smart Auto keep-awake is released.
+2. Settings Menu UX Consolidation:
+   - Reorganized Settings into 4 clean conceptual groups:
+     - `Monitored Agents >` (`✓ ChatGPT Web`, `✓ Claude Code`, `✓ Antigravity`, `✓ Codex Desktop`, `✓ GitHub Copilot`).
+     - `Monitoring Behavior >` (`Smart Keep-Awake: ... >`, `Overworking Threshold: 10 min >`).
+     - `Alerts >` (`Pop-up Notifications: On/Off`, `Completion Sound: Tink >`, `Attention Sound: Basso >`).
+     - `Appearance >` (`Menu Bar View: Detailed >`, `Badge Theme: Fun >`, `Custom Icons >` -> `Edit Config…`, `Open Icons Folder`, `Reload Icons`).
+   - Removed the separate global `Sound Alerts: On/Off` master switch in favor of direct per-sound `Mute (No Sound)` selection.
+3. GitHub Copilot Integration:
+   - Added `AgentID.copilot` with display name "GitHub Copilot", code "COP", bundle ID `com.github.githubapp`, and fallback processes `["GitHub Copilot", "github", "Visual Studio Code", "Code"]`.
+   - Implemented structured metadata-only lifecycle parsing in `AutoMonitor.swift` from local event streams `~/.copilot/session-state/*/events.jsonl`, `workspace.yaml`, and `~/.copilot/session-store.db` without capturing prompts, responses, code, or secrets.
+   - Handles `user.message` / `assistant.turn_start` -> `.working`, `tool.execution_start (ask_user)` -> `.blocked` (Needs You), `tool.execution_complete` -> `.working` recovery, `assistant.turn_end` -> `.done`, and `session.shutdown` -> `.idle`.
+   - Kept Codex and GitHub Copilot excluded from `SleepManager.trustedProviders` until human acceptance.
+4. Comprehensive Verification:
+   - Added Tests 161–175 to `Stage1TestRunner` covering default monitored status, disabled agent persistence, summary/menu exclusion, Smart Auto release, Copilot lifecycle event transitions, and sound settings (175/175 passed).
+   - Added SPM unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` passed cleanly).
+   - Executed Chrome Extension stress test suite (`node adapters/chrome-extension/background_test.js` 28/28 passed).
+   - Built release app bundle (`./build_app.sh` succeeded with exit code 0).
+   - Validated formatting with `git diff --check`.
+Verified: `swift run Stage1TestRunner` (175/175 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Commit and push `feat: add provider monitoring selection and GitHub Copilot support` to origin/main.
+Blockers: none
 
-
+[RELEASE] Per-Provider Monitoring Selection, Settings UX Consolidation & GitHub Copilot Support — antigravity — 2026-08-18T23:22:00+02:00
