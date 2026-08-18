@@ -1803,6 +1803,10 @@ runTest("67. Compact Mode Display: Provider-Aware Compact Representation with Qu
     let store = AgentStore.shared
     let usageStore = AgentUsageStore.shared
 
+    for a in AgentID.allCases {
+        store.clearQuotaRestored(for: a)
+    }
+
     store.updateStatus(for: .chatgpt, status: .idle)
     store.updateStatus(for: .codex, status: .off)
     store.updateStatus(for: .antigravity, status: .idle)
@@ -3515,4 +3519,310 @@ runTest("175. Monitored Agents: All providers restored to monitored default") {
     }
 }
 
-print("🎉 All 175 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents & GitHub Copilot Tests Passed!")
+// 176. Copilot Lifecycle: Generic child tool hooks (preToolUse, postToolUse) DO NOT overwrite Done status
+runTest("176. Copilot Lifecycle: Generic child tool hooks DO NOT overwrite Done status") {
+    let sessId = "copilot_hook_filter_test"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Hook Filter Task",
+        cwd: "/Users/ava/test",
+        eventType: "user.message",
+        turnId: "turn_hf_01"
+    )
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .working, "Must be working on user.message")
+
+    // Complete turn
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Hook Filter Task",
+        cwd: "/Users/ava/test",
+        eventType: "assistant.turn_end",
+        turnId: "turn_hf_01",
+        durationMs: 4500
+    )
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .done, "Must transition to done on assistant.turn_end")
+
+    // Post-turn child hooks fire (like in real Copilot telemetry/post tool hooks)
+    let childHook1 = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Hook Filter Task",
+        cwd: "/Users/ava/test",
+        eventType: "hook.start",
+        hookType: "preToolUse"
+    )
+    try assert(!childHook1, "preToolUse must be ignored and not mutate state")
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .done, "Session must RETAIN .done status against child preToolUse hook")
+
+    let childHook2 = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Hook Filter Task",
+        cwd: "/Users/ava/test",
+        eventType: "hook.start",
+        hookType: "postToolUse"
+    )
+    try assert(!childHook2, "postToolUse must be ignored")
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .done, "Session must RETAIN .done status against child postToolUse hook")
+}
+
+// 177. Copilot Lifecycle: hook.start / hook.end with agentStop triggers Done state
+runTest("177. Copilot Lifecycle: hook.start / hook.end with agentStop triggers Done state") {
+    let sessId = "copilot_stop_hook_test"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Stop Hook Task",
+        cwd: "/Users/ava/test",
+        eventType: "user.message",
+        turnId: "turn_sh_01"
+    )
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .working, "Must be working")
+
+    let res = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Stop Hook Task",
+        cwd: "/Users/ava/test",
+        eventType: "hook.start",
+        hookType: "agentStop"
+    )
+    try assert(res, "agentStop hook must be recognized as terminal stop")
+    try assert(AgentStore.shared.getStatus(for: .copilot).status == .done, "Must transition to done on agentStop hook")
+}
+
+// 178. Copilot Lifecycle: sessionEnd / session.shutdown transitions session to Idle
+runTest("178. Copilot Lifecycle: sessionEnd / session.shutdown transitions session to Idle") {
+    let sessId = "copilot_shutdown_test"
+    _ = AgentStore.shared.handleCopilotEvent(
+        sessionId: sessId,
+        title: "Shutdown Task",
+        cwd: "/Users/ava/test",
+        eventType: "hook.end",
+        hookType: "sessionEnd"
+    )
+    let sess = AgentStore.shared.getSessions(for: .copilot).first(where: { $0.sessionId == sessId })
+    try assert(sess?.status == .idle, "sessionEnd must transition session to idle")
+}
+
+// 179. Copilot Quota: Structured API response parsing from /copilot_internal/user
+runTest("179. Copilot Quota: Structured API response parsing from /copilot_internal/user") {
+    let mockJSON = """
+    {
+      "login": "iknoest",
+      "access_type_sku": "free_limited_copilot",
+      "copilot_plan": "individual",
+      "quota_snapshots": {
+        "chat": {
+          "percent_remaining": 68.4,
+          "quota_id": "chat",
+          "quota_remaining": 136.9,
+          "unlimited": false,
+          "credits_used": 63,
+          "remaining": 136,
+          "entitlement": 200
+        },
+        "completions": {
+          "percent_remaining": 100.0,
+          "quota_id": "completions",
+          "quota_remaining": 2000.0,
+          "unlimited": false,
+          "credits_used": 0,
+          "remaining": 2000,
+          "entitlement": 2000
+        }
+      },
+      "quota_reset_date_utc": "2026-09-01T00:00:00.000Z"
+    }
+    """
+    let data = mockJSON.data(using: .utf8)!
+    let usage = CopilotLocalQuotaConnector.shared.parseUsageResponseData(data)
+    try assert(usage != nil, "Must parse Copilot usage data")
+    try assert(usage?.sessionLimitPercent == 68.4, "Must parse 68.4% chat remaining")
+    try assert(!usage!.isPercentUsed, "isPercentUsed must be false (percent remaining)")
+    try assert(usage?.isLiveSource == true, "Must be live source")
+    try assert(usage?.quotaSource == "copilot_internal_user", "Source must be copilot_internal_user")
+    try assert(usage?.modelFamilies.count == 2, "Must parse 2 model families (Chat & Completions)")
+}
+
+// 180. Copilot Quota: Format reset date string
+runTest("180. Copilot Quota: Format reset date string") {
+    let baseDate = Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 18, hour: 12, minute: 0))!
+    let resetStr = CopilotLocalQuotaConnector.formatResetText(from: "2026-09-01T00:00:00.000Z", now: baseDate)
+    try assert(resetStr != nil, "Must format reset string")
+    try assert(resetStr!.contains("Sep 1"), "Must format month/day as Sep 1: got \(resetStr!)")
+    try assert(resetStr!.contains("in 13d") || resetStr!.contains("in 14d"), "Must contain day relative duration: got \(resetStr!)")
+}
+
+// 181. One-Shot Switch: Arming watch does not immediately switch window while Working
+runTest("181. One-Shot Switch: Arming watch does not immediately switch window while Working") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusTriggeredCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in
+        focusTriggeredCount += 1
+    }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_01")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_01"), "Watch must be armed")
+
+    // Working state update inside same turn must NOT trigger focus
+    let trans = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_01", newStatus: .working)
+    try assert(!trans, "Working status transition must NOT trigger focus")
+    try assert(focusTriggeredCount == 0, "No window focus must be executed while working")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_01"), "Watch must remain armed while working")
+}
+
+// 182. One-Shot Switch: Transition to Done triggers focus once and automatically disarms
+runTest("182. One-Shot Switch: Transition to Done triggers focus once and automatically disarms") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusedProvider: AgentID? = nil
+    var focusedSessionId: String? = nil
+    switchMgr.focusExecutionHandler = { p, s, _, _ in
+        focusedProvider = p
+        focusedSessionId = s
+    }
+
+    switchMgr.arm(provider: .copilot, sessionId: "sess_copilot_99")
+    let trans = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_copilot_99", newStatus: .done)
+    try assert(trans, "Transition to Done must trigger One-Shot Switch")
+    try assert(switchMgr.armedTarget == nil, "Watch must be AUTOMATICALLY DISARMED after first trigger")
+
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(focusedProvider == .copilot, "Focused provider must be copilot")
+    try assert(focusedSessionId == "sess_copilot_99", "Focused sessionId must match")
+
+    // Subsequent turns MUST NOT trigger focus (no repeated focus stealing)
+    let secondTrans = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_copilot_99", newStatus: .done)
+    try assert(!secondTrans, "Subsequent Done transitions without re-arming must NOT trigger focus")
+}
+
+// 183. One-Shot Switch: Transition to Blocked (Needs You) triggers focus once and disarms
+runTest("183. One-Shot Switch: Transition to Blocked (Needs You) triggers focus once and disarms") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusedProvider: AgentID? = nil
+    switchMgr.focusExecutionHandler = { p, _, _, _ in
+        focusedProvider = p
+    }
+
+    switchMgr.arm(provider: .antigravity, sessionId: "agy_perm_sess")
+    let trans = switchMgr.evaluateTransition(provider: .antigravity, sessionId: "agy_perm_sess", newStatus: .blocked)
+    try assert(trans, "Transition to Blocked (Needs You) must trigger One-Shot Switch")
+    try assert(switchMgr.armedTarget == nil, "Watch must be disarmed")
+
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(focusedProvider == .antigravity, "Focused provider must be antigravity")
+}
+
+// 184. One-Shot Switch: Cancellation / unchecking prevents focus and disarms watch
+runTest("184. One-Shot Switch: Cancellation / unchecking prevents focus and disarms watch") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusTriggered = false
+    switchMgr.focusExecutionHandler = { _, _, _, _ in
+        focusTriggered = true
+    }
+
+    switchMgr.arm(provider: .chatgpt, targetTabId: 777)
+    try assert(switchMgr.isArmed(provider: .chatgpt, targetTabId: 777), "Must be armed")
+
+    // User unchecks / cancels
+    switchMgr.disarm()
+    try assert(!switchMgr.isArmed(provider: .chatgpt, targetTabId: 777), "Must be disarmed")
+
+    let trans = switchMgr.evaluateTransition(provider: .chatgpt, targetTabId: 777, newStatus: .done)
+    try assert(!trans, "Cancelled watch must NOT trigger transition")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(!focusTriggered, "No focus must occur after cancellation")
+}
+
+// 185. One-Shot Switch: Unrelated provider / session transition does NOT trigger focus
+runTest("185. One-Shot Switch: Unrelated provider / session transition does NOT trigger focus") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusTriggered = false
+    switchMgr.focusExecutionHandler = { _, _, _, _ in
+        focusTriggered = true
+    }
+
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_A")
+
+    // Unrelated provider (ChatGPT) completes
+    let trans1 = switchMgr.evaluateTransition(provider: .chatgpt, targetTabId: 101, newStatus: .done)
+    try assert(!trans1, "Unrelated ChatGPT completion must NOT trigger Claude watch")
+
+    // Unrelated Claude session B completes
+    let trans2 = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_B", newStatus: .done)
+    try assert(!trans2, "Unrelated Claude session B completion must NOT trigger session A watch")
+
+    try assert(!focusTriggered, "No focus must trigger for unrelated transitions")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_A"), "Original watch must remain armed")
+}
+
+// 186. Canonical Priority: Claude Working + ChatGPT New Output -> Compact surfaces ChatGPT New Output
+runTest("186. Canonical Priority: Claude Working + ChatGPT New Output -> Compact surfaces ChatGPT") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude thinking")
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .done, detail: "ChatGPT output ready")
+
+    let compact = AgentStore.shared.compactSummary()
+    try assert(compact.contains("GPT🟢"), "Compact summary must surface newly completed ChatGPT (Done) over Claude (Working): got \(compact)")
+}
+
+// 187. Canonical Priority: Copilot Working + AGY Needs You -> Compact surfaces AGY Needs You
+runTest("187. Canonical Priority: Copilot Working + AGY Needs You -> Compact surfaces AGY Needs You") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+    AgentStore.shared.updateStatus(for: .copilot, status: .working, detail: "Copilot working")
+    AgentStore.shared.updateStatus(for: .antigravity, status: .blocked, detail: "Antigravity permission prompt")
+
+    let compact = AgentStore.shared.compactSummary()
+    try assert(compact.contains("AGY🔴"), "Compact summary must surface AGY (Needs You) over Copilot (Working): got \(compact)")
+}
+
+// 188. Canonical Priority: Claude Done-unacknowledged + Copilot Working -> Compact surfaces Claude Done
+runTest("188. Canonical Priority: Claude Done-unacknowledged + Copilot Working -> Compact surfaces Claude Done") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+    AgentStore.shared.updateStatus(for: .copilot, status: .working, detail: "Copilot working")
+    AgentStore.shared.updateStatus(for: .claude, status: .done, detail: "Claude output ready")
+
+    let top = AgentStore.shared.getHighestPriorityAgent()
+    try assert(top?.id == .claude, "Highest priority agent must be Claude (Done) over Copilot (Working): got \(top?.id.displayName ?? "none")")
+
+    let compact = AgentStore.shared.compactSummary()
+    try assert(compact.contains("CLD🟢"), "Compact summary must surface Claude Done over Copilot Working: got \(compact)")
+}
+
+// 189. Canonical Priority: Done acknowledged + another provider Working -> Working surfaces
+runTest("189. Canonical Priority: Done acknowledged + another provider Working -> Working surfaces") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+    // Acknowledge Claude Done -> status becomes Idle
+    AgentStore.shared.markChecked(for: .claude)
+    AgentStore.shared.updateStatus(for: .claude, status: .idle)
+    AgentStore.shared.updateStatus(for: .copilot, status: .working, detail: "Copilot actively working")
+
+    let top = AgentStore.shared.getHighestPriorityAgent()
+    try assert(top?.id == .copilot, "When Claude is acknowledged/idle, Copilot Working must surface: got \(top?.id.displayName ?? "none")")
+
+    let compact = AgentStore.shared.compactSummary()
+    try assert(compact.contains("COP🟡"), "Compact summary must surface Copilot Working when other agents are idle: got \(compact)")
+}
+
+// 190. Menu Bar: Smart Keep-Awake first-level menu and OneShotSwitch render signature
+runTest("190. Menu Bar: Smart Keep-Awake first-level menu and OneShotSwitch render signature") {
+    let sigBefore = MenuBarManager.shared.computeRenderSignature()
+    OneShotSwitchManager.shared.arm(provider: .claude, sessionId: "sess_render_test")
+    let sigAfter = MenuBarManager.shared.computeRenderSignature()
+    try assert(sigBefore != sigAfter, "Render signature must respond to OneShotSwitch arming")
+    OneShotSwitchManager.shared.disarm()
+
+    // Clean up all agents to idle
+    for agent in AgentID.allCases {
+        AgentStore.shared.updateStatus(for: agent, status: .idle)
+    }
+}
+
+print("🎉 All 190 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch & Canonical Priority Tests Passed!")

@@ -2,7 +2,12 @@ import Foundation
 import AppKit
 
 public struct WindowFocuser {
-    public static func focusAgent(_ agent: AgentID, targetURL: String? = nil) {
+    public static func focusAgent(_ agent: AgentID, targetURL: String? = nil, sessionId: String? = nil, tabId: Int? = nil) {
+        if agent == .chatgpt, let tid = tabId {
+            HTTPServer.shared.requestTabFocus(tabId: tid)
+            focusAppOnly("com.google.Chrome")
+            return
+        }
         switch agent {
         case .chatgpt:
             focusChromeChatGPT(targetURL: targetURL)

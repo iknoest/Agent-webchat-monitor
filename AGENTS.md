@@ -844,3 +844,33 @@ Next: Commit and push `feat: add provider monitoring selection and GitHub Copilo
 Blockers: none
 
 [RELEASE] Per-Provider Monitoring Selection, Settings UX Consolidation & GitHub Copilot Support — antigravity — 2026-08-18T23:22:00+02:00
+
+## 2026-08-18 — antigravity — macos
+Status: DONE
+Phase: Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch & Canonical Priority Milestone
+Done:
+1. Copilot Lifecycle Root-Cause Repair:
+   - Diagnosed stuck "Working / thinking > 3m" failure: Copilot emits child tool hook events (`hook.start` with `hookType: preToolUse`, `postToolUse`, `postToolUseFailure`, `agentStop`, `sessionEnd`) after `assistant.turn_end`. The previous code unconditionally mapped any `hook.start` to `.working`, resetting the timer and overwriting `.done`!
+   - Fixed `AgentState.swift` & `AutoMonitor.swift`: generic child tool hooks are ignored and cannot mutate state or reset turn duration; `assistant.turn_end` or `agentStop` strictly transitions to `.done`; `session.shutdown` / `sessionEnd` transitions to `.idle`.
+2. Structured Copilot Quota Integration:
+   - Created `CopilotLocalQuotaConnector.swift` connecting to structured endpoint `GET https://api.github.com/copilot_internal/user` using GitHub CLI `gh api /copilot_internal/user` or Keychain auth token.
+   - Parses `quota_snapshots.chat.percent_remaining` (68.4%), `quota_reset_date_utc` (`2026-09-01T00:00:00.000Z`), and model family breakdown matching Ava's live Copilot Free UI (~32% used = 68.4% left, resets Sep 1 (in 13d)).
+   - Renders live Copilot usage in Section 3 of MenuBar dropdown (`Chat: [■■■■■■■□□□] 68% left · Sep 1 (in 13d)`).
+3. Product Actions Simplification & One-Shot Switch Watch:
+   - Removed `📋 Copy Output -> Clipboard` from menus.
+   - Replaced immediate Focus action with one-shot `☐ Switch Here When Ready` (or `✓ Switch Here When Ready`).
+   - Created `OneShotSwitchManager.swift`: arms transient watch on target session while `Working`; triggers window focus exactly once when state reaches `Done` or `Blocked` (Needs You), and automatically disarms immediately. Canceling unchecks the watch; unrelated session completions are ignored; subsequent turns do not repeatedly steal focus.
+4. Menu Organization & Canonical Priority Resolver:
+   - Moved `Smart Keep-Awake: <current mode> >` to the first-level operational menu before `Settings & Preferences...`. Streamlined `Monitoring Behavior` inside Settings to retain `Overworking Threshold`.
+   - Implemented `canonicalPriorityRank(for info:)` in `AgentStore` with strict hierarchy: `Needs You (100) > unacknowledged Done (80) > Working (60) > Quota Restored (40) > Quota Exhausted (30) > Idle (20) > Closed (0)`.
+   - Fixed Compact mode so newly completed output (`Done`) or actionable prompts (`Needs You`) immediately surface above a still-working agent (e.g. `Claude Working + ChatGPT New Output` -> `GPT🟢`).
+5. Comprehensive Test Verification:
+   - Added Tests 176–190 to `Stage1TestRunner` covering hook filtering, stop hooks, shutdown, Copilot quota JSON parsing, reset date formatting, One-Shot Switch lifecycle (arming, done trigger, blocked trigger, cancellation, isolation), and canonical priority sorting (190/190 passed).
+   - Added unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` passed cleanly).
+   - Built release app bundle (`./build_app.sh` succeeded with exit code 0).
+   - Validated formatting with `git diff --check`.
+Verified: `swift run Stage1TestRunner` (190/190 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Commit and push `feat: copilot lifecycle repair, quota, one-shot switch, and canonical priority` to origin/main.
+Blockers: none
+
+[RELEASE] Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch & Canonical Priority Milestone — antigravity — 2026-08-18T23:54:00+02:00

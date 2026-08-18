@@ -1460,5 +1460,143 @@ final class AgentSignalBarTests: XCTestCase {
         // Restore
         ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
     }
+
+    func testCopilotHookFilteringAndStopHooks() throws {
+        let store = AgentStore.shared
+        let sessId = "copilot_unit_hook_filter"
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Hook Task",
+            cwd: "/Users/ava/test",
+            eventType: "user.message",
+            turnId: "t_unit_01"
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .working)
+
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Hook Task",
+            cwd: "/Users/ava/test",
+            eventType: "assistant.turn_end",
+            turnId: "t_unit_01",
+            durationMs: 3000
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .done)
+
+        // Child tool hooks must NOT overwrite done
+        let ignored = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Hook Task",
+            cwd: "/Users/ava/test",
+            eventType: "hook.start",
+            hookType: "preToolUse"
+        )
+        XCTAssertFalse(ignored)
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .done)
+
+        // agentStop hook triggers done
+        _ = store.handleCopilotEvent(
+            sessionId: sessId,
+            title: "Unit Hook Task",
+            cwd: "/Users/ava/test",
+            eventType: "hook.start",
+            hookType: "agentStop"
+        )
+        XCTAssertEqual(store.getStatus(for: .copilot).status, .done)
+    }
+
+    func testCopilotQuotaParsingAndResetFormatting() throws {
+        let mockJSON = """
+        {
+          "login": "iknoest",
+          "access_type_sku": "free_limited_copilot",
+          "copilot_plan": "individual",
+          "quota_snapshots": {
+            "chat": {
+              "percent_remaining": 68.4,
+              "quota_id": "chat",
+              "quota_remaining": 136.9,
+              "unlimited": false,
+              "credits_used": 63,
+              "remaining": 136,
+              "entitlement": 200
+            }
+          },
+          "quota_reset_date_utc": "2026-09-01T00:00:00.000Z"
+        }
+        """
+        let data = mockJSON.data(using: .utf8)!
+        let usage = CopilotLocalQuotaConnector.shared.parseUsageResponseData(data)
+        XCTAssertNotNil(usage)
+        XCTAssertEqual(usage?.sessionLimitPercent, 68.4)
+        XCTAssertEqual(usage?.isLiveSource, true)
+
+        let baseDate = Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 18, hour: 12, minute: 0))!
+        let resetStr = CopilotLocalQuotaConnector.formatResetText(from: "2026-09-01T00:00:00.000Z", now: baseDate)
+        XCTAssertNotNil(resetStr)
+        XCTAssertTrue(resetStr!.contains("Sep 1"))
+    }
+
+    func testOneShotSwitchWatchLifecycle() throws {
+        let switchMgr = OneShotSwitchManager.shared
+        switchMgr.resetTestMetrics()
+
+        var focusTriggeredCount = 0
+        switchMgr.focusExecutionHandler = { _, _, _, _ in
+            focusTriggeredCount += 1
+        }
+
+        switchMgr.arm(provider: .copilot, sessionId: "sess_switch_unit")
+        XCTAssertTrue(switchMgr.isArmed(provider: .copilot, sessionId: "sess_switch_unit"))
+
+        // Working -> no focus
+        let trans1 = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_switch_unit", newStatus: .working)
+        XCTAssertFalse(trans1)
+        XCTAssertEqual(focusTriggeredCount, 0)
+
+        // Done -> triggers focus once and disarms
+        let trans2 = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_switch_unit", newStatus: .done)
+        XCTAssertTrue(trans2)
+        XCTAssertNil(switchMgr.armedTarget)
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(focusTriggeredCount, 1)
+
+        // Subsequent Done -> no focus
+        let trans3 = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_switch_unit", newStatus: .done)
+        XCTAssertFalse(trans3)
+    }
+
+    func testCanonicalPriorityResolverCompactSurfacing() throws {
+        let store = AgentStore.shared
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+        // 1. Claude Working + ChatGPT Done -> ChatGPT surfaces
+        store.updateStatus(for: .claude, status: .working)
+        store.updateStatus(for: .chatgpt, status: .done)
+        XCTAssertTrue(store.compactSummary().contains("GPT🟢"))
+
+        // 2. Copilot Working + AGY Needs You -> AGY Needs You surfaces
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+        store.updateStatus(for: .copilot, status: .working)
+        store.updateStatus(for: .antigravity, status: .blocked)
+        XCTAssertTrue(store.compactSummary().contains("AGY🔴"))
+
+        // 3. Claude Done + Copilot Working -> Claude Done surfaces
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+        store.updateStatus(for: .copilot, status: .working)
+        store.updateStatus(for: .claude, status: .done)
+        XCTAssertEqual(store.getHighestPriorityAgent()?.id, .claude)
+        XCTAssertTrue(store.compactSummary().contains("CLD🟢"))
+
+        // 4. Acknowledged Done -> Working surfaces
+        store.markChecked(for: .claude)
+        store.updateStatus(for: .claude, status: .idle)
+        XCTAssertEqual(store.getHighestPriorityAgent()?.id, .copilot)
+        XCTAssertTrue(store.compactSummary().contains("COP🟡"))
+
+        // Cleanup
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+    }
 }
 #endif

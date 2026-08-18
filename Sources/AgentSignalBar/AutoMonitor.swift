@@ -156,6 +156,9 @@ public final class AutoMonitor: @unchecked Sendable {
         if ConfigManager.shared.isAgentMonitored(.antigravity) {
             updateAntigravityUsageFromLocalFiles()
         }
+        if ConfigManager.shared.isAgentMonitored(.copilot) {
+            updateCopilotUsageFromLocalAPI()
+        }
     }
 
     // Helper: Bounded file tail reader (Max 64KB)
@@ -275,14 +278,17 @@ public final class AutoMonitor: @unchecked Sendable {
     private var lastClaudeQuotaFetch: Date = .distantPast
     private var lastAgyQuotaFetch: Date = .distantPast
     private var lastCodexQuotaFetch: Date = .distantPast
+    private var lastCopilotQuotaFetch: Date = .distantPast
 
     public func refreshUsageNow() {
         lastClaudeQuotaFetch = .distantPast
         lastAgyQuotaFetch = .distantPast
         lastCodexQuotaFetch = .distantPast
+        lastCopilotQuotaFetch = .distantPast
         updateClaudeUsage(forceRefresh: true)
         updateAntigravityUsageFromLocalFiles()
         updateCodexUsageFromLocalFiles()
+        updateCopilotUsageFromLocalAPI()
     }
 
     // Dynamic Claude Usage Sync from Structured OAuth API, Local History, or CLI Fallback
@@ -410,6 +416,36 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.lastUpdated = now
         AgentUsageStore.shared.updateUsage(for: .codex, data: usage)
         AgentStore.shared.updateAvailability(for: .codex, availability: usage.availability)
+    }
+
+    // Dynamic Copilot Usage Sync from structured /copilot_internal/user API
+    private func updateCopilotUsageFromLocalAPI() {
+        guard ConfigManager.shared.isAgentMonitored(.copilot) else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastCopilotQuotaFetch) >= 15.0 {
+            lastCopilotQuotaFetch = now
+            if let liveUsage = CopilotLocalQuotaConnector.shared.fetchCopilotUsage() {
+                var updated = liveUsage
+                updated.lastSuccessfulRefresh = now
+                AgentUsageStore.shared.updateUsage(for: .copilot, data: updated)
+                AgentStore.shared.updateAvailability(for: .copilot, availability: updated.availability)
+                return
+            } else {
+                if var existing = AgentUsageStore.shared.getUsage(for: .copilot), existing.sessionLimitPercent != nil {
+                    existing.isLiveSource = false
+                    existing.freshness = "Stale"
+                    existing.lastUpdated = now
+                    AgentUsageStore.shared.updateUsage(for: .copilot, data: existing)
+                    return
+                }
+            }
+        }
+
+        let existing = AgentUsageStore.shared.getUsage(for: .copilot)
+        if let existing = existing, existing.isLiveSource || existing.sessionLimitPercent != nil {
+            AgentStore.shared.updateAvailability(for: .copilot, availability: existing.availability)
+            return
+        }
     }
 
     private func parseISO8601Date(_ str: String) -> Date? {
@@ -972,14 +1008,18 @@ public final class AutoMonitor: @unchecked Sendable {
             let dataObj = json["data"] as? [String: Any] ?? [:]
             let turnId = dataObj["turnId"] as? String
             let toolName = dataObj["toolName"] as? String
+            let hookType = dataObj["hookType"] as? String ?? json["hookType"] as? String
+            let durationMs = dataObj["durationMs"] as? Double ?? (dataObj["durationMs"] as? Int).map { Double($0) }
 
             _ = AgentStore.shared.handleCopilotEvent(
                 sessionId: session.id,
                 title: session.title,
                 cwd: session.cwd,
                 eventType: eventType,
+                hookType: hookType,
                 toolName: toolName,
-                turnId: turnId
+                turnId: turnId,
+                durationMs: durationMs
             )
         }
     }

@@ -605,6 +605,7 @@ public final class AgentStore: @unchecked Sendable {
         currentParent.activeSessionCount = max(1, sessionList.count)
         currentParent.lastUpdated = now
 
+        var chosenSession: AgentSessionInfo? = nil
         if sessionList.isEmpty {
             currentParent.status = .idle
             if let d = currentParent.detail, d.contains("Monitoring unavailable") || d.contains("Experimental") {
@@ -618,12 +619,10 @@ public final class AgentStore: @unchecked Sendable {
             let workingSessions = sessionList.filter { $0.status == .working }
             let unackDoneSessions = sessionList.filter { $0.status == .done && !$0.isAcknowledged }
 
-            let selectedSession: AgentSessionInfo?
-
             if let topBlocked = unackBlockedSessions.first {
                 currentParent.status = .blocked
                 currentParent.detail = topBlocked.attentionReason ?? topBlocked.title
-                selectedSession = topBlocked
+                chosenSession = topBlocked
             } else if let topWorking = workingSessions.first {
                 currentParent.status = .working
                 currentParent.isQuotaRestored = false
@@ -635,7 +634,7 @@ public final class AgentStore: @unchecked Sendable {
                 let secs = elapsed % 60
                 durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
                 currentParent.detail = "\(provider.displayName) active: \(topWorking.title)\(durationStr)"
-                selectedSession = topWorking
+                chosenSession = topWorking
             } else if let topDone = unackDoneSessions.first {
                 currentParent.status = .done
                 currentParent.detail = "\(provider.displayName) output ready: \(topDone.title)"
@@ -643,15 +642,15 @@ public final class AgentStore: @unchecked Sendable {
                 if let dur = topDone.lastDurationSeconds {
                     currentParent.lastDurationSeconds = dur
                 }
-                selectedSession = topDone
+                chosenSession = topDone
             } else {
                 currentParent.status = .idle
                 currentParent.detail = "\(provider.displayName) ready (\(sessionList.count) tracked session(s))"
                 currentParent.thinkingStartTime = nil
-                selectedSession = sessionList.first
+                chosenSession = sessionList.first
             }
 
-            if let sel = selectedSession {
+            if let sel = chosenSession {
                 currentParent.sessionTitle = sel.title
                 currentParent.targetTabId = sel.targetTabId
                 currentParent.webLink = sel.webLink
@@ -669,6 +668,13 @@ public final class AgentStore: @unchecked Sendable {
 
         if oldStatus != newStatus {
             notifyObservers(agent: provider, oldStatus: oldStatus, newStatus: newStatus, detail: parentDetail)
+            OneShotSwitchManager.shared.evaluateTransition(
+                provider: provider,
+                sessionId: chosenSession?.sessionId,
+                targetTabId: chosenSession?.targetTabId,
+                targetURL: chosenSession?.webLink,
+                newStatus: newStatus
+            )
         }
     }
 
@@ -736,6 +742,14 @@ public final class AgentStore: @unchecked Sendable {
             webLink: webLink,
             targetTabId: targetTabId
         )
+        if status == .working {
+            lock.lock()
+            if var current = states[agent] {
+                current.isQuotaRestored = false
+                states[agent] = current
+            }
+            lock.unlock()
+        }
         syncSessions(for: agent, activeSessions: [session], processRunning: status != .off)
     }
 
@@ -1314,6 +1328,7 @@ public final class AgentStore: @unchecked Sendable {
         title: String,
         cwd: String = "",
         eventType: String,
+        hookType: String? = nil,
         toolName: String? = nil,
         turnId: String? = nil,
         durationMs: Double? = nil
@@ -1340,8 +1355,11 @@ public final class AgentStore: @unchecked Sendable {
         session.title = sessionTitle
         session.lastUpdated = now
 
-        switch eventType {
-        case "user.message", "assistant.turn_start", "hook.start":
+        let isStartHook = eventType == "hook.start" && (hookType == "userPromptSubmitted" || hookType == "UserPromptSubmit" || hookType == "SessionStart" || hookType == "SubagentStart")
+        let isStopHook = (eventType == "hook.start" || eventType == "hook.end") && (hookType == "agentStop" || hookType == "Stop" || hookType == "SubagentStop")
+        let isShutdownHook = (eventType == "hook.start" || eventType == "hook.end") && (hookType == "sessionEnd" || hookType == "SessionEnd")
+
+        if eventType == "user.message" || eventType == "assistant.turn_start" || isStartHook {
             session.status = .working
             if let tid = turnId, !tid.isEmpty {
                 session.turnId = tid
@@ -1352,22 +1370,21 @@ public final class AgentStore: @unchecked Sendable {
             session.attentionReason = nil
             session.acknowledgedTurnId = nil
             session.acknowledgedAt = nil
-            session.sourceEvidence = "Copilot Event: \(eventType)"
-            session.sensorReason = "Copilot Event: \(eventType)"
+            session.sourceEvidence = "Copilot Event: \(eventType)\(hookType != nil ? " (\(hookType!))" : "")"
+            session.sensorReason = session.sourceEvidence
             currentSessions[sessionId] = session
             trackedSessions[.copilot] = currentSessions
             lock.unlock()
 
             syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
             return true
-
-        case "tool.execution_start":
-            if toolName == "ask_user" {
+        } else if eventType == "tool.execution_start" {
+            if toolName == "ask_user" || toolName == "ask_question" || toolName == "permission_request" {
                 session.status = .blocked
                 let reasonStr = "Waiting for user response"
                 session.attentionReason = reasonStr
                 session.sensorReason = reasonStr
-                session.sourceEvidence = "Copilot Tool: ask_user"
+                session.sourceEvidence = "Copilot Tool: \(toolName ?? "ask_user")"
                 if let tid = turnId, !tid.isEmpty {
                     session.turnId = tid
                 }
@@ -1386,8 +1403,7 @@ public final class AgentStore: @unchecked Sendable {
 
             syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
             return true
-
-        case "tool.execution_complete":
+        } else if eventType == "tool.execution_complete" {
             if session.status == .blocked && session.attentionReason == "Waiting for user response" {
                 session.status = .working
                 session.attentionReason = nil
@@ -1402,8 +1418,7 @@ public final class AgentStore: @unchecked Sendable {
             }
             lock.unlock()
             return false
-
-        case "assistant.turn_end":
+        } else if eventType == "assistant.turn_end" || isStopHook {
             session.status = .done
             session.attentionReason = nil
             if let dMs = durationMs, dMs > 0 {
@@ -1412,16 +1427,15 @@ public final class AgentStore: @unchecked Sendable {
                 session.lastDurationSeconds = now.timeIntervalSince(start)
             }
             session.thinkingStartTime = nil
-            session.sourceEvidence = "Copilot Event: \(eventType)"
-            session.sensorReason = "Copilot Event: \(eventType)"
+            session.sourceEvidence = "Copilot Event: \(eventType)\(hookType != nil ? " (\(hookType!))" : "")"
+            session.sensorReason = session.sourceEvidence
             currentSessions[sessionId] = session
             trackedSessions[.copilot] = currentSessions
             lock.unlock()
 
             syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
             return true
-
-        case "session.shutdown":
+        } else if eventType == "session.shutdown" || isShutdownHook {
             session.status = .idle
             session.attentionReason = nil
             session.thinkingStartTime = nil
@@ -1433,8 +1447,8 @@ public final class AgentStore: @unchecked Sendable {
 
             syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
             return true
-
-        default:
+        } else {
+            // Discard generic child tool/telemetry hooks without modifying state
             lock.unlock()
             return false
         }
@@ -1725,29 +1739,51 @@ public final class AgentStore: @unchecked Sendable {
         return copy
     }
 
+    public static func canonicalPriorityRank(for info: AgentInfo) -> Int {
+        if info.effectiveDisplayStatus == .blocked {
+            return 100
+        }
+        if info.status == .done && info.availability != .quotaExhausted {
+            return 80
+        }
+        if info.status == .working && info.availability != .quotaExhausted {
+            return 60
+        }
+        if info.effectiveDisplayStatus == .quotaRestored {
+            return 40
+        }
+        if info.effectiveDisplayStatus == .quotaExhausted {
+            return 30
+        }
+        if info.status == .idle && info.status != .off {
+            return 20
+        }
+        return 0
+    }
+
     public func getHighestPriorityAgent() -> AgentInfo? {
         lock.lock()
         defer { lock.unlock() }
 
-        var resolvedStates: [AgentID: AgentInfo] = [:]
+        var resolvedList: [AgentInfo] = []
         for agent in AgentID.allCases where ConfigManager.shared.isAgentMonitored(agent) {
             var info = states[agent] ?? AgentInfo(id: agent, status: .off)
-            if let usage = AgentUsageStore.shared.getUsage(for: agent), usage.isQuotaExhausted {
-                info.availability = .quotaExhausted
-            } else {
-                info.availability = .available
+            if let usage = AgentUsageStore.shared.getUsage(for: agent) {
+                info.availability = usage.availability
             }
-            resolvedStates[agent] = info
+            resolvedList.append(info)
         }
 
-        let monitoredCases = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
-        let candidateBlocked = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .blocked && $0.availability != .quotaExhausted })
-        let candidateDone = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .done && $0.availability != .quotaExhausted })
-        let candidateWorking = monitoredCases.compactMap({ resolvedStates[$0] }).first(where: { $0.status == .working && $0.availability != .quotaExhausted })
+        let sorted = resolvedList.sorted { a, b in
+            let rankA = AgentStore.canonicalPriorityRank(for: a)
+            let rankB = AgentStore.canonicalPriorityRank(for: b)
+            if rankA != rankB {
+                return rankA > rankB
+            }
+            return a.lastUpdated > b.lastUpdated
+        }
 
-        let candidate = candidateBlocked ?? candidateDone ?? candidateWorking
-
-        guard let candidate = candidate else {
+        guard let top = sorted.first, AgentStore.canonicalPriorityRank(for: top) > 0 else {
             lastTopAgentID = nil
             lastTopStatus = nil
             return nil
@@ -1757,15 +1793,9 @@ public final class AgentStore: @unchecked Sendable {
         if let lastAgentID = lastTopAgentID, let lastStatus = lastTopStatus {
             let elapsed = now.timeIntervalSince(lastTopTime)
             if elapsed < 5.0 {
-                let priorityValue: (AgentStatus) -> Int = { st in
-                    switch st {
-                    case .blocked: return 3
-                    case .done: return 2
-                    case .working: return 1
-                    default: return 0
-                    }
-                }
-                if priorityValue(candidate.status) <= priorityValue(lastStatus) {
+                let existingRank = resolvedList.first(where: { $0.id == lastAgentID }).map { AgentStore.canonicalPriorityRank(for: $0) } ?? 0
+                let topRank = AgentStore.canonicalPriorityRank(for: top)
+                if topRank <= existingRank {
                     if let existing = states[lastAgentID], existing.status == lastStatus {
                         return existing
                     }
@@ -1773,10 +1803,10 @@ public final class AgentStore: @unchecked Sendable {
             }
         }
 
-        lastTopAgentID = candidate.id
-        lastTopStatus = candidate.status
+        lastTopAgentID = top.id
+        lastTopStatus = top.status
         lastTopTime = now
-        return candidate
+        return top
     }
 
     public func overallSummary() -> String {
@@ -1805,50 +1835,45 @@ public final class AgentStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        // Priority hierarchy: Blocked (Needs You) > Working > Done > Quota Exhausted > Idle > Off
-        let priorityOrder: [EffectiveDisplayStatus] = [.blocked, .working, .done, .quotaExhausted]
-
-        for targetDisplayStatus in priorityOrder {
-            var matchingProviders: [AgentID] = []
-            for agent in AgentID.allCases where ConfigManager.shared.isAgentMonitored(agent) {
-                let info = states[agent] ?? AgentInfo(id: agent, status: .off)
-                if info.effectiveDisplayStatus == targetDisplayStatus {
-                    matchingProviders.append(agent)
-                }
+        var resolvedList: [AgentInfo] = []
+        for agent in AgentID.allCases where ConfigManager.shared.isAgentMonitored(agent) {
+            var info = states[agent] ?? AgentInfo(id: agent, status: .off)
+            if let usage = AgentUsageStore.shared.getUsage(for: agent) {
+                info.availability = usage.availability
             }
+            resolvedList.append(info)
+        }
 
-            if !matchingProviders.isEmpty {
-                // Prioritize the provider that was updated most recently
-                matchingProviders.sort { a, b in
-                    let infoA = states[a] ?? AgentInfo(id: a)
-                    let infoB = states[b] ?? AgentInfo(id: b)
-                    return infoA.lastUpdated > infoB.lastUpdated
-                }
-
-                let topAgent = matchingProviders.first!
-                let customCfg = ConfigManager.shared.getAgentConfig(for: topAgent)
-                let tag = customCfg?.shortTag ?? topAgent.shortTag
-                let badge = targetDisplayStatus.badge(theme: currentTheme)
-
-                let extraCount = matchingProviders.count - 1
-                if extraCount > 0 {
-                    return "\(tag)\(badge) +\(extraCount)"
-                } else {
-                    return "\(tag)\(badge)"
-                }
+        let sorted = resolvedList.sorted { a, b in
+            let rankA = AgentStore.canonicalPriorityRank(for: a)
+            let rankB = AgentStore.canonicalPriorityRank(for: b)
+            if rankA != rankB {
+                return rankA > rankB
             }
+            return a.lastUpdated > b.lastUpdated
         }
 
-        // Check normal Idle providers among monitored agents
-        let anyIdle = AgentID.allCases.filter({ ConfigManager.shared.isAgentMonitored($0) }).contains { agent in
-            let st = states[agent]
-            return st?.status == .idle && st?.effectiveDisplayStatus == .idle
-        }
-        if anyIdle {
-            return "⚪"
+        guard let topAgentInfo = sorted.first, AgentStore.canonicalPriorityRank(for: topAgentInfo) >= 30 else {
+            // Check idle among monitored
+            let anyIdle = resolvedList.contains { $0.status == .idle && $0.effectiveDisplayStatus == .idle }
+            if anyIdle {
+                return "⚪"
+            }
+            return "⚫"
         }
 
-        // Off
-        return "⚫"
+        let topRank = AgentStore.canonicalPriorityRank(for: topAgentInfo)
+        let sameRankAgents = sorted.filter { AgentStore.canonicalPriorityRank(for: $0) == topRank }
+
+        let customCfg = ConfigManager.shared.getAgentConfig(for: topAgentInfo.id)
+        let tag = customCfg?.shortTag ?? topAgentInfo.id.shortTag
+        let badge = topAgentInfo.effectiveDisplayStatus.badge(theme: currentTheme)
+
+        let extraCount = sameRankAgents.count - 1
+        if extraCount > 0 {
+            return "\(tag)\(badge) +\(extraCount)"
+        } else {
+            return "\(tag)\(badge)"
+        }
     }
 }

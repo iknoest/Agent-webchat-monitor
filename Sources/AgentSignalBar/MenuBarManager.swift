@@ -200,6 +200,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let refreshingTag = isRefreshingUsage
         let axTrusted = AXIsProcessTrusted()
         let disabledAgents = (ConfigManager.shared.config.disabledAgents ?? []).sorted().joined(separator: ",")
+        let armedWatchTag = OneShotSwitchManager.shared.armedTarget != nil ? "\(OneShotSwitchManager.shared.armedTarget!.provider.rawValue):\(OneShotSwitchManager.shared.armedTarget!.sessionId ?? "")" : "none"
 
         var sessionsStr = ""
         for s in AgentStore.shared.getAllSessions() {
@@ -224,7 +225,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false):\(usage?.lastSuccessfulRefresh?.timeIntervalSince1970 ?? 0);"
         }
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -408,6 +409,15 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     tabItem.target = self
                     tabItem.representedObject = ["url": tab.url, "tabId": tab.tabId as Any]
                     submenu.addItem(tabItem)
+
+                    if tabStatus == .working {
+                        let isTabArmed = OneShotSwitchManager.shared.isArmed(provider: .chatgpt, sessionId: nil, targetTabId: tab.tabId)
+                        let tabSwitchTitle = isTabArmed ? "    ✓ Switch Here When Ready" : "    ☐ Switch Here When Ready"
+                        let tabSwitchItem = NSMenuItem(title: tabSwitchTitle, action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                        tabSwitchItem.target = self
+                        tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
+                        submenu.addItem(tabSwitchItem)
+                    }
                 }
             }
 
@@ -419,17 +429,15 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             timeItem.isEnabled = false
             submenu.addItem(timeItem)
 
-            submenu.addItem(NSMenuItem.separator())
-
-            let copyItem = NSMenuItem(title: "📋 Copy Output -> Clipboard", action: #selector(copyOutputClicked(_:)), keyEquivalent: "")
-            copyItem.target = self
-            copyItem.representedObject = agent
-            submenu.addItem(copyItem)
-
-            let directSwitchItem = NSMenuItem(title: "⚡ Focus / Switch Window Immediately", action: #selector(agentItemClicked(_:)), keyEquivalent: "")
-            directSwitchItem.target = self
-            directSwitchItem.representedObject = agent
-            submenu.addItem(directSwitchItem)
+            if info.status == .working {
+                submenu.addItem(NSMenuItem.separator())
+                let isArmed = OneShotSwitchManager.shared.isArmed(provider: agent, sessionId: info.sessionTitle, targetTabId: info.targetTabId)
+                let switchTitle = isArmed ? "✓ Switch Here When Ready" : "☐ Switch Here When Ready"
+                let switchItem = NSMenuItem(title: switchTitle, action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                switchItem.target = self
+                switchItem.representedObject = ["agent": agent, "sessionTitle": info.sessionTitle as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
+                submenu.addItem(switchItem)
+            }
 
             item.submenu = submenu
             menu.addItem(item)
@@ -542,7 +550,33 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             }
         }
 
-        // 3D. Interactive Refresh Button
+        // 3D. GitHub Copilot Usage Rows
+        if ConfigManager.shared.isAgentMonitored(.copilot), let copilotUsage = allUsage[.copilot] {
+            let hdr = NSMenuItem(title: "  GitHub Copilot", action: nil, keyEquivalent: "")
+            hdr.isEnabled = false
+            menu.addItem(hdr)
+
+            if let sRemaining = copilotUsage.sessionRemainingPercent {
+                let bar = makeCompactBar(percent: sRemaining)
+                let resetTag = copilotUsage.sessionResetText ?? ""
+                let resetPrefix = resetTag.isEmpty ? "" : " · \(resetTag)"
+                let row = NSMenuItem(title: "     Chat:    \(bar) \(Int(sRemaining))% left\(resetPrefix)", action: nil, keyEquivalent: "")
+                row.isEnabled = false
+                menu.addItem(row)
+
+                if let freshnessText = makeProviderFreshnessTag(usage: copilotUsage) {
+                    let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
+                    freshRow.isEnabled = false
+                    menu.addItem(freshRow)
+                }
+            } else {
+                let unavailRow = NSMenuItem(title: "     Quota: [Live quota source unavailable]", action: nil, keyEquivalent: "")
+                unavailRow.isEnabled = false
+                menu.addItem(unavailRow)
+            }
+        }
+
+        // 3E. Interactive Refresh Button
         let refreshUsageTitle: String
         if isRefreshingUsage {
             refreshUsageTitle = "  🔄 Refreshing Usage Limits..."
@@ -555,31 +589,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Consolidated Settings & Preferences Submenu
-        let settingsItem = NSMenuItem(title: "Settings & Preferences...", action: nil, keyEquivalent: ",")
-        let settingsSubmenu = NSMenu()
-
-        // 4A. Monitored Agents Submenu
-        let monitoredAgentsItem = NSMenuItem(title: "Monitored Agents", action: nil, keyEquivalent: "")
-        let monitoredAgentsSubmenu = NSMenu()
-        for agent in AgentID.allCases {
-            let isMonitored = ConfigManager.shared.isAgentMonitored(agent)
-            let agentItem = NSMenuItem(title: agent.displayName, action: #selector(toggleAgentMonitoredClicked(_:)), keyEquivalent: "")
-            agentItem.target = self
-            agentItem.representedObject = agent
-            agentItem.state = isMonitored ? .on : .off
-            monitoredAgentsSubmenu.addItem(agentItem)
-        }
-        monitoredAgentsItem.submenu = monitoredAgentsSubmenu
-        settingsSubmenu.addItem(monitoredAgentsItem)
-
-        settingsSubmenu.addItem(NSMenuItem.separator())
-
-        // 4B. Monitoring Behavior Submenu
-        let behaviorItem = NSMenuItem(title: "Monitoring Behavior", action: nil, keyEquivalent: "")
-        let behaviorSubmenu = NSMenu()
-
-        // Smart Keep-Awake Submenu
+        // Operational Controls: Smart Keep-Awake (First-Level Menu)
         let currentSleepMode = SleepManager.shared.mode
         let sleepStateTag = SleepManager.shared.isAssertionActive ? " [☕ ACTIVE]" : " [💤 IDLE]"
         let sleepTitle: String
@@ -624,7 +634,31 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
         sleepSubmenu.addItem(closedLidItem)
         sleepMainItem.submenu = sleepSubmenu
-        behaviorSubmenu.addItem(sleepMainItem)
+        menu.addItem(sleepMainItem)
+
+        // 4. Consolidated Settings & Preferences Submenu
+        let settingsItem = NSMenuItem(title: "Settings & Preferences...", action: nil, keyEquivalent: ",")
+        let settingsSubmenu = NSMenu()
+
+        // 4A. Monitored Agents Submenu
+        let monitoredAgentsItem = NSMenuItem(title: "Monitored Agents", action: nil, keyEquivalent: "")
+        let monitoredAgentsSubmenu = NSMenu()
+        for agent in AgentID.allCases {
+            let isMonitored = ConfigManager.shared.isAgentMonitored(agent)
+            let agentItem = NSMenuItem(title: agent.displayName, action: #selector(toggleAgentMonitoredClicked(_:)), keyEquivalent: "")
+            agentItem.target = self
+            agentItem.representedObject = agent
+            agentItem.state = isMonitored ? .on : .off
+            monitoredAgentsSubmenu.addItem(agentItem)
+        }
+        monitoredAgentsItem.submenu = monitoredAgentsSubmenu
+        settingsSubmenu.addItem(monitoredAgentsItem)
+
+        settingsSubmenu.addItem(NSMenuItem.separator())
+
+        // 4B. Monitoring Behavior Submenu
+        let behaviorItem = NSMenuItem(title: "Monitoring Behavior", action: nil, keyEquivalent: "")
+        let behaviorSubmenu = NSMenu()
 
         // Overworking Threshold Submenu
         let overworkThresholdItem = NSMenuItem(title: "Overworking Threshold: \(overworkMins) min", action: nil, keyEquivalent: "")
@@ -899,10 +933,17 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         updateTitleAndMenu()
     }
 
-    @objc private func copyOutputClicked(_ sender: NSMenuItem) {
-        if let agent = sender.representedObject as? AgentID {
-            let success = OutputRelayManager.shared.copyToClipboard(from: agent)
-            print("📋 Copy to clipboard requested for \(agent.displayName) -> \(success)")
+    @objc private func toggleOneShotSwitchClicked(_ sender: NSMenuItem) {
+        if let dict = sender.representedObject as? [String: Any], let agent = dict["agent"] as? AgentID {
+            let sessionTitle = dict["sessionTitle"] as? String
+            let tabId = dict["tabId"] as? Int
+            let url = dict["url"] as? String ?? dict["webLink"] as? String
+            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: sessionTitle, targetTabId: tabId, targetURL: url)
+            updateTitleAndMenu()
+        } else if let agent = sender.representedObject as? AgentID {
+            let info = AgentStore.shared.getStatus(for: agent)
+            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: info.sessionTitle, targetTabId: info.targetTabId, targetURL: info.webLink)
+            updateTitleAndMenu()
         }
     }
 
