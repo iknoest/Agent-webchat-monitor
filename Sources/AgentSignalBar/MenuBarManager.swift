@@ -466,12 +466,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 menu.addItem(row2)
             }
 
-            if claudeUsage.sessionResetText == nil && claudeUsage.weeklyResetText == nil && !AXIsProcessTrusted() {
-                let axRow = NSMenuItem(title: "     · Reset times: Accessibility permission required (Click to Setup)", action: #selector(openAccessibilitySettingsClicked), keyEquivalent: "")
-                axRow.target = self
-                menu.addItem(axRow)
-            }
-
             if let freshnessText = makeProviderFreshnessTag(usage: claudeUsage) {
                 let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
                 freshRow.isEnabled = false
@@ -846,14 +840,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         } else if let urlStr = sender.representedObject as? String {
             print("🌐 Opening URL in Browser: \(urlStr)")
             WindowFocuser.focusURL(urlStr)
-        }
-    }
-
-    @objc private func openAccessibilitySettingsClicked() {
-        print("🔓 Opening macOS Accessibility settings...")
-        ClaudeLocalQuotaConnector.promptAccessibilityPermissionIfUntrusted()
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
         }
     }
 

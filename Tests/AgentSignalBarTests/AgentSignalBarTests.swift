@@ -1263,12 +1263,25 @@ final class AgentSignalBarTests: XCTestCase {
     }
 
     func testClaudeResetAndQuotaRecovery() throws {
-        // 1. Claude AX Reset Derivation
-        let now = Date()
-        let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "17% · resets 3h", observedAt: now, now: now)
-        XCTAssertNotNil(obs)
-        XCTAssertEqual(obs?.relativeDurationSeconds, 10800.0)
-        XCTAssertEqual(obs?.source, "claude_native_ui_ax")
+        // 1. Claude Structured Quota API Parsing
+        let mockJSON = """
+        {
+          "five_hour": {
+            "utilization": 24.0,
+            "resets_at": "2026-08-18T14:30:00.000Z"
+          },
+          "seven_day": {
+            "utilization": 93.0,
+            "resets_at": "2026-08-24T21:00:00.346450+00:00"
+          }
+        }
+        """
+        let data = mockJSON.data(using: .utf8)!
+        let usage = ClaudeLocalQuotaConnector.shared.parseUsageResponseData(data)
+        XCTAssertNotNil(usage)
+        XCTAssertEqual(usage?.sessionRemainingPercent, 76.0)
+        XCTAssertEqual(usage?.weeklyRemainingPercent, 7.0)
+        XCTAssertEqual(usage?.quotaSource, "claude_oauth_api")
 
         // 2. Quota Recovery Event
         AgentStore.shared.clearQuotaRestored(for: .claude)
@@ -1281,12 +1294,12 @@ final class AgentSignalBarTests: XCTestCase {
             weeklyLimitPercent: 20.0,
             isPercentUsed: true,
             isLiveSource: true,
-            quotaSource: "claude_plan_usage_history"
+            quotaSource: "claude_oauth_api"
         )
         AgentUsageStore.shared.updateUsage(for: .claude, data: recovered)
         XCTAssertTrue(AgentStore.shared.isQuotaRestored(for: .claude))
 
-        var info = AgentStore.shared.getStatus(for: .claude)
+        let info = AgentStore.shared.getStatus(for: .claude)
         XCTAssertEqual(info.effectiveDisplayStatus, .quotaRestored)
         XCTAssertEqual(info.effectiveDisplayStatus.badge(theme: .funEmoji), "🥱")
         XCTAssertEqual(info.effectiveDisplayStatus.badge(theme: .classic), "⚪")
@@ -1311,19 +1324,19 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(classicBadges.contains("🔴"))
         XCTAssertTrue(classicBadges.contains("⦸"))
 
-        // 2. Real Claude live reset string parsing
-        let dur5h = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 3 hr 36 min")
-        XCTAssertEqual(dur5h, 12960.0)
-
-        let durWeekly = ClaudeLocalQuotaConnector.parseRelativeResetDuration(from: "Resets in 1 hr 26 min")
-        XCTAssertEqual(durWeekly, 5160.0)
-
-        // 3. Derived reset observation
+        // 2. Structured ISO8601 formatting
         let now = Date()
-        let obs = ClaudeLocalQuotaConnector.deriveResetObservation(relativeText: "Resets in 3 hr 36 min", observedAt: now, now: now)
-        XCTAssertNotNil(obs)
-        XCTAssertEqual(obs?.source, "claude_native_menu_ax")
-        XCTAssertFalse(obs!.isExpired)
+        let formatted = ClaudeLocalQuotaConnector.formatResetText(from: "2026-08-24T21:00:00.346450+00:00", now: now)
+        XCTAssertNotNil(formatted)
+        XCTAssertTrue(formatted?.contains("resets") == true)
+
+        // 3. CLI fallback parsing
+        let cliText = "Current session: 15% used\nCurrent week (all models): 40% used · resets Aug 24 at 10:59pm (Europe/Amsterdam)"
+        let cliUsage = ClaudeLocalQuotaConnector.shared.parseCLIUsageOutput(cliText)
+        XCTAssertNotNil(cliUsage)
+        XCTAssertEqual(cliUsage?.sessionRemainingPercent, 85.0)
+        XCTAssertEqual(cliUsage?.weeklyRemainingPercent, 60.0)
+        XCTAssertEqual(cliUsage?.quotaSource, "claude_cli_usage")
     }
 }
 #endif

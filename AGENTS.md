@@ -794,4 +794,24 @@ Blockers: none
 
 [RELEASE] Claude Reset Runtime TCC Proof, Quota Glyph ⦸ & Relay Feature Removal — antigravity — 2026-08-17T22:00:00+02:00
 
+## 2026-08-18 — antigravity — macos
+Status: DONE
+Phase: Replace Claude Accessibility Quota Sensor with Structured API / CLI
+Done:
+1. Eliminated macOS Accessibility (AX) Quota Probing: Completely removed all `AXUIElement`, `AXIsProcessTrusted`, popover clicking, and UI string scraping from `ClaudeLocalQuotaConnector.swift` and `MenuBarManager.swift`. Zero Accessibility permissions or TCC prompts are required.
+2. Structured Claude OAuth Quota Probe: Implemented first-party OAuth usage endpoint probe (`GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20`). Reads credentials seamlessly from macOS Keychain (`Claude Code-credentials`), `~/.claude/.credentials.json`, `~/.claude.json`, or environment variables. Automatically handles token refresh via `POST https://platform.claude.com/v1/oauth/token` without secrets leaking.
+3. Fallback Hierarchy:
+   - Priority 1: Claude OAuth Usage API (`5-hour` and `7-day` utilization & ISO-8601 `resets_at` timestamps).
+   - Priority 2: `~/Library/Application Support/Claude/plan-usage-history.json` (fallback percentages, strictly without fabricated resets).
+   - Priority 3: Bounded `claude /usage --allowed-tools ""` CLI fallback (rapid subprocess execution with SIGTERM/SIGKILL reaping, 0 orphan processes).
+   - Priority 4: Unavailable / Honest failure reporting.
+4. Model Limits & Standardization: Added support for model-specific limits (Sonnet, Opus). Formatted timestamps into universal 24-hour style `today HH:mm (in ...)` / `MMM d HH:mm (in ...)` and normalized percentages to universal `% left`.
+5. Comprehensive Test Verification: Updated Tests 124–130 and 148–160 in `Stage1TestRunner` (160/160 passed), updated SPM unit tests in `AgentSignalBarTests` (`swift test` clean exit 0), JS stress tests in `background_test.js` (28/28 passed), release app build (`./build_app.sh`), and `git diff --check` clean validation.
+Verified: `swift run Stage1TestRunner` (160/160 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean). Live runtime confirmed via `curl -s http://127.0.0.1:18888/debug/claude-reset` and `curl -s http://127.0.0.1:18888/status` returning live Claude 5h & weekly resets (`Source: claude_oauth_api, 5h: 100% left (resets today 14:59 (in 4h 46m)), Weekly: 100% left (resets Aug 24 22:59 (in 6d 12h))`).
+Next: Commit and push `fix: use structured Claude quota sources` to origin/main.
+Blockers: none
+
+[RELEASE] Replace Claude Accessibility Quota Sensor with Structured API / CLI — antigravity — 2026-08-18T10:14:00+02:00
+
+
 

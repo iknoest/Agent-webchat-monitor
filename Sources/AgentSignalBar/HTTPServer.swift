@@ -243,26 +243,24 @@ public final class HTTPServer: @unchecked Sendable {
                 }
             }
             sendResponse(connection: connection, statusCode: 400, body: "Invalid agent parameter")
-        } else if path == "/debug/claude-reset" {
+        } else if path == "/debug/claude-reset" || path == "/debug/claude-quota" {
             if urlComponents?.queryItems?.first(where: { $0.name == "refresh" })?.value != "false" {
-                ClaudeLocalQuotaConnector.shared.refreshClaudeNativeAXReset()
+                _ = ClaudeLocalQuotaConnector.shared.fetchQuota(forceRefresh: true)
             }
             let info = ClaudeLocalQuotaConnector.shared.getDebugInfo()
             var respDict: [String: Any] = [
-                "agentSignalBarAXTrusted": info.agentSignalBarAXTrusted,
-                "claudeRunning": info.claudeRunning,
-                "usageControlFound": info.usageControlFound,
-                "popoverOpened": info.popoverOpened,
                 "percentageSource": info.percentageSource,
                 "resetSource": info.resetSource,
-                "windowsCount": info.windowsCount,
-                "scannedStringsCount": info.scannedStringsCount,
-                "candidateQuotaStrings": info.candidateQuotaStrings
+                "apiAvailable": info.apiAvailable,
+                "cliAvailable": info.cliAvailable
             ]
-            if let fhr = info.fiveHourRawReset { respDict["fiveHourRawReset"] = fhr }
-            if let wr = info.weeklyRawReset { respDict["weeklyRawReset"] = wr }
-            if let fhp = info.fiveHourParsedReset { respDict["fiveHourParsedReset"] = fhp }
-            if let wp = info.weeklyParsedReset { respDict["weeklyParsedReset"] = wp }
+            if let fhr = info.fiveHourRemainingPercent { respDict["fiveHourRemainingPercent"] = fhr }
+            if let fht = info.fiveHourResetText { respDict["fiveHourResetText"] = fht }
+            if let wr = info.weeklyRemainingPercent { respDict["weeklyRemainingPercent"] = wr }
+            if let wt = info.weeklyResetText { respDict["weeklyResetText"] = wt }
+            if let ref = info.lastSuccessfulRefresh {
+                respDict["lastSuccessfulRefresh"] = ISO8601DateFormatter().string(from: ref)
+            }
             if let err = info.lastError { respDict["lastError"] = err }
 
             if let jsonData = try? JSONSerialization.data(withJSONObject: respDict, options: .prettyPrinted),

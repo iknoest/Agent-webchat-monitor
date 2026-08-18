@@ -135,8 +135,8 @@ public final class AutoMonitor: @unchecked Sendable {
         checkCodexLogAndProcess()
         checkChatGPTExpiry()
 
-        // Real-time usage limit update from local history files
-        updateClaudeUsageFromLocalHistory()
+        // Real-time usage limit update from structured connectors
+        updateClaudeUsage()
         updateCodexUsageFromLocalFiles()
         updateAntigravityUsageFromLocalFiles()
     }
@@ -255,16 +255,47 @@ public final class AutoMonitor: @unchecked Sendable {
 
 
 
+    private var lastClaudeQuotaFetch: Date = .distantPast
     private var lastAgyQuotaFetch: Date = .distantPast
     private var lastCodexQuotaFetch: Date = .distantPast
 
     public func refreshUsageNow() {
+        lastClaudeQuotaFetch = .distantPast
         lastAgyQuotaFetch = .distantPast
         lastCodexQuotaFetch = .distantPast
-        ClaudeLocalQuotaConnector.shared.refreshClaudeNativeAXReset()
-        updateClaudeUsageFromLocalHistory()
+        updateClaudeUsage(forceRefresh: true)
         updateAntigravityUsageFromLocalFiles()
         updateCodexUsageFromLocalFiles()
+    }
+
+    // Dynamic Claude Usage Sync from Structured OAuth API, Local History, or CLI Fallback
+    private func updateClaudeUsage(forceRefresh: Bool = false) {
+        let now = Date()
+        if forceRefresh || now.timeIntervalSince(lastClaudeQuotaFetch) >= 10.0 {
+            lastClaudeQuotaFetch = now
+            if let liveUsage = ClaudeLocalQuotaConnector.shared.fetchQuota(forceRefresh: forceRefresh) {
+                var updated = liveUsage
+                updated.lastSuccessfulRefresh = now
+                AgentUsageStore.shared.updateUsage(for: .claude, data: updated)
+                AgentStore.shared.updateAvailability(for: .claude, availability: updated.availability)
+                return
+            } else {
+                if var existing = AgentUsageStore.shared.getUsage(for: .claude), (existing.sessionLimitPercent != nil || existing.weeklyLimitPercent != nil) {
+                    existing.isLiveSource = false
+                    existing.freshness = "Stale"
+                    existing.lastUpdated = now
+                    AgentUsageStore.shared.updateUsage(for: .claude, data: existing)
+                    return
+                }
+            }
+        }
+
+        // Stale-while-revalidate: if existing live usage exists, preserve it!
+        let existing = AgentUsageStore.shared.getUsage(for: .claude)
+        if let existing = existing, existing.isLiveSource || existing.sessionLimitPercent != nil || existing.weeklyLimitPercent != nil {
+            AgentStore.shared.updateAvailability(for: .claude, availability: existing.availability)
+            return
+        }
     }
 
     // Dynamic Antigravity Usage Sync from local language_server Connect RPC
@@ -314,57 +345,6 @@ public final class AutoMonitor: @unchecked Sendable {
         usage.lastUpdated = now
         AgentUsageStore.shared.updateUsage(for: .antigravity, data: usage)
         AgentStore.shared.updateAvailability(for: .antigravity, availability: usage.availability)
-    }
-
-    // Dynamic Claude Usage Calculator directly from plan-usage-history.json (JSONLines format)
-    private func updateClaudeUsageFromLocalHistory() {
-        let path = NSString(string: "~/Library/Application Support/Claude/plan-usage-history.json").expandingTildeInPath
-        let fm = FileManager.default
-
-        guard fm.fileExists(atPath: path),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let samples = json["samples"] as? [[String: Any]],
-              let lastSample = samples.last,
-              let uDict = lastSample["u"] as? [String: Any] else {
-            if var existing = AgentUsageStore.shared.getUsage(for: .claude), (existing.sessionLimitPercent != nil || existing.weeklyLimitPercent != nil) {
-                existing.isLiveSource = false
-                existing.freshness = "Stale"
-                existing.lastUpdated = Date()
-                AgentUsageStore.shared.updateUsage(for: .claude, data: existing)
-            }
-            return
-        }
-
-        let fh = (uDict["fh"] as? NSNumber)?.doubleValue ?? 0.0 // 5-Hour % used
-        let sd = (uDict["sd"] as? NSNumber)?.doubleValue ?? 0.0 // Weekly % used
-
-        var sampleDate: Date? = nil
-        if let lastTimestampMs = (lastSample["t"] as? NSNumber)?.doubleValue {
-            sampleDate = Date(timeIntervalSince1970: lastTimestampMs / 1000.0)
-        }
-
-        let isStale = sampleDate != nil && Date().timeIntervalSince(sampleDate!) > 86400
-
-        let resetMeta = ClaudeLocalQuotaConnector.shared.getResetMetadata()
-
-        var usage = AgentUsageStore.shared.getUsage(for: .claude) ?? AgentUsageData(agent: .claude)
-        usage.sessionLimitPercent = fh
-        usage.sessionResetText = resetMeta.sessionResetText
-        usage.weeklyLimitPercent = sd
-        usage.weeklyResetText = resetMeta.weeklyResetText
-        usage.isPercentUsed = true
-        usage.isLiveSource = true
-        usage.sourceAuthority = "live_first_party"
-        usage.quotaSource = (resetMeta.sessionResetText != nil || resetMeta.weeklyResetText != nil) ? "claude_plan_usage_history+claude_native_menu_ax" : "claude_plan_usage_history"
-        usage.quotaTimestamp = sampleDate
-        usage.lastSuccessfulRefresh = Date()
-        usage.parserDecision = isStale ? "stale_sample_history" : "parsed_live_sample"
-        usage.freshness = isStale ? "Stale" : "Fresh"
-        usage.lastUpdated = Date()
-
-        AgentUsageStore.shared.updateUsage(for: .claude, data: usage)
-        AgentStore.shared.updateAvailability(for: .claude, availability: usage.availability)
     }
 
     // Dynamic Codex Usage Calculator from codex app-server --stdio
