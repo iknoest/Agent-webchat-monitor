@@ -301,6 +301,14 @@ public final class AutoMonitor: @unchecked Sendable {
                 updated.lastSuccessfulRefresh = now
                 AgentUsageStore.shared.updateUsage(for: .claude, data: updated)
                 AgentStore.shared.updateAvailability(for: .claude, availability: updated.availability)
+                // If we obtained OAuth API data, clear any auth-required marker. Otherwise, if credentials are missing/expired, surface Needs You.
+                if updated.quotaSource == "claude_oauth_api" {
+                    AgentStore.shared.clearProviderAuthRequired(.claude)
+                } else if ClaudeLocalQuotaConnector.shared.isAuthMissingOrExpired() {
+                    AgentStore.shared.setProviderAuthRequired(.claude, reason: "Sign in again to continue")
+                } else {
+                    AgentStore.shared.clearProviderAuthRequired(.claude)
+                }
                 return
             } else {
                 if var existing = AgentUsageStore.shared.getUsage(for: .claude), (existing.sessionLimitPercent != nil || existing.weeklyLimitPercent != nil) {

@@ -81,7 +81,10 @@ public final class SleepManager: @unchecked Sendable {
     }
 
     public func evaluateSmartAutoRequirement() -> (shouldKeepAwake: Bool, reason: String) {
-        let trusted = SleepManager.trustedProviders.filter { ConfigManager.shared.isAgentMonitored($0) }
+        // Merge built-in trusted providers with any human-promoted providers saved in config
+        let promoted = Set((ConfigManager.shared.config.promotedTrustedAgents ?? []).compactMap { AgentID(rawValue: $0) })
+        let trustedSet = SleepManager.trustedProviders.union(promoted)
+        let trusted = trustedSet.filter { ConfigManager.shared.isAgentMonitored($0) }
 
         // Quota exhaustion is provider availability: providers with exhausted quota CANNOT execute
         // and must NOT independently keep Smart Auto awake or masquerade as a user-action gate.

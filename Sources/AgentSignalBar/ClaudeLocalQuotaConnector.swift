@@ -271,6 +271,20 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
     private let credentialLoader = ClaudeCredentialLoader()
     private let lock = NSLock()
 
+    // Public helper: detect missing or non-refreshable credentials indicating interactive re-auth is required
+    // Returns true when no credentials are present, or when credentials are expiring and no refresh token is available.
+    public func isAuthMissingOrExpired() -> Bool {
+        if let creds = credentialLoader.loadCredentials() {
+            // If token is about to expire but no refresh token exists, require auth
+            if credentialLoader.needsRefresh(creds.oauth) && creds.oauth.refreshToken == nil {
+                return true
+            }
+            return false
+        } else {
+            return true
+        }
+    }
+
     // API & Cache Constants
     public static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     public static let refreshURL = URL(string: "https://platform.claude.com/v1/oauth/token")!

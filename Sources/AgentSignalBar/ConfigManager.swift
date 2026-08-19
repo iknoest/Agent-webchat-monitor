@@ -124,6 +124,7 @@ public struct AppConfig: Codable {
     public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
     public var agents: [String: AgentCustomConfig]
     public var quotas: [String: AgentQuotaConfig]?
+    public var promotedTrustedAgents: [String]? // runtime-promoted providers allowed to drive Smart Auto after human acceptance
     public var statusBadges: StatusBadgesConfig
 
     public static var defaultConfig: AppConfig {
@@ -177,6 +178,7 @@ public struct AppConfig: Codable {
                     isPercentUsed: false
                 )
             ],
+            promotedTrustedAgents: [],
             statusBadges: StatusBadgesConfig.defaultConfig
         )
     }
@@ -213,6 +215,20 @@ public final class ConfigManager: @unchecked Sendable {
             disabled.insert(agent.rawValue)
         }
         cfg.disabledAgents = Array(disabled).sorted()
+        saveConfig(cfg)
+        SleepManager.shared.updateSleepAssertionState()
+    }
+
+    // Promote or un-promote a provider to the human-trusted Smart Auto set. This must be explicitly human-approved.
+    public func setProviderPromotedToTrusted(_ provider: AgentID, promoted: Bool) {
+        var cfg = config
+        var promotedSet = Set(cfg.promotedTrustedAgents ?? [])
+        if promoted {
+            promotedSet.insert(provider.rawValue)
+        } else {
+            promotedSet.remove(provider.rawValue)
+        }
+        cfg.promotedTrustedAgents = Array(promotedSet).sorted()
         saveConfig(cfg)
         SleepManager.shared.updateSleepAssertionState()
     }

@@ -534,6 +534,46 @@ public final class AgentStore: @unchecked Sendable {
         return result
     }
 
+    // MARK: - Provider-level authentication gating
+    // Insert a synthetic blocked session when a provider requires user authentication.
+    public func setProviderAuthRequired(_ provider: AgentID, reason: String?) {
+        lock.lock()
+        var current = trackedSessions[provider] ?? [:]
+        let authId = "__auth_required"
+        let now = Date()
+        let title = "Authentication required"
+        let session = AgentSessionInfo(
+            provider: provider,
+            sessionId: authId,
+            title: title,
+            status: .blocked,
+            turnId: "auth_\(authId)",
+            attentionReason: reason ?? "Sign in to continue",
+            thinkingStartTime: nil,
+            lastDurationSeconds: nil,
+            sourceEvidence: "Provider: Authentication Required",
+            lastUpdated: now
+        )
+        current[authId] = session
+        trackedSessions[provider] = current
+        lock.unlock()
+        // Ensure menu/UI updates immediately
+        syncSessions(for: provider, activeSessions: Array(current.values), processRunning: true)
+    }
+
+    public func clearProviderAuthRequired(_ provider: AgentID) {
+        lock.lock()
+        var current = trackedSessions[provider] ?? [:]
+        let authId = "__auth_required"
+        if current.removeValue(forKey: authId) != nil {
+            trackedSessions[provider] = current
+            lock.unlock()
+            syncSessions(for: provider, activeSessions: Array(current.values), processRunning: true)
+        } else {
+            lock.unlock()
+        }
+    }
+
     public func syncSessions(for provider: AgentID, activeSessions: [AgentSessionInfo], processRunning: Bool = true) {
         lock.lock()
         let currentDict = trackedSessions[provider] ?? [:]
@@ -908,6 +948,8 @@ public final class AgentStore: @unchecked Sendable {
             }
             session.sourceEvidence = "Claude Hook: SessionStart"
             session.sensorReason = "Claude Hook: SessionStart"
+            // Authentication restored or session active: clear any auth-required provider marker
+            AgentStore.shared.clearProviderAuthRequired(.claude)
 
         case "UserPromptSubmit":
             let newTurnId = promptId != nil ? "turn_\(promptId!)" : "turn_submit_\(sessionId.prefix(8))_\(Int(now.timeIntervalSince1970 * 1000))"
@@ -919,6 +961,8 @@ public final class AgentStore: @unchecked Sendable {
             session.acknowledgedAt = nil
             session.sourceEvidence = "Claude Hook: UserPromptSubmit"
             session.sensorReason = "Claude Hook: UserPromptSubmit"
+            // Active turn implies authentication is valid; clear provider auth marker if present
+            AgentStore.shared.clearProviderAuthRequired(.claude)
 
         case "PreToolUse", "PostToolUse":
             session.status = .working
