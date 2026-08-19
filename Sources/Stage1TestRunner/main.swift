@@ -3818,6 +3818,115 @@ runTest("190. Menu Bar: Smart Keep-Awake first-level menu and OneShotSwitch rend
     let sigAfter = MenuBarManager.shared.computeRenderSignature()
     try assert(sigBefore != sigAfter, "Render signature must respond to OneShotSwitch arming")
     OneShotSwitchManager.shared.disarm()
+}
+
+// 191. ProviderIconLoader: Load template icons for providers
+runTest("191. ProviderIconLoader: Load template icons for providers") {
+    ProviderIconLoader.shared.preloadIcons()
+    let gptIcon = ProviderIconLoader.shared.getIcon(for: .chatgpt)
+    try assert(gptIcon != nil, "Must load ChatGPT icon from agent-white-icon")
+    try assert(gptIcon?.isTemplate == true, "Loaded icon must be template image for system theme adaptation")
+
+    let cldIcon = ProviderIconLoader.shared.getIcon(for: .claude)
+    try assert(cldIcon != nil, "Must load Claude icon")
+
+    let agyIcon = ProviderIconLoader.shared.getIcon(for: .antigravity)
+    try assert(agyIcon != nil, "Must load Antigravity icon")
+}
+
+// 192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title
+runTest("192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title") {
+    AgentStore.shared.currentTheme = .funEmoji
+    for agent in AgentID.allCases {
+        AgentStore.shared.updateStatus(for: agent, status: .idle)
+    }
+
+    let attrTitle = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    try assert(attrTitle.length > 0, "Attributed title must not be empty")
+    try assert(attrTitle.string.contains("["), "Must have bracket wrapper")
+    try assert(attrTitle.string.contains("]"), "Must have bracket wrapper")
+}
+
+// 193. Classic Mode: Retains 3-letter provider labels
+runTest("193. Classic Mode: Retains 3-letter provider labels") {
+    AgentStore.shared.currentTheme = .classic
+    for agent in AgentID.allCases {
+        AgentStore.shared.updateStatus(for: agent, status: .idle)
+    }
+
+    let summary = AgentStore.shared.overallSummary()
+    try assert(summary.contains("GPT:⚪"), "Classic mode must retain 3-letter GPT prefix")
+    try assert(summary.contains("CLD:⚪"), "Classic mode must retain 3-letter CLD prefix")
+    try assert(summary.contains("CDX:⚪"), "Classic mode must retain 3-letter CDX prefix")
+    try assert(summary.contains("AGY:⚪"), "Classic mode must retain 3-letter AGY prefix")
+    try assert(summary.contains("COP:⚪"), "Classic mode must retain 3-letter COP prefix")
+}
+
+// 194. Auto-Switch When Ready: Armable while Idle (watch next turn)
+runTest("194. Auto-Switch When Ready: Armable while Idle (watch next turn)") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+
+    var focusCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in
+        focusCount += 1
+    }
+
+    // Arm while session is Idle
+    switchMgr.arm(provider: .claude, sessionId: "idle_watch_sess")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "idle_watch_sess"), "Must be armed while Idle")
+
+    // Transition to Working -> No switch yet
+    let trans1 = switchMgr.evaluateTransition(provider: .claude, sessionId: "idle_watch_sess", newStatus: .working)
+    try assert(!trans1, "Working transition must not trigger switch")
+    try assert(focusCount == 0, "Focus count must be 0")
+
+    // Next turn completes -> Done -> Triggers once & disarms
+    let trans2 = switchMgr.evaluateTransition(provider: .claude, sessionId: "idle_watch_sess", newStatus: .done)
+    try assert(trans2, "Done transition must trigger switch")
+    try assert(!switchMgr.isArmed(provider: .claude, sessionId: "idle_watch_sess"), "Must disarm immediately")
+
+    switchMgr.resetTestMetrics()
+}
+
+// 195. AutoMonitor checkClaudeLog preserves active tracked sessions without false-negative wiping
+runTest("195. AutoMonitor checkClaudeLog preserves active tracked sessions without false-negative wiping") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let handled = store.handleClaudeHookEvent(
+        json: [
+            "event": "UserPromptSubmit",
+            "session_id": "active_claude_probe_01",
+            "cwd": "/Users/ava/test",
+            "prompt_id": "p1"
+        ],
+        isTestMode: true
+    )
+    try assert(handled == true, "Hook event must be handled")
+
+    let sessionsBefore = store.getSessions(for: .claude)
+    try assert(sessionsBefore.count == 1, "Must have 1 active Claude session: got \(sessionsBefore.count)")
+    try assert(sessionsBefore.first?.status == .working, "Session must be working")
+
+    // Run checkClaudeLog
+    AutoMonitor.shared.checkClaudeLog()
+
+    let sessionsAfter = store.getSessions(for: .claude)
+    try assert(sessionsAfter.count == 1, "Active session must NOT be wiped by checkClaudeLog: got \(sessionsAfter.count)")
+    try assert(sessionsAfter.first?.status == .working, "Session must remain working")
+
+    // Cleanup
+    _ = store.handleClaudeHookEvent(
+        json: [
+            "event": "SessionEnd",
+            "session_id": "active_claude_probe_01",
+            "cwd": "/Users/ava/test"
+        ],
+        isTestMode: true
+    )
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
 
     // Clean up all agents to idle
     for agent in AgentID.allCases {
@@ -3825,4 +3934,4 @@ runTest("190. Menu Bar: Smart Keep-Awake first-level menu and OneShotSwitch rend
     }
 }
 
-print("🎉 All 190 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch & Canonical Priority Tests Passed!")
+print("🎉 All 195 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons & Canonical Priority Tests Passed!")

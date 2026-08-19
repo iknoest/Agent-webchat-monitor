@@ -11,9 +11,12 @@ RESOURCES_DIR="$APP_DIR/Contents/Resources"
 
 echo "📦 Creating macOS App Bundle ($APP_DIR)..."
 mkdir -p "$MACOS_DIR"
-mkdir -p "$RESOURCES_DIR"
+mkdir -p "$RESOURCES_DIR/icons"
 
 cp -f .build/release/AgentSignalBar "$MACOS_DIR/AgentSignalBar"
+if [ -d "agent-white-icon" ]; then
+    cp -Rf agent-white-icon/* "$RESOURCES_DIR/icons/" 2>/dev/null || true
+fi
 
 cat <<EOF > "$APP_DIR/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>

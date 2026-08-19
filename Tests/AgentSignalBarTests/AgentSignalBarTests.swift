@@ -1598,5 +1598,60 @@ final class AgentSignalBarTests: XCTestCase {
         // Cleanup
         for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
     }
+
+    func testProviderIconLoaderPreloadAndAttributedTitle() throws {
+        ProviderIconLoader.shared.preloadIcons()
+        let gptIcon = ProviderIconLoader.shared.getIcon(for: .chatgpt)
+        XCTAssertNotNil(gptIcon)
+        XCTAssertTrue(gptIcon?.isTemplate == true)
+
+        AgentStore.shared.currentTheme = .funEmoji
+        for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+
+        let attrTitle = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+        XCTAssertGreaterThan(attrTitle.length, 0)
+        XCTAssertTrue(attrTitle.string.contains("["))
+        XCTAssertTrue(attrTitle.string.contains("]"))
+
+        AgentStore.shared.currentTheme = .classic
+    }
+
+    func testAutoMonitorClaudeSessionPreservation() throws {
+        let store = AgentStore.shared
+        store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+        let handled = store.handleClaudeHookEvent(
+            json: [
+                "event": "UserPromptSubmit",
+                "session_id": "unit_claude_sess_active",
+                "cwd": "/Users/ava/test",
+                "prompt_id": "p1"
+            ],
+            isTestMode: true
+        )
+        XCTAssertTrue(handled)
+
+        let sessionsBefore = store.getSessions(for: .claude)
+        XCTAssertEqual(sessionsBefore.count, 1)
+        XCTAssertEqual(sessionsBefore.first?.status, .working)
+
+        AutoMonitor.shared.checkClaudeLog()
+
+        let sessionsAfter = store.getSessions(for: .claude)
+        XCTAssertEqual(sessionsAfter.count, 1)
+        XCTAssertEqual(sessionsAfter.first?.status, .working)
+
+        _ = store.handleClaudeHookEvent(
+            json: [
+                "event": "SessionEnd",
+                "session_id": "unit_claude_sess_active",
+                "cwd": "/Users/ava/test"
+            ],
+            isTestMode: true
+        )
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+    }
 }
 #endif

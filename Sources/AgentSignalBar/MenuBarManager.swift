@@ -157,6 +157,77 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         scheduleTitleAndMenuUpdate()
     }
 
+    public func makeEmojiFunAttributedTitle(displayMode: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: "[")
+        let currentTheme = AgentStore.shared.currentTheme
+        let overworkMins = AgentStore.shared.overworkThresholdMinutes
+
+        if displayMode.lowercased() == "compact" {
+            let topAgent = AgentStore.shared.getHighestPriorityAgent()
+            if let top = topAgent, AgentStore.canonicalPriorityRank(for: top) >= 30 {
+                let badge = top.effectiveDisplayStatus.badge(theme: currentTheme)
+                if let icon = ProviderIconLoader.shared.getIcon(for: top.id) {
+                    let attach = NSTextAttachment()
+                    attach.image = icon
+                    attach.bounds = CGRect(x: 0, y: -2, width: 14, height: 14)
+                    result.append(NSAttributedString(attachment: attach))
+                    result.append(NSAttributedString(string: " \(badge)"))
+                } else {
+                    let customCfg = ConfigManager.shared.getAgentConfig(for: top.id)
+                    let tag = customCfg?.shortTag ?? top.id.shortTag
+                    result.append(NSAttributedString(string: "\(tag)\(badge)"))
+                }
+
+                // Check extra count of same rank
+                let allStates = AgentStore.shared.getAllStates()
+                let monitored = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
+                let topRank = AgentStore.canonicalPriorityRank(for: top)
+                let sameRankCount = monitored.filter {
+                    let info = allStates[$0] ?? AgentInfo(id: $0)
+                    return AgentStore.canonicalPriorityRank(for: info) == topRank
+                }.count
+                if sameRankCount > 1 {
+                    result.append(NSAttributedString(string: " +\(sameRankCount - 1)"))
+                }
+            } else {
+                let anyIdle = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }.contains {
+                    let st = AgentStore.shared.getStatus(for: $0)
+                    return st.status == .idle && st.effectiveDisplayStatus == .idle
+                }
+                result.append(NSAttributedString(string: anyIdle ? "⚪" : "⚫"))
+            }
+        } else {
+            let monitored = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
+            if monitored.isEmpty {
+                result.append(NSAttributedString(string: "-"))
+            } else {
+                for (idx, agent) in monitored.enumerated() {
+                    if idx > 0 {
+                        result.append(NSAttributedString(string: " "))
+                    }
+                    let info = AgentStore.shared.getStatus(for: agent)
+                    let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil
+                    let badge = info.effectiveDisplayStatus.badge(theme: currentTheme, thinkingDuration: thinkingDur, overworkThresholdMinutes: overworkMins)
+
+                    if let icon = ProviderIconLoader.shared.getIcon(for: agent) {
+                        let attach = NSTextAttachment()
+                        attach.image = icon
+                        attach.bounds = CGRect(x: 0, y: -2, width: 14, height: 14)
+                        result.append(NSAttributedString(attachment: attach))
+                        result.append(NSAttributedString(string: " \(badge)"))
+                    } else {
+                        let customCfg = ConfigManager.shared.getAgentConfig(for: agent)
+                        let tag = customCfg?.shortTag ?? agent.shortTag
+                        result.append(NSAttributedString(string: "\(tag):\(badge)"))
+                    }
+                }
+            }
+        }
+
+        result.append(NSAttributedString(string: "]"))
+        return result
+    }
+
     public func performUpdateTitleAndMenu() {
         lastRebuildTime = Date()
         renderExecutionCount += 1
@@ -165,12 +236,21 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         guard let item = statusItem, let button = item.button else { return }
 
         let displayMode = ConfigManager.shared.config.menuBarDisplayMode ?? "detailed"
-        if displayMode.lowercased() == "compact" {
-            let compact = AgentStore.shared.compactSummary()
-            button.title = "[\(compact)]"
+        let currentTheme = AgentStore.shared.currentTheme
+
+        if currentTheme == .funEmoji {
+            let attr = makeEmojiFunAttributedTitle(displayMode: displayMode)
+            button.attributedTitle = attr
+            button.title = ""
         } else {
-            let summary = AgentStore.shared.overallSummary()
-            button.title = "[\(summary)]"
+            button.attributedTitle = NSAttributedString(string: "")
+            if displayMode.lowercased() == "compact" {
+                let compact = AgentStore.shared.compactSummary()
+                button.title = "[\(compact)]"
+            } else {
+                let summary = AgentStore.shared.overallSummary()
+                button.title = "[\(summary)]"
+            }
         }
 
         let currentSignature = computeRenderSignature()
@@ -265,6 +345,22 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         // Status Legend Submenu (Theme-Aware)
         let legendSubmenu = NSMenu()
+
+        let agentsHeading = NSMenuItem(title: "Agents & Icons:", action: nil, keyEquivalent: "")
+        agentsHeading.isEnabled = false
+        legendSubmenu.addItem(agentsHeading)
+
+        for agent in AgentID.allCases {
+            let agItem = NSMenuItem(title: "  \(agent.displayName)", action: nil, keyEquivalent: "")
+            if let icon = ProviderIconLoader.shared.getIcon(for: agent) {
+                agItem.image = icon
+            }
+            agItem.isEnabled = false
+            legendSubmenu.addItem(agItem)
+        }
+
+        legendSubmenu.addItem(NSMenuItem.separator())
+
         let themeHeading = NSMenuItem(title: "Current Theme: \(currentTheme == .funEmoji ? "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)" : "Classic Colored Balls (⚪🟡🟢🔴⚫)")", action: nil, keyEquivalent: "")
         themeHeading.isEnabled = false
         legendSubmenu.addItem(themeHeading)
@@ -410,14 +506,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     tabItem.representedObject = ["url": tab.url, "tabId": tab.tabId as Any]
                     submenu.addItem(tabItem)
 
-                    if tabStatus == .working {
-                        let isTabArmed = OneShotSwitchManager.shared.isArmed(provider: .chatgpt, sessionId: nil, targetTabId: tab.tabId)
-                        let tabSwitchTitle = isTabArmed ? "    ✓ Switch Here When Ready" : "    ☐ Switch Here When Ready"
-                        let tabSwitchItem = NSMenuItem(title: tabSwitchTitle, action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
-                        tabSwitchItem.target = self
-                        tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
-                        submenu.addItem(tabSwitchItem)
-                    }
+                    let isTabArmed = OneShotSwitchManager.shared.isArmed(provider: .chatgpt, sessionId: nil, targetTabId: tab.tabId)
+                    let tabSwitchItem = NSMenuItem(title: "    Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                    tabSwitchItem.target = self
+                    tabSwitchItem.state = isTabArmed ? .on : .off
+                    tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
+                    submenu.addItem(tabSwitchItem)
                 }
             }
 
@@ -429,12 +523,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             timeItem.isEnabled = false
             submenu.addItem(timeItem)
 
-            if info.status == .working {
+            if info.status != .off {
                 submenu.addItem(NSMenuItem.separator())
                 let isArmed = OneShotSwitchManager.shared.isArmed(provider: agent, sessionId: info.sessionTitle, targetTabId: info.targetTabId)
-                let switchTitle = isArmed ? "✓ Switch Here When Ready" : "☐ Switch Here When Ready"
-                let switchItem = NSMenuItem(title: switchTitle, action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                let switchItem = NSMenuItem(title: "Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
                 switchItem.target = self
+                switchItem.state = isArmed ? .on : .off
                 switchItem.representedObject = ["agent": agent, "sessionTitle": info.sessionTitle as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
                 submenu.addItem(switchItem)
             }
@@ -656,11 +750,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         settingsSubmenu.addItem(NSMenuItem.separator())
 
-        // 4B. Monitoring Behavior Submenu
-        let behaviorItem = NSMenuItem(title: "Monitoring Behavior", action: nil, keyEquivalent: "")
-        let behaviorSubmenu = NSMenu()
-
-        // Overworking Threshold Submenu
+        // 4B. Overworking Threshold Submenu (Flattened)
         let overworkThresholdItem = NSMenuItem(title: "Overworking Threshold: \(overworkMins) min", action: nil, keyEquivalent: "")
         let overworkSubmenu = NSMenu()
         let availableThresholds = [5, 10, 15, 20, 30]
@@ -674,10 +764,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             overworkSubmenu.addItem(item)
         }
         overworkThresholdItem.submenu = overworkSubmenu
-        behaviorSubmenu.addItem(overworkThresholdItem)
-
-        behaviorItem.submenu = behaviorSubmenu
-        settingsSubmenu.addItem(behaviorItem)
+        settingsSubmenu.addItem(overworkThresholdItem)
 
         // 4C. Alerts Submenu
         let alertsItem = NSMenuItem(title: "Alerts", action: nil, keyEquivalent: "")

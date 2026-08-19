@@ -531,9 +531,21 @@ public final class AutoMonitor: @unchecked Sendable {
     // 1. Claude Process Watcher (Session automation disabled for baseline recovery)
     public func checkClaudeLog() {
         let workspace = NSWorkspace.shared
-        let isAppRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.anthropic.claudefordesktop" || $0.localizedName?.lowercased() == "claude" })
+        let isAppRunning = workspace.runningApplications.contains(where: {
+            $0.bundleIdentifier == "com.anthropic.claudefordesktop" ||
+            $0.localizedName?.lowercased() == "claude" ||
+            $0.localizedName?.lowercased() == "claude code" ||
+            $0.bundleIdentifier == "com.microsoft.VSCode" ||
+            $0.bundleIdentifier == "com.googlecode.iterm2" ||
+            $0.bundleIdentifier == "com.apple.Terminal" ||
+            $0.bundleIdentifier == "com.mitchellh.ghostty" ||
+            $0.bundleIdentifier == "com.todesktop.230313mzl4w4u92"
+        })
 
-        guard isAppRunning else {
+        let currentClaudeSessions = AgentStore.shared.getSessions(for: .claude)
+        let hasActiveTrackedSessions = !currentClaudeSessions.isEmpty
+
+        guard isAppRunning || hasActiveTrackedSessions else {
             AgentStore.shared.updateStatus(for: .claude, status: .off, detail: "Claude Code closed")
             AgentStore.shared.syncSessions(for: .claude, activeSessions: [], processRunning: false)
             return
@@ -541,8 +553,8 @@ public final class AutoMonitor: @unchecked Sendable {
 
         AgentStore.shared.pruneStaleClaudeSessions()
 
-        let currentClaudeSessions = AgentStore.shared.getSessions(for: .claude)
-        if currentClaudeSessions.isEmpty {
+        let refreshedClaudeSessions = AgentStore.shared.getSessions(for: .claude)
+        if refreshedClaudeSessions.isEmpty {
             AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Monitoring via Claude Native Hooks (Ready)")
             AgentStore.shared.syncSessions(for: .claude, activeSessions: [], processRunning: true)
         }

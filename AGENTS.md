@@ -874,3 +874,32 @@ Next: Commit and push `feat: copilot lifecycle repair, quota, one-shot switch, a
 Blockers: none
 
 [RELEASE] Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch & Canonical Priority Milestone — antigravity — 2026-08-18T23:54:00+02:00
+
+## 2026-08-19 — antigravity — macos
+Status: DONE
+Phase: Clean Handoff Milestone & Final UX Polish
+Done:
+1. Claude Lifecycle Session Preservation:
+   - Diagnosed `Claude Code running (0 tracked sessions)` regression during active CLI tasks: `checkClaudeLog()` in `AutoMonitor.swift` was checking GUI running apps via `NSWorkspace.shared.runningApplications`. When Claude ran in CLI/Terminal hosts (VS Code, Cursor, iTerm2, Terminal, Ghostty) or without GUI Claude Desktop, `checkClaudeLog()` evaluated `isAppRunning == false` every 1s and wiped active sessions via `syncSessions(..., activeSessions: [], processRunning: false)`!
+   - Fixed `AutoMonitor.swift`: recognizes terminal parent hosts and checks `hasActiveTrackedSessions`, guaranteeing active hook sessions are preserved and never wiped.
+2. Auto-Switch When Ready & Settings Flattening:
+   - Updated menu label to `Auto-Switch When Ready` with native AppKit check state (`.on` / `.off`), removing all literal checkbox characters.
+   - Allowed arming while `Idle` ("watch next turn") as well as `Working` ("watch current turn").
+   - Flattened `Settings & Preferences...` by removing empty `Monitoring Behavior` submenu and placing `Overworking Threshold: <mins> min >` directly under Settings.
+3. Provider Icons in Fun/Emoji Mode:
+   - Added `ProviderIconLoader.swift` loading local monochrome/template assets (`agent-white-icon/`) for ChatGPT, Claude, Codex, Antigravity, and GitHub Copilot.
+   - In Fun/Emoji mode, status bar renders template provider icons (`[icon] 🐵` etc.) with system light/dark tinting.
+   - In Classic mode, retains 3-letter tags (`GPT:●`, `CLD:●`, etc.).
+   - Updated `Status Meaning & Color Legend...` with `Agents & Icons:` section.
+4. Comprehensive Verification:
+   - Added Tests 191–195 to `Stage1TestRunner` covering icon loading, attributed title rendering, Classic mode labels, Idle Auto-Switch arming, and Claude session preservation (195/195 passed).
+   - Added unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` passed cleanly).
+   - Ran `node adapters/chrome-extension/background_test.js` (28/28 passed).
+   - Built release app bundle (`./build_app.sh` succeeded with exit code 0).
+   - Validated formatting with `git diff --check`.
+5. Created GitHub Copilot handoff markdown `AgentSignalBar_GitHub_Copilot_Handoff_2026-08-19.md`.
+Verified: `swift run Stage1TestRunner` (195/195 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Commit and push clean checkpoint to origin/main.
+Blockers: none
+
+[RELEASE] Clean Handoff Milestone & Final UX Polish — antigravity — 2026-08-19T10:38:00+02:00
