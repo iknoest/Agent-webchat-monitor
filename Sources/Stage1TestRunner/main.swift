@@ -3934,4 +3934,189 @@ runTest("195. AutoMonitor checkClaudeLog preserves active tracked sessions witho
     }
 }
 
-print("🎉 All 195 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons & Canonical Priority Tests Passed!")
+// 196. ChatGPT Lifecycle Reconciliation: Working session + newer authoritative non-working snapshot -> stale Working replaced/removed
+runTest("196. ChatGPT Lifecycle Reconciliation: Working session + newer authoritative non-working snapshot -> stale Working replaced/removed") {
+    let store = AgentStore.shared
+
+    // Step 1: ChatGPT emits snapshot with 1 working tab
+    let workingTab = ChatGPTTabInfo(tabId: 101, title: "ChatGPT - Complex Task", url: "https://chatgpt.com/c/123", status: "working", badge: "🟡", active: true)
+    store.updateStatus(for: .chatgpt, status: .working, detail: "1 ChatGPT tab(s) (1 generating)", sessionCount: 1, sessionTitle: "ChatGPT - Complex Task", targetTabId: 101, webLink: "https://chatgpt.com/c/123", openTabs: [workingTab])
+
+    let gptState1 = store.getStatus(for: .chatgpt)
+    try assert(gptState1.status == .working, "ChatGPT must be working initially")
+    try assert(gptState1.openTabs.count == 1, "Must have 1 open tab")
+    try assert(gptState1.thinkingStartTime != nil, "Must have thinking start time")
+
+    // Step 2: Newer authoritative snapshot arrives where generation finished -> tab is now done
+    let doneTab = ChatGPTTabInfo(tabId: 101, title: "ChatGPT - Complex Task", url: "https://chatgpt.com/c/123", status: "done", badge: "🟢", active: true)
+    store.updateStatus(for: .chatgpt, status: .done, detail: "1 ChatGPT tab(s) (0 generating)", sessionCount: 1, sessionTitle: "ChatGPT - Complex Task", targetTabId: 101, webLink: "https://chatgpt.com/c/123", openTabs: [doneTab])
+
+    let gptState2 = store.getStatus(for: .chatgpt)
+    try assert(gptState2.status == .done, "ChatGPT must transition to Done upon newer authoritative snapshot")
+    try assert(gptState2.thinkingStartTime == nil, "Thinking start time must be reset to nil")
+
+    // Step 3: Tab is closed in browser -> snapshot arrives with 0 tabs
+    store.updateStatus(for: .chatgpt, status: .idle, detail: "0 ChatGPT tab(s) (0 generating)", sessionCount: 0, sessionTitle: "ChatGPT Web", targetTabId: nil, webLink: "https://chatgpt.com", openTabs: [])
+
+    let gptState3 = store.getStatus(for: .chatgpt)
+    try assert(gptState3.status == .idle, "ChatGPT must transition to Idle when all tabs are closed")
+    try assert(gptState3.openTabs.isEmpty, "Open tabs must be empty")
+    try assert(gptState3.thinkingStartTime == nil, "Thinking start time must be nil")
+
+    store.updateStatus(for: .chatgpt, status: .idle)
+}
+
+// 197. Claude Tool Hook -> Authoritative Stop Event -> Done state with accurate duration
+runTest("197. Claude Tool Hook -> Authoritative Stop Event -> Done state with accurate duration") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let sessId = "test_claude_turn_reconciliation"
+    // Step 1: User prompt submit
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/code", "prompt_id": "prompt_101"],
+        isTestMode: true
+    )
+    // Step 2: Tool execution event (Tool Read)
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "PreToolUse", "session_id": sessId, "cwd": "/Users/ava/code", "tool_name": "Read"],
+        isTestMode: true
+    )
+
+    let cldWorking = store.getStatus(for: .claude)
+    try assert(cldWorking.status == .working, "Claude must be working during tool execution")
+    try assert(cldWorking.detail?.contains("Tool Read") == true, "Detail should reflect tool read")
+
+    // Step 3: Authoritative Stop event emitted by Claude Code
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "Stop", "session_id": sessId, "cwd": "/Users/ava/code"],
+        isTestMode: true
+    )
+
+    let cldDone = store.getStatus(for: .claude)
+    try assert(cldDone.status == .done, "Claude must transition to Done upon authoritative Stop hook")
+    try assert(cldDone.thinkingStartTime == nil, "Thinking start time must be nil upon Stop")
+
+    // Cleanup
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "SessionEnd", "session_id": sessId, "cwd": "/Users/ava/code"],
+        isTestMode: true
+    )
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+    store.updateStatus(for: .claude, status: .idle)
+}
+
+// 198. Claude SessionEnd Event -> session immediately removed & parent transitions to Idle
+runTest("198. Claude SessionEnd Event -> session immediately removed & parent transitions to Idle") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let sessId = "test_claude_session_end"
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/code"],
+        isTestMode: true
+    )
+    try assert(store.getSessions(for: .claude).count == 1, "Must have 1 session")
+
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "SessionEnd", "session_id": sessId, "cwd": "/Users/ava/code"],
+        isTestMode: true
+    )
+
+    try assert(store.getSessions(for: .claude).isEmpty, "Session must be removed upon SessionEnd")
+    let cldState = store.getStatus(for: .claude)
+    try assert(cldState.status == .idle, "Claude parent must be idle after SessionEnd")
+
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+    store.updateStatus(for: .claude, status: .idle)
+}
+
+// 199. Legitimate Long-Running Task: 60+ minutes elapsed with no contradictory evidence -> stays Working (NO arbitrary timeout)
+runTest("199. Legitimate Long-Running Task: 60+ minutes elapsed with no contradictory evidence -> stays Working (NO arbitrary timeout)") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let sessId = "test_claude_long_task"
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/long_build"],
+        isTestMode: true
+    )
+
+    // Simulate 75 minutes of active compilation
+    let sixtyFiveMinutesAgo = Date().addingTimeInterval(-4500)
+    var sessions = store.getSessions(for: .claude)
+    if var activeSess = sessions.first {
+        activeSess.thinkingStartTime = sixtyFiveMinutesAgo
+        activeSess.lastUpdated = sixtyFiveMinutesAgo
+        store.syncSessions(for: .claude, activeSessions: [activeSess], processRunning: true)
+    }
+
+    // Polling passes
+    AutoMonitor.shared.checkClaudeLog()
+
+    let afterPoll = store.getStatus(for: .claude)
+    try assert(afterPoll.status == .working, "Long-running task must remain Working without arbitrary timeout!")
+    try assert(afterPoll.thinkingStartTime != nil, "Thinking start time must be preserved")
+
+    // Cleanup
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "SessionEnd", "session_id": sessId, "cwd": "/Users/ava/long_build"],
+        isTestMode: true
+    )
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+    store.updateStatus(for: .claude, status: .idle)
+}
+
+// 200. Cross-Provider Canonical Priority: Current Done/Needs You surfaces over working/stale states
+runTest("200. Cross-Provider Canonical Priority: Current Done/Needs You surfaces over working/stale states") {
+    let store = AgentStore.shared
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+    // Claude is working, ChatGPT completes -> Done surfaces
+    store.updateStatus(for: .claude, status: .working)
+    store.updateStatus(for: .chatgpt, status: .done)
+
+    let highest1 = store.getHighestPriorityAgent()
+    try assert(highest1?.id == .chatgpt, "ChatGPT Done must take priority over Claude Working")
+
+    // Antigravity enters Needs You -> Blocked surfaces above all
+    store.updateStatus(for: .antigravity, status: .blocked)
+    let highest2 = store.getHighestPriorityAgent()
+    try assert(highest2?.id == .antigravity, "Antigravity Needs You must take top priority")
+
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+}
+
+// 201. Claude Process Termination: Confirmed dead CLI process PID reconciles session to Idle
+runTest("201. Claude Process Termination: Confirmed dead CLI process PID reconciles session to Idle") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let sessId = "test_dead_cli_sess_999"
+    _ = store.handleClaudeHookEvent(
+        json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/code"],
+        isTestMode: true
+    )
+
+    // Create a temporary mock sessions directory with a dead PID (PID 999999)
+    let tempDir = "/tmp/claude_test_sessions_\(UUID().uuidString)"
+    try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempDir) }
+
+    let sessionJSON = "{\"pid\":999999,\"sessionId\":\"\(sessId)\"}"
+    try? sessionJSON.write(toFile: "\(tempDir)/999999.json", atomically: true, encoding: .utf8)
+
+    AutoMonitor.shared.reconcileDeadClaudeSessions(sessionsDir: tempDir)
+
+    let sessionsAfter = store.getSessions(for: .claude)
+    try assert(sessionsAfter.isEmpty, "Dead process session must be reconciled and removed")
+
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+    store.updateStatus(for: .claude, status: .idle)
+}
+
+print("🎉 All 201 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority & Lifecycle Reconciliation Tests Passed!")

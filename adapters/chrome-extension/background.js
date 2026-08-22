@@ -384,12 +384,19 @@ async function executeFetchPayload(payloadJSON) {
         retryTimer = null;
     }
 
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const fetchTimer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+
     try {
-        const res = await fetch(SIGNAL_URL, {
+        const fetchOpts = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: payloadJSON
-        });
+        };
+        if (controller) fetchOpts.signal = controller.signal;
+
+        const res = await fetch(SIGNAL_URL, fetchOpts);
+        if (fetchTimer) clearTimeout(fetchTimer);
 
         if (res && res.ok) {
             lastSentPayloadJSON = payloadJSON;
@@ -413,6 +420,7 @@ async function executeFetchPayload(payloadJSON) {
         }
 
     } catch (err) {
+        if (fetchTimer) clearTimeout(fetchTimer);
         isFetchInFlight = false;
         // Do NOT update lastSentPayloadJSON on failure
         if (!retryTimer) {

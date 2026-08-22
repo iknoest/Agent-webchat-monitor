@@ -551,12 +551,47 @@ public final class AutoMonitor: @unchecked Sendable {
             return
         }
 
+        reconcileDeadClaudeSessions()
         AgentStore.shared.pruneStaleClaudeSessions()
 
         let refreshedClaudeSessions = AgentStore.shared.getSessions(for: .claude)
         if refreshedClaudeSessions.isEmpty {
             AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Monitoring via Claude Native Hooks (Ready)")
             AgentStore.shared.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+        }
+    }
+
+    // Check if any tracked Claude CLI session's process has terminated via OS process liveness
+    public func reconcileDeadClaudeSessions(sessionsDir: String = ("~/.claude/sessions" as NSString).expandingTildeInPath) {
+        guard FileManager.default.fileExists(atPath: sessionsDir) else { return }
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: sessionsDir) else { return }
+
+        var pidSessionMap: [String: pid_t] = [:]
+        for file in files where file.hasSuffix(".json") {
+            let fullPath = "\(sessionsDir)/\(file)"
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: fullPath)),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let pidNum = json["pid"] as? Int,
+               let sessId = json["sessionId"] as? String {
+                pidSessionMap[sessId] = pid_t(pidNum)
+            }
+        }
+
+        let claudeSessions = AgentStore.shared.getSessions(for: .claude)
+        for session in claudeSessions {
+            if let pid = pidSessionMap[session.sessionId] {
+                if kill(pid, 0) != 0 {
+                    // Process is confirmed dead (ESRCH); transition to idle/remove
+                    _ = AgentStore.shared.handleClaudeHookEvent(
+                        json: [
+                            "event": "SessionEnd",
+                            "session_id": session.sessionId,
+                            "reason": "Process exited"
+                        ],
+                        isTestMode: AgentStore.isSyntheticTestSessionId(session.sessionId)
+                    )
+                }
+            }
         }
     }
 

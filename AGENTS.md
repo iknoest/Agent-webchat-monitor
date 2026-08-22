@@ -903,3 +903,32 @@ Next: Commit and push clean checkpoint to origin/main.
 Blockers: none
 
 [RELEASE] Clean Handoff Milestone & Final UX Polish — antigravity — 2026-08-19T10:38:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: P0 Lifecycle State Reconciliation & HTTP Socket Teardown Repair
+Done:
+1. Forensic Investigation & Root Cause Identification:
+   - Investigated human runtime failure where ChatGPT (`thinking 68m`) and Claude Code (`thinking 63m, Detail: Tool Read`) were stuck in `Working`.
+   - Identified root cause: the previous long-running background process (PID 35915, running since Aug 18) suffered socket file descriptor exhaustion on port 18888 (`CLOSE_WAIT` leaks) because `HTTPServer.swift` did not set `NWConnection.stateUpdateHandler` and did not immediately cancel sockets on disconnect/empty data.
+   - When port 18888 hung, terminal events (`Stop`, `SessionEnd`, and Chrome extension `done`/`idle` snapshots) were dropped by connection timeouts, leaving prior `Working` states stuck indefinitely.
+2. HTTP Server Connection Management:
+   - Fixed `HTTPServer.swift`: added explicit `stateUpdateHandler` to incoming connections, guaranteed immediate `connection.cancel()` on empty data/completion/error, and ensured robust socket teardown.
+   - Fixed `background.js`: added 5-second `AbortSignal` timeout to prevent hanging fetch calls in Chrome service worker.
+3. Truthful Authoritative Lifecycle Reconciliation:
+   - Implemented `reconcileDeadClaudeSessions()` in `AutoMonitor.swift` using OS process liveness (`kill(pid, 0)` via `~/.claude/sessions/*.json`). If an interactive Claude CLI process has terminated, the dead session is reconciled without arbitrary age-based timeouts.
+   - Preserved legitimate long-running tasks: sessions remain Working indefinitely as long as the underlying process is alive.
+4. Comprehensive Automated Validation:
+   - Added Tests 196–201 in `Stage1TestRunner` covering ChatGPT snapshot replacement, Claude tool hook $\rightarrow$ Stop hook transition, SessionEnd removal, 60+ min long task preservation without timeouts, cross-provider canonical priority, and dead process reconciliation (201/201 passed).
+   - Added unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` passed cleanly).
+   - Ran `node adapters/chrome-extension/background_test.js` (28/28 passed).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check`.
+5. Git Branching Discipline:
+   - Created repair branch `fix/runtime-state-reconciliation` from `origin/main @ c1e029e`.
+   - Kept `origin/iknoest-redesigned-happiness` intact and unmerged.
+Verified: `swift run Stage1TestRunner` (201/201 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Commit and push `fix/runtime-state-reconciliation` to origin.
+Blockers: none
+
+[RELEASE] P0 Lifecycle State Reconciliation & HTTP Socket Teardown Repair — antigravity — 2026-08-22T10:41:00+02:00

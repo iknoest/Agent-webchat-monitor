@@ -49,6 +49,14 @@ public final class HTTPServer: @unchecked Sendable {
     }
 
     private func handleConnection(_ connection: NWConnection) {
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .failed, .cancelled:
+                connection.cancel()
+            default:
+                break
+            }
+        }
         connection.start(queue: DispatchQueue.global(qos: .userInitiated))
         receive(on: connection)
     }
@@ -57,10 +65,7 @@ public final class HTTPServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             if let data = data, !data.isEmpty, let requestString = String(data: data, encoding: .utf8) {
                 self?.processHTTPRequest(requestString, connection: connection)
-            } else if isComplete {
-                connection.cancel()
-            } else if let error = error {
-                print("Connection error: \(error)")
+            } else {
                 connection.cancel()
             }
         }

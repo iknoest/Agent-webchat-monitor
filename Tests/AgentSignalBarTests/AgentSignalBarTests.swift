@@ -1653,5 +1653,82 @@ final class AgentSignalBarTests: XCTestCase {
         store.purgeSyntheticAndStaleSessions(provider: .claude)
         for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
     }
+
+    func testChatGPTLifecycleReconciliation() throws {
+        let store = AgentStore.shared
+        let workingTab = ChatGPTTabInfo(tabId: 101, title: "ChatGPT - Complex Task", url: "https://chatgpt.com/c/123", status: "working", badge: "🟡", active: true)
+        store.updateStatus(for: .chatgpt, status: .working, detail: "1 ChatGPT tab(s) (1 generating)", sessionCount: 1, sessionTitle: "ChatGPT - Complex Task", targetTabId: 101, webLink: "https://chatgpt.com/c/123", openTabs: [workingTab])
+
+        XCTAssertEqual(store.getStatus(for: .chatgpt).status, .working)
+
+        let doneTab = ChatGPTTabInfo(tabId: 101, title: "ChatGPT - Complex Task", url: "https://chatgpt.com/c/123", status: "done", badge: "🟢", active: true)
+        store.updateStatus(for: .chatgpt, status: .done, detail: "1 ChatGPT tab(s) (0 generating)", sessionCount: 1, sessionTitle: "ChatGPT - Complex Task", targetTabId: 101, webLink: "https://chatgpt.com/c/123", openTabs: [doneTab])
+
+        XCTAssertEqual(store.getStatus(for: .chatgpt).status, .done)
+        XCTAssertNil(store.getStatus(for: .chatgpt).thinkingStartTime)
+
+        store.updateStatus(for: .chatgpt, status: .idle, detail: "0 ChatGPT tab(s) (0 generating)", sessionCount: 0, sessionTitle: "ChatGPT Web", targetTabId: nil, webLink: "https://chatgpt.com", openTabs: [])
+        XCTAssertEqual(store.getStatus(for: .chatgpt).status, .idle)
+    }
+
+    func testClaudeStopHookReconciliation() throws {
+        let store = AgentStore.shared
+        store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+        let sessId = "unit_claude_reconciliation"
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/code", "prompt_id": "p1"],
+            isTestMode: true
+        )
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "PreToolUse", "session_id": sessId, "cwd": "/Users/ava/code", "tool_name": "Read"],
+            isTestMode: true
+        )
+        XCTAssertEqual(store.getStatus(for: .claude).status, .working)
+
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "Stop", "session_id": sessId, "cwd": "/Users/ava/code"],
+            isTestMode: true
+        )
+        XCTAssertEqual(store.getStatus(for: .claude).status, .done)
+
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "SessionEnd", "session_id": sessId, "cwd": "/Users/ava/code"],
+            isTestMode: true
+        )
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+        store.updateStatus(for: .claude, status: .idle)
+    }
+
+    func testLegitimateLongRunningTaskPreserved() throws {
+        let store = AgentStore.shared
+        store.syncSessions(for: .claude, activeSessions: [], processRunning: true)
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+        let sessId = "unit_claude_long_task"
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "UserPromptSubmit", "session_id": sessId, "cwd": "/Users/ava/long_task"],
+            isTestMode: true
+        )
+
+        let sixtyMinsAgo = Date().addingTimeInterval(-3600)
+        var sessions = store.getSessions(for: .claude)
+        if var activeSess = sessions.first {
+            activeSess.thinkingStartTime = sixtyMinsAgo
+            activeSess.lastUpdated = sixtyMinsAgo
+            store.syncSessions(for: .claude, activeSessions: [activeSess], processRunning: true)
+        }
+
+        AutoMonitor.shared.checkClaudeLog()
+        XCTAssertEqual(store.getStatus(for: .claude).status, .working)
+
+        _ = store.handleClaudeHookEvent(
+            json: ["event": "SessionEnd", "session_id": sessId, "cwd": "/Users/ava/long_task"],
+            isTestMode: true
+        )
+        store.purgeSyntheticAndStaleSessions(provider: .claude)
+        store.updateStatus(for: .claude, status: .idle)
+    }
 }
 #endif
