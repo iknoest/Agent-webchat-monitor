@@ -714,6 +714,37 @@ public final class AutoMonitor: @unchecked Sendable {
     public private(set) var codexRolloutOffsets: [String: UInt64] = [:]
     public private(set) var codexPendingLineBuffers: [String: String] = [:]
 
+    public static func isSafeSessionTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        if trimmed.count > 60 { return false }
+        if trimmed.contains("\n") || trimmed.contains("\r") { return false }
+        if trimmed.hasPrefix("#") { return false }
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("file://") || trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") { return false }
+        let lower = trimmed.lowercased()
+        if lower.contains("files pasted") || lower.contains("pasted-text") || lower.contains("pasted text") { return false }
+        if lower.contains("select ") || lower.contains("insert ") || lower.contains("delete from") || lower.contains("update ") { return false }
+        if lower.contains("import ") || lower.contains("function ") || lower.contains("const ") || lower.contains("let ") || lower.contains("def ") || lower.contains("class ") { return false }
+        if trimmed.contains("{") || trimmed.contains("}") || trimmed.contains(";") { return false }
+        return true
+    }
+
+    public static func resolveCodexSessionTitle(name: String, title: String, cwd: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedName.isEmpty && isSafeSessionTitle(trimmedName) {
+            return trimmedName
+        }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty && isSafeSessionTitle(trimmedTitle) {
+            return trimmedTitle
+        }
+        let folder = (cwd as NSString).lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !folder.isEmpty && isSafeSessionTitle(folder) {
+            return folder
+        }
+        return "Codex Session"
+    }
+
     public func fetchCodexThreads(limit: Int = 10) -> [CodexThreadInfo] {
         let fm = FileManager.default
         let dbPath = NSString(string: "~/.codex/state_5.sqlite").expandingTildeInPath
@@ -738,28 +769,30 @@ public final class AutoMonitor: @unchecked Sendable {
 
         if fm.fileExists(atPath: dbPath) {
             if let tid = targetThreadId {
-                let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0;"
+                let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0;"
                 if let output = runProcessWithTimeout(
                     executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                     arguments: [dbPath, query],
                     timeoutSeconds: 1.0
                 ) {
                     let parts = output.components(separatedBy: "|||")
-                    if parts.count >= 5 {
+                    if parts.count >= 6 {
                         let tidStr = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cwd = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let safeTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
                         if !tidStr.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) {
                             seenIds.insert(tidStr)
-                            results.append(CodexThreadInfo(id: tidStr, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
+                            results.append(CodexThreadInfo(id: tidStr, title: safeTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
                         }
                     }
                 }
             }
 
-            let query = "SELECT id || '|||' || title || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
+            let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
             if let output = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                 arguments: [dbPath, query],
@@ -768,15 +801,17 @@ public final class AutoMonitor: @unchecked Sendable {
                 let lines = output.components(separatedBy: "\n")
                 for line in lines {
                     let parts = line.components(separatedBy: "|||")
-                    if parts.count >= 5 {
+                    if parts.count >= 6 {
                         let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let path = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cwd = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                        let safeTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
                         if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
                             seenIds.insert(tid)
-                            results.append(CodexThreadInfo(id: tid, title: title.isEmpty ? "Codex Session" : title, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
+                            results.append(CodexThreadInfo(id: tid, title: safeTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
                         }
                     }
                 }

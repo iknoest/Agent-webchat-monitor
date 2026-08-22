@@ -473,66 +473,78 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             // Submenu for Detailed Info & Tracked Sessions
             let submenu = NSMenu()
 
-            if let sessionTitle = info.sessionTitle, !sessionTitle.isEmpty {
-                let sItem = NSMenuItem(title: "Active Session: \(sessionTitle)", action: nil, keyEquivalent: "")
-                sItem.isEnabled = false
-                submenu.addItem(sItem)
-            }
+            if agent == .chatgpt {
+                if !info.openTabs.isEmpty {
+                    let tabsHeader = NSMenuItem(title: "Open ChatGPT Chrome Tabs (\(info.openTabs.count)):", action: nil, keyEquivalent: "")
+                    tabsHeader.isEnabled = false
+                    submenu.addItem(tabsHeader)
 
-            if !providerSessions.isEmpty {
-                let trackedHeader = NSMenuItem(title: "Tracked Workspace Sessions (\(providerSessions.count)):", action: nil, keyEquivalent: "")
-                trackedHeader.isEnabled = false
-                submenu.addItem(trackedHeader)
+                    for tab in info.openTabs {
+                        let tabStatus = AgentStatus(rawValue: tab.status) ?? .idle
+                        let tabStatusDot = tabStatus.statusDot(theme: currentTheme)
+                        let activeTag = tab.active == true ? " [Active Tab]" : ""
+                        let tabItem = NSMenuItem(title: "  \(tabStatusDot) \(tab.title)\(activeTag)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                        tabItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: tab.status, availability: effAvail))
+                        tabItem.target = self
+                        tabItem.representedObject = ["url": tab.url, "tabId": tab.tabId as Any]
+                        submenu.addItem(tabItem)
 
-                for s in providerSessions {
-                    let sBadge = s.status.statusDot(theme: currentTheme)
-                    let subItem = NSMenuItem(title: "  \(sBadge) [\(s.status.statusTitle)] \(s.title)", action: nil, keyEquivalent: "")
-                    subItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: s.status, availability: effAvail))
-                    subItem.isEnabled = false
-                    submenu.addItem(subItem)
+                        let isTabArmed = OneShotSwitchManager.shared.isArmed(provider: .chatgpt, sessionId: nil, targetTabId: tab.tabId)
+                        let tabSwitchItem = NSMenuItem(title: "    Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                        tabSwitchItem.target = self
+                        tabSwitchItem.state = isTabArmed ? .on : .off
+                        tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
+                        submenu.addItem(tabSwitchItem)
+                    }
+                } else {
+                    let noTabsItem = NSMenuItem(title: "No open ChatGPT tabs in Chrome", action: nil, keyEquivalent: "")
+                    noTabsItem.isEnabled = false
+                    submenu.addItem(noTabsItem)
                 }
-            }
 
-            if agent == .chatgpt && !info.openTabs.isEmpty {
-                let tabsHeader = NSMenuItem(title: "Open ChatGPT Chrome Tabs (\(info.openTabs.count)):", action: nil, keyEquivalent: "")
-                tabsHeader.isEnabled = false
-                submenu.addItem(tabsHeader)
-
-                for tab in info.openTabs {
-                    let tabStatus = AgentStatus(rawValue: tab.status) ?? .idle
-                    let tabStatusDot = tabStatus.statusDot(theme: currentTheme)
-                    let activeTag = tab.active == true ? " [Active Tab]" : ""
-                    let tabItem = NSMenuItem(title: "  \(tabStatusDot) \(tab.title)\(activeTag)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                    tabItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: tab.status, availability: effAvail))
-                    tabItem.target = self
-                    tabItem.representedObject = ["url": tab.url, "tabId": tab.tabId as Any]
-                    submenu.addItem(tabItem)
-
-                    let isTabArmed = OneShotSwitchManager.shared.isArmed(provider: .chatgpt, sessionId: nil, targetTabId: tab.tabId)
-                    let tabSwitchItem = NSMenuItem(title: "    Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
-                    tabSwitchItem.target = self
-                    tabSwitchItem.state = isTabArmed ? .on : .off
-                    tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
-                    submenu.addItem(tabSwitchItem)
-                }
-            }
-
-            let detailItem = NSMenuItem(title: "Detail: \(info.detail ?? "No active task")", action: nil, keyEquivalent: "")
-            detailItem.isEnabled = false
-            submenu.addItem(detailItem)
-
-            let timeItem = NSMenuItem(title: "Last Update: \(info.lastUpdated.relativeString())", action: nil, keyEquivalent: "")
-            timeItem.isEnabled = false
-            submenu.addItem(timeItem)
-
-            if info.status != .off {
                 submenu.addItem(NSMenuItem.separator())
-                let isArmed = OneShotSwitchManager.shared.isArmed(provider: agent, sessionId: info.sessionTitle, targetTabId: info.targetTabId)
-                let switchItem = NSMenuItem(title: "Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
-                switchItem.target = self
-                switchItem.state = isArmed ? .on : .off
-                switchItem.representedObject = ["agent": agent, "sessionTitle": info.sessionTitle as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
-                submenu.addItem(switchItem)
+                let timeItem = NSMenuItem(title: "Last Update: \(info.lastUpdated.relativeString())", action: nil, keyEquivalent: "")
+                timeItem.isEnabled = false
+                submenu.addItem(timeItem)
+            } else {
+                if let sessionTitle = info.sessionTitle, !sessionTitle.isEmpty {
+                    let sItem = NSMenuItem(title: "Active Session: \(sessionTitle)", action: nil, keyEquivalent: "")
+                    sItem.isEnabled = false
+                    submenu.addItem(sItem)
+                }
+
+                if !providerSessions.isEmpty {
+                    let trackedHeader = NSMenuItem(title: "Tracked Workspace Sessions (\(providerSessions.count)):", action: nil, keyEquivalent: "")
+                    trackedHeader.isEnabled = false
+                    submenu.addItem(trackedHeader)
+
+                    for s in providerSessions {
+                        let sBadge = s.status.statusDot(theme: currentTheme)
+                        let subItem = NSMenuItem(title: "  \(sBadge) [\(s.status.statusTitle)] \(s.title)", action: nil, keyEquivalent: "")
+                        subItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: s.status, availability: effAvail))
+                        subItem.isEnabled = false
+                        submenu.addItem(subItem)
+                    }
+                }
+
+                let detailItem = NSMenuItem(title: "Detail: \(info.detail ?? "No active task")", action: nil, keyEquivalent: "")
+                detailItem.isEnabled = false
+                submenu.addItem(detailItem)
+
+                let timeItem = NSMenuItem(title: "Last Update: \(info.lastUpdated.relativeString())", action: nil, keyEquivalent: "")
+                timeItem.isEnabled = false
+                submenu.addItem(timeItem)
+
+                if info.status != .off {
+                    submenu.addItem(NSMenuItem.separator())
+                    let currentSessionId = providerSessions.first?.sessionId
+                    let isArmed = OneShotSwitchManager.shared.isArmed(provider: agent, sessionId: currentSessionId, targetTabId: info.targetTabId)
+                    let switchItem = NSMenuItem(title: "Auto-Switch When Ready", action: #selector(toggleOneShotSwitchClicked(_:)), keyEquivalent: "")
+                    switchItem.target = self
+                    switchItem.state = isArmed ? .on : .off
+                    switchItem.representedObject = ["agent": agent, "sessionId": currentSessionId as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
+                    submenu.addItem(switchItem)
+                }
             }
 
             item.submenu = submenu
@@ -554,7 +566,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if let sRemaining = claudeUsage.sessionRemainingPercent {
+            let isClaudeWeeklyZero = (claudeUsage.weeklyRemainingPercent == 0)
+            if !isClaudeWeeklyZero, let sRemaining = claudeUsage.sessionRemainingPercent {
                 let sBar = makeCompactBar(percent: sRemaining)
                 let sReset = claudeUsage.sessionResetText ?? ""
                 let resetTag = sReset.isEmpty ? "" : " · \(sReset)"
@@ -592,7 +605,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     fHdr.isEnabled = false
                     menu.addItem(fHdr)
 
-                    if let sRemaining = family.sessionRemainingPercent {
+                    let isFamilyWeeklyZero = (family.weeklyRemainingPercent == 0)
+                    if !isFamilyWeeklyZero, let sRemaining = family.sessionRemainingPercent {
                         let bar = makeCompactBar(percent: sRemaining)
                         let resetTag = (family.sessionResetText?.isEmpty == false) ? " · \(family.sessionResetText!)" : ""
                         let row = NSMenuItem(title: "       5-Hour: \(bar) \(Int(sRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
@@ -817,41 +831,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         alertsItem.submenu = alertsSubmenu
         settingsSubmenu.addItem(alertsItem)
 
-        // 4D. Telegram Alerts Submenu
-        let telegramItem = NSMenuItem(title: "Telegram Alerts", action: nil, keyEquivalent: "")
-        let telegramSubmenu = NSMenu()
-
+        // 4D. Telegram Alerts Direct Toggle (First-Level under Settings)
         let tgConfig = EnvConfigLoader.shared.getTelegramConfig()
         let isTelegramEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
-
-        let tgToggleItem = NSMenuItem(title: "Enabled", action: #selector(toggleTelegramAlertsClicked), keyEquivalent: "")
-        tgToggleItem.target = self
-        tgToggleItem.state = (isTelegramEnabled && tgConfig.isConfigured) ? .on : .off
-        if !tgConfig.isConfigured {
-            tgToggleItem.isEnabled = false
-        }
-        telegramSubmenu.addItem(tgToggleItem)
-
-        let sendTestItem = NSMenuItem(title: "Send Test Notification", action: #selector(sendTelegramTestNotificationClicked), keyEquivalent: "")
-        sendTestItem.target = self
-        if !tgConfig.isConfigured {
-            sendTestItem.isEnabled = false
-        }
-        telegramSubmenu.addItem(sendTestItem)
-
-        telegramSubmenu.addItem(NSMenuItem.separator())
-        let statusText = tgConfig.isConfigured ? "Status: Configured (.env)" : "Status: Not Configured (.env missing)"
-        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        telegramSubmenu.addItem(statusItem)
-
-        if let last = TelegramBridge.shared.lastDeliveryResult {
-            let lastItem = NSMenuItem(title: "Last Test: \(last.safeSummary)", action: nil, keyEquivalent: "")
-            lastItem.isEnabled = false
-            telegramSubmenu.addItem(lastItem)
-        }
-
-        telegramItem.submenu = telegramSubmenu
+        let tgTitle = tgConfig.isConfigured ? "Telegram Alerts" : "Telegram Alerts (Not Configured in .env)"
+        let telegramItem = NSMenuItem(title: tgTitle, action: tgConfig.isConfigured ? #selector(toggleTelegramAlertsClicked) : nil, keyEquivalent: "")
+        telegramItem.target = self
+        telegramItem.state = (isTelegramEnabled && tgConfig.isConfigured) ? .on : .off
+        telegramItem.isEnabled = tgConfig.isConfigured
         settingsSubmenu.addItem(telegramItem)
 
         // 4E. Appearance Submenu
@@ -1061,14 +1048,16 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
     @objc private func toggleOneShotSwitchClicked(_ sender: NSMenuItem) {
         if let dict = sender.representedObject as? [String: Any], let agent = dict["agent"] as? AgentID {
-            let sessionTitle = dict["sessionTitle"] as? String
+            let sessionId = dict["sessionId"] as? String
             let tabId = dict["tabId"] as? Int
             let url = dict["url"] as? String ?? dict["webLink"] as? String
-            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: sessionTitle, targetTabId: tabId, targetURL: url)
+            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: sessionId, targetTabId: tabId, targetURL: url)
             updateTitleAndMenu()
         } else if let agent = sender.representedObject as? AgentID {
             let info = AgentStore.shared.getStatus(for: agent)
-            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: info.sessionTitle, targetTabId: info.targetTabId, targetURL: info.webLink)
+            let sessions = AgentStore.shared.getSessions(for: agent)
+            let currentSessionId = sessions.first?.sessionId
+            OneShotSwitchManager.shared.toggle(provider: agent, sessionId: currentSessionId, targetTabId: info.targetTabId, targetURL: info.webLink)
             updateTitleAndMenu()
         }
     }

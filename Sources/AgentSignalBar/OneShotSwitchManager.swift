@@ -134,12 +134,16 @@ public final class OneShotSwitchManager {
             return false
         }
 
-        if let curSess = current.sessionId, let reqSess = sessionId, !curSess.isEmpty, !reqSess.isEmpty {
-            return curSess == reqSess
+        if let curSess = current.sessionId, !curSess.isEmpty {
+            guard let reqSess = sessionId, !reqSess.isEmpty, reqSess == curSess else {
+                return false
+            }
         }
 
-        if let curTab = current.targetTabId, let reqTab = targetTabId {
-            return curTab == reqTab
+        if let curTab = current.targetTabId {
+            guard let reqTab = targetTabId, reqTab == curTab else {
+                return false
+            }
         }
 
         return true
@@ -160,17 +164,17 @@ public final class OneShotSwitchManager {
             return false
         }
 
-        // Match session identity if specified
-        if let armedSess = current.sessionId, let transSess = sessionId, !armedSess.isEmpty, !transSess.isEmpty {
-            if armedSess != transSess {
+        // Match session identity strictly if armed for a specific session
+        if let armedSess = current.sessionId, !armedSess.isEmpty {
+            guard let transSess = sessionId, !transSess.isEmpty, transSess == armedSess else {
                 lock.unlock()
                 return false
             }
         }
 
-        // Match tab identity if specified
-        if let armedTab = current.targetTabId, let transTab = targetTabId {
-            if armedTab != transTab {
+        // Match tab identity strictly if armed for a specific tab
+        if let armedTab = current.targetTabId {
+            guard let transTab = targetTabId, transTab == armedTab else {
                 lock.unlock()
                 return false
             }

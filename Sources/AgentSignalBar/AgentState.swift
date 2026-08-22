@@ -564,10 +564,15 @@ public final class AgentStore: @unchecked Sendable {
 
                 // Monotonic turn duration preservation
                 if session.status == .working {
-                    if existing.thinkingStartTime == nil || (session.turnId != nil && session.turnId != existing.turnId) {
-                        session.thinkingStartTime = session.thinkingStartTime ?? now
+                    if let existingStart = existing.thinkingStartTime {
+                        if session.turnId != nil && existing.turnId != nil && session.turnId != existing.turnId {
+                            // Turn changed: use new session thinkingStartTime (or now if new turn started)
+                            session.thinkingStartTime = session.thinkingStartTime ?? now
+                        } else {
+                            session.thinkingStartTime = existingStart
+                        }
                     } else {
-                        session.thinkingStartTime = existing.thinkingStartTime
+                        // Existing had no thinkingStartTime: keep session.thinkingStartTime as-is (nil if unknown)
                     }
                 } else if existing.status == .working && (session.status == .done || session.status == .idle) {
                     if let start = existing.thinkingStartTime {
@@ -576,10 +581,6 @@ public final class AgentStore: @unchecked Sendable {
                         session.lastDurationSeconds = now.timeIntervalSince(start)
                     }
                     session.thinkingStartTime = nil
-                }
-            } else {
-                if session.status == .working && session.thinkingStartTime == nil {
-                    session.thinkingStartTime = now
                 }
             }
             updatedDict[key] = session
@@ -630,12 +631,14 @@ public final class AgentStore: @unchecked Sendable {
                 currentParent.status = .working
                 currentParent.isQuotaRestored = false
                 var durationStr = ""
-                let earliestStart = workingSessions.compactMap({ $0.thinkingStartTime }).min() ?? now
+                let earliestStart = workingSessions.compactMap({ $0.thinkingStartTime }).min()
                 currentParent.thinkingStartTime = earliestStart
-                let elapsed = Int(now.timeIntervalSince(earliestStart))
-                let mins = elapsed / 60
-                let secs = elapsed % 60
-                durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
+                if let start = earliestStart {
+                    let elapsed = Int(now.timeIntervalSince(start))
+                    let mins = elapsed / 60
+                    let secs = elapsed % 60
+                    durationStr = mins > 0 ? " (thinking for \(mins)m \(secs)s)" : " (thinking for \(secs)s)"
+                }
                 currentParent.detail = "\(provider.displayName) active: \(topWorking.title)\(durationStr)"
                 chosenSession = topWorking
             } else if let topDone = unackDoneSessions.first {
@@ -710,6 +713,7 @@ public final class AgentStore: @unchecked Sendable {
                     status: tabStatus,
                     turnId: tabTurnId,
                     attentionReason: attReason,
+                    thinkingStartTime: tabStatus == .working ? Date() : nil,
                     sourceEvidence: "ChatGPT Chrome tabRegistry",
                     lastUpdated: Date(),
                     webLink: tab.url,
@@ -741,6 +745,7 @@ public final class AgentStore: @unchecked Sendable {
             status: status,
             turnId: sessionTurnId,
             attentionReason: attReason,
+            thinkingStartTime: status == .working ? Date() : nil,
             sourceEvidence: detail ?? "Direct status update",
             lastUpdated: Date(),
             webLink: webLink,
@@ -907,6 +912,29 @@ public final class AgentStore: @unchecked Sendable {
         if !rawCwd.isEmpty {
             session.cwd = rawCwd
         }
+        var eventTimestamp: Date? = nil
+        if let tsStr = json["timestamp"] as? String {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = isoFormatter.date(from: tsStr) {
+                eventTimestamp = d
+            } else {
+                let basicIso = ISO8601DateFormatter()
+                if let d = basicIso.date(from: tsStr) {
+                    eventTimestamp = d
+                } else {
+                    let df = DateFormatter()
+                    df.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+                    eventTimestamp = df.date(from: tsStr)
+                }
+            }
+        } else if let tsNum = json["timestamp"] as? Double {
+            if tsNum > 1_000_000_000_000 {
+                eventTimestamp = Date(timeIntervalSince1970: tsNum / 1000.0)
+            } else {
+                eventTimestamp = Date(timeIntervalSince1970: tsNum)
+            }
+        }
         var shouldMarkQuotaExhausted = false
 
         switch event {
@@ -921,7 +949,7 @@ public final class AgentStore: @unchecked Sendable {
             let newTurnId = promptId != nil ? "turn_\(promptId!)" : "turn_submit_\(sessionId.prefix(8))_\(Int(now.timeIntervalSince1970 * 1000))"
             session.turnId = newTurnId
             session.status = .working
-            session.thinkingStartTime = now
+            session.thinkingStartTime = eventTimestamp ?? now
             session.attentionReason = nil
             session.acknowledgedTurnId = nil
             session.acknowledgedAt = nil
@@ -930,8 +958,8 @@ public final class AgentStore: @unchecked Sendable {
 
         case "PreToolUse", "PostToolUse":
             session.status = .working
-            if session.thinkingStartTime == nil {
-                session.thinkingStartTime = now
+            if session.thinkingStartTime == nil, let evTs = eventTimestamp {
+                session.thinkingStartTime = evTs
             }
             let infoStr = toolName != nil ? "Claude Hook: Tool \(toolName!)" : "Claude Hook: \(event)"
             session.sourceEvidence = infoStr
@@ -1081,6 +1109,30 @@ public final class AgentStore: @unchecked Sendable {
             session.cwd = rawCwd
         }
 
+        var eventTimestamp: Date? = nil
+        if let tsStr = json["timestamp"] as? String {
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = isoFormatter.date(from: tsStr) {
+                eventTimestamp = d
+            } else {
+                let basicIso = ISO8601DateFormatter()
+                if let d = basicIso.date(from: tsStr) {
+                    eventTimestamp = d
+                } else {
+                    let df = DateFormatter()
+                    df.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+                    eventTimestamp = df.date(from: tsStr)
+                }
+            }
+        } else if let tsNum = json["timestamp"] as? Double {
+            if tsNum > 1_000_000_000_000 {
+                eventTimestamp = Date(timeIntervalSince1970: tsNum / 1000.0)
+            } else {
+                eventTimestamp = Date(timeIntervalSince1970: tsNum)
+            }
+        }
+
         switch event {
         case "SessionStart":
             if session.status == .off {
@@ -1095,7 +1147,7 @@ public final class AgentStore: @unchecked Sendable {
             if isNewLogicalTurn {
                 let newTurnId = "turn_agy_\(sessionId.prefix(8))_\(Int(now.timeIntervalSince1970 * 1000))"
                 session.turnId = newTurnId
-                session.thinkingStartTime = now
+                session.thinkingStartTime = eventTimestamp ?? now
             }
             session.status = .working
             session.attentionReason = nil
@@ -1119,8 +1171,8 @@ public final class AgentStore: @unchecked Sendable {
                 }
                 session.pendingToolName = toolName
                 session.pendingToolTime = now
-                if session.thinkingStartTime == nil {
-                    session.thinkingStartTime = now
+                if session.thinkingStartTime == nil, let evTs = eventTimestamp {
+                    session.thinkingStartTime = evTs
                 }
                 let infoStr = toolName != nil ? "Antigravity Hook: Tool \(toolName!)" : "Antigravity Hook: PreToolUse"
                 session.sourceEvidence = infoStr
@@ -1132,8 +1184,8 @@ public final class AgentStore: @unchecked Sendable {
             session.pendingToolName = nil
             session.pendingToolTime = nil
             session.attentionReason = nil
-            if session.thinkingStartTime == nil {
-                session.thinkingStartTime = now
+            if session.thinkingStartTime == nil, let evTs = eventTimestamp {
+                session.thinkingStartTime = evTs
             }
             let infoStr = toolName != nil ? "Antigravity Hook: PostTool \(toolName!)" : "Antigravity Hook: PostToolUse"
             session.sourceEvidence = infoStr
@@ -1144,8 +1196,8 @@ public final class AgentStore: @unchecked Sendable {
             if session.status != .blocked {
                 session.status = .working
             }
-            if session.thinkingStartTime == nil {
-                session.thinkingStartTime = now
+            if session.thinkingStartTime == nil, let evTs = eventTimestamp {
+                session.thinkingStartTime = evTs
             }
             session.sourceEvidence = "Antigravity Hook: PostInvocation"
             session.sensorReason = "Antigravity Hook: PostInvocation"
@@ -1256,7 +1308,14 @@ public final class AgentStore: @unchecked Sendable {
         let rawCwd = cwd ?? ""
         let folderName = (rawCwd as NSString).lastPathComponent
         let defaultTitle = folderName.isEmpty ? "Codex (\(threadId.prefix(8)))" : "[\(folderName)]"
-        let sessionTitle = (title?.isEmpty == false) ? title! : defaultTitle
+        let sessionTitle: String
+        if let rawTitle = title, !rawTitle.isEmpty, AutoMonitor.isSafeSessionTitle(rawTitle) {
+            sessionTitle = rawTitle
+        } else if !folderName.isEmpty && AutoMonitor.isSafeSessionTitle(folderName) {
+            sessionTitle = "[\(folderName)]"
+        } else {
+            sessionTitle = defaultTitle
+        }
         let now = Date()
 
         var session = currentSessions[threadId] ?? AgentSessionInfo(
@@ -1278,7 +1337,7 @@ public final class AgentStore: @unchecked Sendable {
         if status == .working {
             session.status = .working
             session.turnId = turnId
-            session.thinkingStartTime = thinkingStartTime ?? session.thinkingStartTime ?? now
+            session.thinkingStartTime = thinkingStartTime ?? session.thinkingStartTime
             session.attentionReason = nil
             session.acknowledgedTurnId = nil
             session.acknowledgedAt = nil
@@ -1334,7 +1393,14 @@ public final class AgentStore: @unchecked Sendable {
         let rawCwd = cwd ?? ""
         let folderName = (rawCwd as NSString).lastPathComponent
         let defaultTitle = folderName.isEmpty ? "Codex (\(threadId.prefix(8)))" : "[\(folderName)]"
-        let sessionTitle = (title?.isEmpty == false) ? title! : defaultTitle
+        let sessionTitle: String
+        if let rawTitle = title, !rawTitle.isEmpty, AutoMonitor.isSafeSessionTitle(rawTitle) {
+            sessionTitle = rawTitle
+        } else if !folderName.isEmpty && AutoMonitor.isSafeSessionTitle(folderName) {
+            sessionTitle = "[\(folderName)]"
+        } else {
+            sessionTitle = defaultTitle
+        }
         let now = Date()
 
         var session = currentSessions[threadId] ?? AgentSessionInfo(

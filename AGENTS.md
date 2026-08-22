@@ -1083,3 +1083,36 @@ Next: Ask Ava for ONE immediate check only (Claude must not remain ATTENTION NEE
 Blockers: none
 
 [RELEASE] Claude Rate-Limit Semantics Repair & Telegram Privacy Hardening — antigravity — 2026-08-22T20:43:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: P0/P1 Runtime Repairs, Codex Title Hierarchy, Thinking Timestamp Truth & UX Polish
+Done:
+1. P0-1 & P0-2 Auto-Switch Exact Session/Turn Identity & Unarmed Isolation:
+   - Enforced strict session identity (`sessionId`) and tab matching (`targetTabId`) in `OneShotSwitchManager.swift` (`isArmed` and `evaluateTransition`).
+   - Guarded unarmed state (`armedTarget == nil`) to strictly return false on all transitions, preventing unexpected app focus.
+   - Fixed `MenuBarManager.swift` to pass `info.sessionId` (or `session.sessionId`) instead of `sessionTitle` to avoid title-based mismatches.
+2. P0-C Codex User-Facing Session Title Hierarchy:
+   - Updated `AutoMonitor.swift`'s `fetchCodexThreads()` to query `name` from `state_5.sqlite` `threads` table.
+   - Implemented `resolveCodexSessionTitle(name:title:cwd:)` with hierarchy: (1) native sidebar title (`threads.name`), (2) safe `title`, (3) safe `cwd` project folder name, (4) neutral fallback `"Codex Session"`.
+   - Added `isSafeSessionTitle(_:)` to reject prompt markers (`# Files pasted`), newlines, paths, code snippets, and SQL statements.
+   - Updated `handleCodexTurnState` and `handleCodexRolloutEvent` in `AgentState.swift` to sanitize session titles against prompt leakage.
+3. P0-D Thinking Duration Timestamp Truth & Restart Recovery:
+   - Updated `handleClaudeHookEvent` and `handleAntigravityHookEvent` in `AgentState.swift` to parse native `timestamp` (ISO8601/epoch) from hook events for authoritative turn start time.
+   - Intermediate tool events (`PreToolUse`, `PostToolUse`, `PostInvocation`) preserve existing `thinkingStartTime` without resetting.
+   - If authoritative start time is unavailable on restart/monitor, UI cleanly displays `Working` without a fabricated precise timer.
+4. P1 UX Polish:
+   - P1-5: Suppressed meaningless 5-Hour quota row when weekly quota is exhausted (`weeklyRemainingPercent == 0`) for Claude and Antigravity model families in `MenuBarManager.swift`.
+   - P1-6: Streamlined ChatGPT submenu in `MenuBarManager.swift` to render open Chrome tabs directly, removing redundant workspace rows.
+   - P1-7 & P1-8: Elevated Telegram Alerts to a direct 1-click toggle item under `Settings & Preferences` (`Telegram Alerts` with checkbox `.on`/`.off`, or disabled when `.env` is missing), and removed `Send Test Notification` from normal user UI.
+5. Verification:
+   - Added Tests 252 to 261 in `Stage1TestRunner` (`261 / 261 PASSED`).
+   - Executed `swift test` and `node adapters/chrome-extension/background_test.js` (`28 / 28 JS tests passed`).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean exit 0).
+Verified: `swift run Stage1TestRunner` (261/261 passed), `swift test` (clean exit 0), `node background_test.js` (28/28 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Report completion and walkthrough to Ava.
+Blockers: none
+
+[RELEASE] P0/P1 Runtime Repairs, Codex Title Hierarchy, Thinking Timestamp Truth & UX Polish — antigravity — 2026-08-22T21:05:00+02:00
+
