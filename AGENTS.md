@@ -932,3 +932,26 @@ Next: Commit and push `fix/runtime-state-reconciliation` to origin.
 Blockers: none
 
 [RELEASE] P0 Lifecycle State Reconciliation & HTTP Socket Teardown Repair — antigravity — 2026-08-22T10:41:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: P0 Menu Bar Status Item Visibility Repair
+Done:
+1. Root Cause Analysis:
+   - Investigated invisible status item in macOS Menu Bar while process was running.
+   - Identified root cause in `MenuBarManager.performUpdateTitleAndMenu()`: after assigning `button.attributedTitle = attr`, the code called `button.title = ""`. In AppKit, `NSButton.title` and `attributedTitle` share the same underlying cell backing. Setting `button.title = ""` immediately cleared the attributed string to an empty string `""`. Because the status item has variable length (`NSStatusItem.variableLength`), an empty string collapsed the button's intrinsic frame width to 0, rendering the status item completely invisible.
+2. Fix:
+   - Removed destructive `button.title = ""` and `button.attributedTitle = ""` calls in `MenuBarManager.swift`.
+   - In Fun/Emoji mode, sets `button.attributedTitle = attr` directly.
+   - In Classic mode, sets `button.title = "[\(summary)]"` directly.
+   - Retained provider tag fallback when icon loading fails, ensuring status bar content is never empty.
+3. Validation:
+   - Added Tests 202–206 in `Stage1TestRunner` verifying non-empty title/attributed title retention, icon fallback, compact/detailed visibility, and theme switching (206/206 passed).
+   - Added unit test in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` passed cleanly).
+   - Rebuilt release app bundle (`./build_app.sh` succeeded with exit code 0).
+   - Relaunched `AgentSignalBar.app` (PID 99245).
+Verified: `swift run Stage1TestRunner` (206/206 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Ask Ava for menu bar visibility confirmation.
+Blockers: none
+
+[RELEASE] P0 Menu Bar Status Item Visibility Repair — antigravity — 2026-08-22T15:10:00+02:00

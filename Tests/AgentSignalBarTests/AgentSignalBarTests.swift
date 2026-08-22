@@ -1730,5 +1730,36 @@ final class AgentSignalBarTests: XCTestCase {
         store.purgeSyntheticAndStaleSessions(provider: .claude)
         store.updateStatus(for: .claude, status: .idle)
     }
+
+    func testMenuBarButtonVisibilityAndAttributedTitleRetention() throws {
+        let store = AgentStore.shared
+        let button = NSButton()
+
+        // 1. Fun mode
+        store.currentTheme = .funEmoji
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+        let funAttr = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+        XCTAssertGreaterThan(funAttr.length, 0)
+        button.attributedTitle = funAttr
+
+        XCTAssertGreaterThan(button.attributedTitle.length, 0)
+        XCTAssertFalse(button.title.isEmpty)
+
+        // 2. Classic mode
+        store.currentTheme = .classic
+        button.title = "[\(store.overallSummary())]"
+        XCTAssertFalse(button.title.isEmpty)
+        XCTAssertTrue(button.title.contains("GPT:⚪"))
+
+        // 3. Compact mode
+        let funCmp = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "compact")
+        XCTAssertGreaterThan(funCmp.length, 0)
+        let clsCmp = store.compactSummary()
+        XCTAssertFalse(clsCmp.isEmpty)
+
+        store.currentTheme = .classic
+        for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+    }
 }
 #endif

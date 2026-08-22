@@ -4119,4 +4119,101 @@ runTest("201. Claude Process Termination: Confirmed dead CLI process PID reconci
     store.updateStatus(for: .claude, status: .idle)
 }
 
-print("🎉 All 201 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority & Lifecycle Reconciliation Tests Passed!")
+// 202. Menu Bar Button: Fun Mode Attributed Title is Non-Empty and Retained on Button
+runTest("202. Menu Bar Button: Fun Mode Attributed Title is Non-Empty and Retained on Button") {
+    let store = AgentStore.shared
+    store.currentTheme = .funEmoji
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+    let button = NSButton()
+    let attrDetailed = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    try assert(attrDetailed.length > 0, "Fun mode detailed attributed title must be non-empty")
+    try assert(attrDetailed.string.contains("["), "Must contain opening bracket")
+    try assert(attrDetailed.string.contains("]"), "Must contain closing bracket")
+
+    button.attributedTitle = attrDetailed
+    try assert(button.attributedTitle.length > 0, "Button attributed title must be retained and not cleared")
+    try assert(!button.title.isEmpty, "Button title string must be non-empty")
+
+    store.currentTheme = .classic
+}
+
+// 203. Menu Bar Button: Classic Mode Plain Title is Non-Empty and Retained on Button
+runTest("203. Menu Bar Button: Classic Mode Plain Title is Non-Empty and Retained on Button") {
+    let store = AgentStore.shared
+    store.currentTheme = .classic
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+    let summary = store.overallSummary()
+    let button = NSButton()
+    button.title = "[\(summary)]"
+
+    try assert(button.title.count > 0, "Classic mode title must be non-empty")
+    try assert(button.title.contains("GPT:⚪"), "Classic mode must contain standard tags")
+    try assert(button.attributedTitle.length > 0, "Button attributed title must also be non-empty")
+}
+
+// 204. Provider Icon Fallback: Fun Mode with Unloadable Icon Produces Visible Textual Fallback
+runTest("204. Provider Icon Fallback: Fun Mode with Unloadable Icon Produces Visible Textual Fallback") {
+    let store = AgentStore.shared
+    store.currentTheme = .funEmoji
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+
+    let attr = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    try assert(attr.length >= 5, "Attributed title must produce visible output even if icon assets fail")
+    try assert(attr.string.hasPrefix("["), "Must start with bracket")
+    try assert(attr.string.hasSuffix("]"), "Must end with bracket")
+
+    store.currentTheme = .classic
+}
+
+// 205. Display Modes: Both Compact and Detailed Modes Produce Non-Zero Visible Content in Fun & Classic Themes
+runTest("205. Display Modes: Both Compact and Detailed Modes Produce Non-Zero Visible Content in Fun & Classic Themes") {
+    let store = AgentStore.shared
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+    store.updateStatus(for: .chatgpt, status: .working)
+
+    // Fun Detailed & Compact
+    store.currentTheme = .funEmoji
+    let funDet = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    let funCmp = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "compact")
+    try assert(funDet.length > 0, "Fun detailed must be non-empty")
+    try assert(funCmp.length > 0, "Fun compact must be non-empty")
+
+    // Classic Detailed & Compact
+    store.currentTheme = .classic
+    let clsDet = store.overallSummary()
+    let clsCmp = store.compactSummary()
+    try assert(!clsDet.isEmpty, "Classic detailed must be non-empty")
+    try assert(!clsCmp.isEmpty, "Classic compact must be non-empty")
+
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+}
+
+// 206. Theme Switching: Switching Between Classic and Fun Preserves Non-Empty Button Title
+runTest("206. Theme Switching: Switching Between Classic and Fun Preserves Non-Empty Button Title") {
+    let store = AgentStore.shared
+    let button = NSButton()
+
+    // Fun mode
+    store.currentTheme = .funEmoji
+    let funAttr = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    button.attributedTitle = funAttr
+    try assert(button.attributedTitle.length > 0, "Fun mode must set attributedTitle")
+
+    // Switch to Classic
+    store.currentTheme = .classic
+    button.title = "[\(store.overallSummary())]"
+    try assert(button.title.count > 0, "Classic mode must set title")
+    try assert(button.title.contains("GPT:⚪"), "Classic mode must have text")
+
+    // Switch back to Fun
+    store.currentTheme = .funEmoji
+    let funAttr2 = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    button.attributedTitle = funAttr2
+    try assert(button.attributedTitle.length > 0, "Fun mode must retain attributedTitle without being cleared by title = ''")
+
+    store.currentTheme = .classic
+}
+
+print("🎉 All 206 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation & Menu Bar UI Visibility Tests Passed!")

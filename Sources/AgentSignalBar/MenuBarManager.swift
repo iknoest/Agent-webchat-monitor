@@ -241,9 +241,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         if currentTheme == .funEmoji {
             let attr = makeEmojiFunAttributedTitle(displayMode: displayMode)
             button.attributedTitle = attr
-            button.title = ""
         } else {
-            button.attributedTitle = NSAttributedString(string: "")
             if displayMode.lowercased() == "compact" {
                 let compact = AgentStore.shared.compactSummary()
                 button.title = "[\(compact)]"
