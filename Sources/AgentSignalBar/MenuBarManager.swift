@@ -303,7 +303,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
             stateDetails += "\(agent.rawValue):\(info.status.rawValue):\(info.availability.rawValue):\(info.effectiveDisplayStatus.rawValue):\(usage?.availability.rawValue ?? ""):[\(famStr)]:\(info.detail ?? ""):\(info.activeSessionCount):\(info.sessionTitle ?? ""):\(info.webLink ?? ""):[\(openTabsStr)]:\(usage?.freshness ?? ""):\(usage?.sessionLimitPercent ?? 0):\(usage?.weeklyLimitPercent ?? 0):\(usage?.sessionResetText ?? ""):\(usage?.weeklyResetText ?? ""):\(usage?.isLiveSource ?? false):\(usage?.isQuotaExhausted ?? false):\(usage?.lastSuccessfulRefresh?.timeIntervalSince1970 ?? 0);"
         }
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(sessionsStr)|\(stateDetails)"
+        let tgEnabled = cfg.isTelegramEnabled ?? true
+        let tgConfigured = EnvConfigLoader.shared.getTelegramConfig().isConfigured
+
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -813,7 +816,38 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         alertsItem.submenu = alertsSubmenu
         settingsSubmenu.addItem(alertsItem)
 
-        // 4D. Appearance Submenu
+        // 4D. Telegram Alerts Submenu
+        let telegramItem = NSMenuItem(title: "Telegram Alerts", action: nil, keyEquivalent: "")
+        let telegramSubmenu = NSMenu()
+
+        let tgConfig = EnvConfigLoader.shared.getTelegramConfig()
+        let isTelegramEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+
+        let tgToggleItem = NSMenuItem(title: "Enabled", action: #selector(toggleTelegramAlertsClicked), keyEquivalent: "")
+        tgToggleItem.target = self
+        tgToggleItem.state = (isTelegramEnabled && tgConfig.isConfigured) ? .on : .off
+        if !tgConfig.isConfigured {
+            tgToggleItem.isEnabled = false
+        }
+        telegramSubmenu.addItem(tgToggleItem)
+
+        let sendTestItem = NSMenuItem(title: "Send Test Notification", action: #selector(sendTelegramTestNotificationClicked), keyEquivalent: "")
+        sendTestItem.target = self
+        if !tgConfig.isConfigured {
+            sendTestItem.isEnabled = false
+        }
+        telegramSubmenu.addItem(sendTestItem)
+
+        telegramSubmenu.addItem(NSMenuItem.separator())
+        let statusText = tgConfig.isConfigured ? "Status: Configured (.env)" : "Status: Not Configured (.env missing)"
+        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        telegramSubmenu.addItem(statusItem)
+
+        telegramItem.submenu = telegramSubmenu
+        settingsSubmenu.addItem(telegramItem)
+
+        // 4E. Appearance Submenu
         let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let appearanceSubmenu = NSMenu()
 
@@ -1128,6 +1162,31 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         SleepManager.shared.isClosedLidModeEnabled = !current
         print("🛡️ Closed-Lid / Clamshell Mode toggled to: \(!current)")
         updateTitleAndMenu()
+    }
+
+    @objc private func toggleTelegramAlertsClicked() {
+        let current = ConfigManager.shared.config.isTelegramEnabled ?? true
+        ConfigManager.shared.setTelegramEnabled(!current)
+        if !current {
+            TelegramBridge.shared.startPollingIfEnabled()
+        } else {
+            TelegramBridge.shared.stopPolling()
+        }
+        print("📱 Telegram Alerts toggled to: \(!current)")
+        updateTitleAndMenu()
+    }
+
+    @objc private func sendTelegramTestNotificationClicked() {
+        print("📱 Sending Telegram Test Notification...")
+        NSSound(named: "Pop")?.play()
+        Task {
+            let res = await TelegramBridge.shared.sendTestNotification()
+            if res.success {
+                print("✅ Telegram Test Notification delivered successfully!")
+            } else {
+                print("❌ Telegram Test Notification delivery failed: \(res.error ?? "unknown")")
+            }
+        }
     }
 
     @objc private func setMenuBarModeCompactClicked() {

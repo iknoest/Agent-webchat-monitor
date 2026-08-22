@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("🚀 Starting AgentSignalBar background service...")
         HTTPServer.shared.start()
         AutoMonitor.shared.start()
+        TelegramBridge.shared.setup()
         MenuBarManager.shared.setup()
     }
 }

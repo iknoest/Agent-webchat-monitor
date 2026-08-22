@@ -120,6 +120,7 @@ public struct AppConfig: Codable {
     public var menuBarDisplayMode: String? // default "detailed" ("detailed" or "compact")
     public var isClosedLidEnabled: Bool? // default false
     public var minBatteryPercentForClosedLid: Int? // default 20
+    public var isTelegramEnabled: Bool? // default true
     public var customMainIconPath: String?
     public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
     public var agents: [String: AgentCustomConfig]
@@ -138,6 +139,7 @@ public struct AppConfig: Codable {
             menuBarDisplayMode: "detailed",
             isClosedLidEnabled: nil,
             minBatteryPercentForClosedLid: 20,
+            isTelegramEnabled: true,
             customMainIconPath: nil,
             disabledAgents: [],
             agents: [
@@ -277,6 +279,12 @@ public final class ConfigManager: @unchecked Sendable {
     public func setMinBatteryPercentForClosedLid(_ percent: Int) {
         var cfg = config
         cfg.minBatteryPercentForClosedLid = percent
+        saveConfig(cfg)
+    }
+
+    public func setTelegramEnabled(_ enabled: Bool) {
+        var cfg = config
+        cfg.isTelegramEnabled = enabled
         saveConfig(cfg)
     }
 

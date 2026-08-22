@@ -980,3 +980,29 @@ Next: Proceed to Smart Auto Provider Completion milestone.
 Blockers: none
 
 [RELEASE] Menu Bar Provider Separator & Roadmap Alignment — antigravity — 2026-08-22T15:38:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: Smart Auto Five-Provider Completion & Telegram Bridge Foundation v1
+Done:
+1. Smart Auto 5-Provider Completion:
+   - Removed legacy hardcoded limitation in `SleepManager.swift`. All 5 supported providers (`ChatGPT`, `Claude`, `Antigravity`, `Codex`, `Copilot`) now participate in Smart Keep-Awake when monitored, active (`Working` or `Needs You`), and not quota exhausted.
+   - Updated menu UI title to provider-agnostic `Smart Auto (Monitored Agents)`.
+   - Verified that disabled providers under Monitored Agents and standalone quota states never activate Smart Auto.
+2. Telegram Bridge Foundation v1:
+   - Implemented `EnvConfigLoader.swift` for safe dotenv loading (`ProcessInfo` $\rightarrow$ `~/.config/AgentSignalBar/.env` $\rightarrow$ repo-local `.env` sibling) without logging or leaking secret tokens.
+   - Implemented `TelegramTransport.swift` with `URLSessionTelegramTransport` and mock transport for 100% offline unit/integration testing.
+   - Implemented `TelegramCommandRouter.swift` with strict `TELEGRAM_CHAT_ID` authorization check and read-only `/status`, `/quota`, `/sessions`, `/help` commands.
+   - Implemented `TelegramBridge.swift` for outbound alerts (`🔴 Needs You`, `🟢 Done / New Output Ready`), deduplication, long polling (`getUpdates`), and test notification.
+   - Added `Telegram Alerts` submenu in `Settings & Preferences...` with `Enabled` toggle and `Send Test Notification`.
+3. Validation:
+   - Added Tests 207–223 in `Stage1TestRunner` (`223 / 223 PASSED`).
+   - Added unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean).
+   - Relaunched `AgentSignalBar.app` (PID 15207).
+Verified: `swift run Stage1TestRunner` (223/223 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Await Ava's human test notification confirmation.
+Blockers: none
+
+[RELEASE] Smart Auto Five-Provider Completion & Telegram Bridge Foundation v1 — antigravity — 2026-08-22T17:15:00+02:00

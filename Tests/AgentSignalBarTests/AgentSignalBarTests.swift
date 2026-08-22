@@ -1764,5 +1764,79 @@ final class AgentSignalBarTests: XCTestCase {
         store.currentTheme = .classic
         for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
     }
+
+    func testFiveProviderSmartAutoKeepAwake() throws {
+        let sleepMgr = SleepManager.shared
+        sleepMgr.mode = .smartAuto
+
+        for a in AgentID.allCases {
+            AgentStore.shared.updateStatus(for: a, status: .idle)
+            ConfigManager.shared.setAgentMonitored(a, monitored: true)
+        }
+
+        // Test each of the 5 providers
+        for a in AgentID.allCases {
+            AgentStore.shared.updateStatus(for: a, status: .working)
+            let eval = sleepMgr.evaluateSmartAutoRequirement()
+            XCTAssertTrue(eval.shouldKeepAwake, "\(a.displayName) Working must activate Smart Auto")
+            AgentStore.shared.updateStatus(for: a, status: .idle)
+        }
+
+        let idleEval = sleepMgr.evaluateSmartAutoRequirement()
+        XCTAssertFalse(idleEval.shouldKeepAwake, "All idle must release Smart Auto")
+    }
+
+    func testTelegramConfigLoaderAndDiagnostics() throws {
+        let loader = EnvConfigLoader.shared
+        let parsed = loader.parseDotEnvString("""
+        # Test comment
+        TELEGRAM_BOT_TOKEN="999:TEST_TOKEN"
+        TELEGRAM_CHAT_ID='123456789'
+        """)
+
+        XCTAssertEqual(parsed["TELEGRAM_BOT_TOKEN"], "999:TEST_TOKEN")
+        XCTAssertEqual(parsed["TELEGRAM_CHAT_ID"], "123456789")
+
+        let cfg = TelegramConfig(botToken: "999:TEST_TOKEN", chatId: "123456789")
+        XCTAssertTrue(cfg.isConfigured)
+        XCTAssertFalse(cfg.diagnosticSummary.contains("999"))
+        XCTAssertTrue(cfg.diagnosticSummary.contains("configured"))
+    }
+
+    func testTelegramOutboundAlertsAndRouter() async throws {
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+        ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+        let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_unit_tg", title: "Unit Test Project", status: .done, lastDurationSeconds: 12)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Unit Test Project")
+
+        // Wait brief task slice
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let sent = mock.getAllSentMessages()
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertTrue(sent[0].text.contains("🟢 Claude Code finished"))
+        XCTAssertTrue(sent[0].text.contains("Unit Test Project"))
+
+        // Router test
+        let chat = TelegramChat(id: 1001)
+        let msg = TelegramMessage(message_id: 1, chat: chat, text: "/status")
+        let res = await TelegramCommandRouter.shared.handleIncomingMessage(msg, configuredChatId: "1001")
+        XCTAssertNotNil(res)
+        XCTAssertTrue(res!.text.contains("AgentSignalBar Status"))
+
+        // Unauthorized chat test
+        let unauthMsg = TelegramMessage(message_id: 2, chat: TelegramChat(id: 9999), text: "/status")
+        let unauthRes = await TelegramCommandRouter.shared.handleIncomingMessage(unauthMsg, configuredChatId: "1001")
+        XCTAssertNil(unauthRes)
+
+        EnvConfigLoader.shared.reload()
+    }
 }
 #endif

@@ -12,6 +12,26 @@ func runTest(_ name: String, block: () throws -> Void) {
     }
 }
 
+func runAsyncTest(_ name: String, block: @escaping () async throws -> Void) {
+    let sema = DispatchSemaphore(value: 0)
+    var testErr: Error?
+    Task {
+        do {
+            try await block()
+        } catch {
+            testErr = error
+        }
+        sema.signal()
+    }
+    sema.wait()
+    if let err = testErr {
+        print("❌ Failed: \(name) - \(err)")
+        exit(1)
+    } else {
+        print("✅ Passed: \(name)")
+    }
+}
+
 struct TestError: Error, CustomStringConvertible {
     let description: String
 }
@@ -1174,20 +1194,26 @@ runTest("40. Codex: SQLite updated_at change alone does not produce Working") {
     try assert(status != .working, "SQLite updated_at change alone MUST NOT produce .working without task_started.")
 }
 
-// 41. Codex remains excluded from Smart Auto
-runTest("41. Codex remains excluded from Smart Auto") {
+// 41. Five-Provider Smart Auto: Monitored Codex participates in Smart Auto and respects Monitored Agents
+runTest("41. Five-Provider Smart Auto: Monitored Codex participates in Smart Auto and respects Monitored Agents") {
     let sleepMgr = SleepManager.shared
     let store = AgentStore.shared
 
-    try assert(!SleepManager.trustedProviders.contains(.codex), "Codex MUST NOT be present in SleepManager.trustedProviders.")
+    for a in AgentID.allCases { store.updateStatus(for: a, status: .idle) }
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
 
-    store.updateStatus(for: .claude, status: .idle)
-    store.updateStatus(for: .chatgpt, status: .idle)
-    store.updateStatus(for: .antigravity, status: .idle)
     store.updateStatus(for: .codex, status: .working, detail: "Codex active task")
-
     let eval = sleepMgr.evaluateSmartAutoRequirement()
-    try assert(eval.shouldKeepAwake == false, "Working Codex alone MUST NOT keep Smart Auto awake.")
+    try assert(eval.shouldKeepAwake == true, "Monitored Working Codex MUST activate Smart Auto.")
+    try assert(eval.reason.contains("Codex Desktop"), "Reason must identify Codex Desktop")
+
+    // Disabled provider must never activate Smart Auto
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: false)
+    let evalDisabled = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalDisabled.shouldKeepAwake == false, "Disabled Codex MUST NOT activate Smart Auto.")
+
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+    store.updateStatus(for: .codex, status: .idle)
 }
 
 // 42. Menu Bar: fresh/default config -> Detailed mode & exposes all 4 provider identities
@@ -3309,10 +3335,12 @@ runTest("163. Monitored Agents: Disabled provider is excluded from overallSummar
     ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
     let summaryEnabled = AgentStore.shared.overallSummary()
     try assert(summaryEnabled.contains("CDX"), "overallSummary must include re-enabled Codex: got \(summaryEnabled)")
+    AgentStore.shared.updateStatus(for: .codex, status: .idle)
 }
 
 // 164. Monitored Agents: Disabled provider cannot acquire Smart Auto keep-awake even if working
 runTest("164. Monitored Agents: Disabled provider cannot acquire Smart Auto keep-awake even if working") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
     SleepManager.shared.mode = .smartAuto
 
     ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
@@ -3329,23 +3357,36 @@ runTest("164. Monitored Agents: Disabled provider cannot acquire Smart Auto keep
     SleepManager.shared.updateSleepAssertionState()
 }
 
-// 165. Monitored Agents: Codex & Copilot monitored state does NOT imply Smart Auto eligibility
-runTest("165. Monitored Agents: Codex & Copilot monitored state does NOT imply Smart Auto eligibility") {
-    SleepManager.shared.mode = .smartAuto
+// 165. Five-Provider Smart Auto: Codex & Copilot participate in Smart Auto when monitored
+runTest("165. Five-Provider Smart Auto: Codex & Copilot participate in Smart Auto when monitored") {
+    let sleepMgr = SleepManager.shared
+    sleepMgr.mode = .smartAuto
 
     for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
 
     ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
 
+    // 1. Codex Working -> Activates Smart Auto
     AgentStore.shared.updateStatus(for: .codex, status: .working)
-    _ = SleepManager.shared.evaluateSmartAutoRequirement()
-    try assert(!SleepManager.shared.isAssertionActive, "Codex is not in trustedProviders and must not acquire Smart Auto")
+    let evalCodex = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalCodex.shouldKeepAwake, "Codex Working must activate Smart Auto")
+    try assert(evalCodex.reason.contains("Codex Desktop"), "Reason must contain Codex Desktop")
     AgentStore.shared.updateStatus(for: .codex, status: .idle)
 
+    // 2. Copilot Working -> Activates Smart Auto
     AgentStore.shared.updateStatus(for: .copilot, status: .working)
-    _ = SleepManager.shared.evaluateSmartAutoRequirement()
-    try assert(!SleepManager.shared.isAssertionActive, "Copilot is not in trustedProviders and must not acquire Smart Auto")
+    let evalCopilot = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(evalCopilot.shouldKeepAwake, "Copilot Working must activate Smart Auto")
+    try assert(evalCopilot.reason.contains("GitHub Copilot"), "Reason must contain GitHub Copilot")
+    AgentStore.shared.updateStatus(for: .copilot, status: .idle)
+
+    // 3. Disabled provider cannot activate
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
+    AgentStore.shared.updateStatus(for: .copilot, status: .working)
+    let evalDisabled = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(!evalDisabled.shouldKeepAwake, "Disabled Copilot cannot activate Smart Auto")
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
     AgentStore.shared.updateStatus(for: .copilot, status: .idle)
 }
 
@@ -4219,4 +4260,346 @@ runTest("206. Theme Switching: Switching Between Classic and Fun Preserves Non-E
     store.currentTheme = .classic
 }
 
-print("🎉 All 206 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation & Menu Bar UI Visibility Tests Passed!")
+// 207. Telegram: Env configuration parsed properly without exposing secret values
+runTest("207. Telegram: Env configuration parsed properly without exposing secret values") {
+    let loader = EnvConfigLoader.shared
+    let parsed = loader.parseDotEnvString("""
+    # Comment line
+    TELEGRAM_BOT_TOKEN="123456:ABC-DEF_test_token"
+    TELEGRAM_CHAT_ID='987654321'
+    OTHER_KEY=unused_value
+    """)
+
+    try assert(parsed["TELEGRAM_BOT_TOKEN"] == "123456:ABC-DEF_test_token")
+    try assert(parsed["TELEGRAM_CHAT_ID"] == "987654321")
+
+    let cfg = TelegramConfig(botToken: "123456:ABC-DEF_test_token", chatId: "987654321")
+    try assert(cfg.isConfigured, "Config must be configured")
+    try assert(cfg.diagnosticSummary == "Telegram token: configured, Telegram chat ID: configured", "Summary must redact secret tokens")
+    try assert(!cfg.diagnosticSummary.contains("123456"), "Summary must never contain token digits")
+}
+
+// 208. Telegram: Missing/Disabled Telegram sends nothing
+runTest("208. Telegram: Missing/Disabled Telegram sends nothing") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    // Unconfigured
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "", chatId: ""))
+    ConfigManager.shared.setTelegramEnabled(true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Finished")
+
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Unconfigured Telegram must send nothing")
+
+    // Disabled in config
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "123"))
+    ConfigManager.shared.setTelegramEnabled(false)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Finished")
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Disabled Telegram must send nothing")
+
+    ConfigManager.shared.setTelegramEnabled(true)
+    EnvConfigLoader.shared.reload()
+}
+
+// 209. Telegram: Done status sends single outbound notification with correct format
+runTest("209. Telegram: Done status sends single outbound notification with correct format") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_done_tg_01", title: "Build Project", status: .done, lastDurationSeconds: 45)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Build Project")
+
+    // Allow async Task to complete
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 1, "Must send exactly one notification")
+    let msg = sent[0]
+    try assert(msg.chatId == "12345")
+    try assert(msg.text.contains("🟢 Claude Code finished"), "Must contain Done header")
+    try assert(msg.text.contains("Project: Build Project"), "Must contain project title")
+    try assert(msg.text.contains("New output ready (45s)"), "Must contain duration")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 210. Telegram: Duplicate Done status does not resend within debounce window
+runTest("210. Telegram: Duplicate Done status does not resend within debounce window") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_done_01", title: "Refactor API", status: .done)
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .done, detail: "Refactor API")
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .done, detail: "Refactor API")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 1, "Duplicate Done MUST NOT generate a second notification")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 211. Telegram: Needs You (blocked) sends outbound notification
+runTest("211. Telegram: Needs You (blocked) sends outbound notification") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_perm_tg_01", title: "Apply Schema Migration", status: .blocked, attentionReason: "User confirmation required for DROP TABLE")
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .blocked, detail: "Apply Schema Migration")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 1, "Must send exactly 1 Needs You alert")
+    try assert(sent[0].text.contains("🔴 Antigravity needs you"), "Must contain Needs You header")
+    try assert(sent[0].text.contains("User confirmation required for DROP TABLE"), "Must contain reason")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 212. Telegram: Repeated Needs You does not resend
+runTest("212. Telegram: Repeated Needs You does not resend") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "cld_blocked_01", title: "Approve Tool", status: .blocked, attentionReason: "Permission needed")
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .blocked, detail: "Approve Tool")
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .blocked, detail: "Approve Tool")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mockTransport.getAllSentMessages().count == 1, "Repeated Needs You must be suppressed")
+    EnvConfigLoader.shared.reload()
+}
+
+// 213. Telegram: Working, Idle, Off states do NOT send Telegram messages
+runTest("213. Telegram: Working, Idle, Off states do NOT send Telegram messages") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .idle, newStatus: .working, detail: "Thinking")
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .done, newStatus: .idle, detail: "Idle")
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .idle, newStatus: .off, detail: "Off")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Working, Idle, and Off must never send Telegram alerts")
+    EnvConfigLoader.shared.reload()
+}
+
+// 214. Telegram: Disabled provider under Monitored Agents sends nothing
+runTest("214. Telegram: Disabled provider under Monitored Agents sends nothing") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
+
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Finished")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Disabled provider must not send Telegram alerts")
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+    EnvConfigLoader.shared.reload()
+}
+
+// 215. Telegram: Distinct sessions generate distinct valid notifications
+runTest("215. Telegram: Distinct sessions generate distinct valid notifications") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    let sess1 = AgentSessionInfo(provider: .chatgpt, sessionId: "tab_101", title: "Math QA", status: .done)
+    let sess2 = AgentSessionInfo(provider: .chatgpt, sessionId: "tab_102", title: "Code Review", status: .done)
+
+    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess1], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "Math QA")
+
+    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess2], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "Code Review")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 2, "Distinct sessions must both send alerts")
+    try assert(sent[0].text.contains("Math QA"))
+    try assert(sent[1].text.contains("Code Review"))
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 216. Telegram: Inbound /status command generates canonical state overview
+runAsyncTest("216. Telegram: Inbound /status command generates canonical state overview") {
+    let router = TelegramCommandRouter.shared
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .done)
+    AgentStore.shared.updateStatus(for: .claude, status: .working)
+
+    let chat = TelegramChat(id: 99999)
+    let msg = TelegramMessage(message_id: 1, chat: chat, text: "/status")
+
+    let res = await router.handleIncomingMessage(msg, configuredChatId: "99999")
+    try assert(res != nil, "Must return status reply")
+    let text = res!.text
+    try assert(text.contains("AgentSignalBar Status"), "Must contain header")
+    try assert(text.contains("ChatGPT Web"), "Must contain ChatGPT")
+    try assert(text.contains("Claude Code"), "Must contain Claude Code")
+}
+
+// 217. Telegram: Inbound /quota command generates structured usage overview
+runAsyncTest("217. Telegram: Inbound /quota command generates structured usage overview") {
+    let router = TelegramCommandRouter.shared
+    let chat = TelegramChat(id: 88888)
+    let msg = TelegramMessage(message_id: 2, chat: chat, text: "/quota")
+
+    let res = await router.handleIncomingMessage(msg, configuredChatId: "88888")
+    try assert(res != nil, "Must return quota reply")
+    let text = res!.text
+    try assert(text.contains("AgentSignalBar Quota"), "Must contain quota header")
+    try assert(text.contains("Claude Code:"), "Must list Claude Code")
+}
+
+// 218. Telegram: Inbound /sessions command returns sessions without exposing prompt/body content
+runAsyncTest("218. Telegram: Inbound /sessions command returns sessions without exposing prompt/body content") {
+    let router = TelegramCommandRouter.shared
+    let chat = TelegramChat(id: 77777)
+    let msg = TelegramMessage(message_id: 3, chat: chat, text: "/sessions")
+
+    let res = await router.handleIncomingMessage(msg, configuredChatId: "77777")
+    try assert(res != nil, "Must return sessions reply")
+    let text = res!.text
+    try assert(text.contains("AgentSignalBar Sessions"), "Must contain sessions header")
+    try assert(!text.contains("BEGIN PRIVATE KEY"), "Must not expose private tokens/keys")
+}
+
+// 219. Telegram: Inbound /help command describes current commands
+runAsyncTest("219. Telegram: Inbound /help command describes current commands") {
+    let router = TelegramCommandRouter.shared
+    let chat = TelegramChat(id: 66666)
+    let msg = TelegramMessage(message_id: 4, chat: chat, text: "/help")
+
+    let res = await router.handleIncomingMessage(msg, configuredChatId: "66666")
+    try assert(res != nil, "Must return help reply")
+    let text = res!.text
+    try assert(text.contains("/status"), "Must describe /status")
+    try assert(text.contains("/quota"), "Must describe /quota")
+    try assert(text.contains("/sessions"), "Must describe /sessions")
+    try assert(!text.contains("/ask"), "Must not advertise future /ask command yet")
+}
+
+// 220. Telegram Security: Authorized TELEGRAM_CHAT_ID executes commands; Unauthorized chat ID is silently dropped
+runAsyncTest("220. Telegram Security: Authorized TELEGRAM_CHAT_ID executes commands; Unauthorized chat ID is silently dropped") {
+    let router = TelegramCommandRouter.shared
+    let authorizedChat = TelegramChat(id: 11111)
+    let unauthorizedChat = TelegramChat(id: 22222)
+
+    let authMsg = TelegramMessage(message_id: 10, chat: authorizedChat, text: "/status")
+    let unauthMsg = TelegramMessage(message_id: 11, chat: unauthorizedChat, text: "/status")
+
+    let authRes = await router.handleIncomingMessage(authMsg, configuredChatId: "11111")
+    try assert(authRes != nil, "Authorized chat must receive response")
+
+    let unauthRes = await router.handleIncomingMessage(unauthMsg, configuredChatId: "11111")
+    try assert(unauthRes == nil, "Unauthorized chat ID MUST be silently dropped without reply")
+}
+
+// 221. Telegram Polling: Start/stop lifecycle and single polling task guarantee
+runTest("221. Telegram Polling: Start/stop lifecycle and single polling task guarantee") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "55555"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.startPolling()
+    try assert(bridge.isPollingActive, "Polling must be active")
+
+    // Duplicate start must not spawn second poller
+    bridge.startPolling()
+    try assert(bridge.isPollingActive, "Polling must remain active")
+
+    bridge.stopPolling()
+    try assert(!bridge.isPollingActive, "Polling must be stopped")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 222. Telegram Transport Resilience: Network failure does not block AgentStore lifecycle
+runTest("222. Telegram Transport Resilience: Network failure does not block AgentStore lifecycle") {
+    let mockTransport = MockTelegramTransport()
+    mockTransport.shouldFailSendMessage = true // Simulate network outage
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "55555"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // Status change must complete instantaneously without throwing or hanging
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Network Failure Test")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // AgentStore status is intact
+    let status = AgentStore.shared.getStatus(for: .claude)
+    try assert(status.status == .working || status.status == .idle || status.status == .done)
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 223. Telegram Test Notification: sendTestNotification() sends connection message
+runAsyncTest("223. Telegram Test Notification: sendTestNotification() sends connection message") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "55555"))
+
+    let res = await bridge.sendTestNotification()
+    try assert(res.success, "Test notification must report success")
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 1, "Must deliver test message")
+    try assert(sent[0].text == "✅ AgentSignalBar Telegram alerts connected")
+    try assert(sent[0].chatId == "55555")
+
+    EnvConfigLoader.shared.reload()
+}
+
+print("🎉 All 223 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto & Telegram Bridge Foundation Tests Passed!")

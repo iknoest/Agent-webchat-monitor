@@ -3,7 +3,7 @@ import IOKit.pwr_mgt
 import IOKit.ps
 
 public enum AntiSleepMode: String, Codable, CaseIterable {
-    case smartAuto = "smartAuto"       // Smart Auto driven by trusted real agent lifecycle states (ChatGPT, Claude, AGY)
+    case smartAuto = "smartAuto"       // Smart Auto driven by real agent lifecycle states across all monitored providers
     case alwaysOn = "alwaysOn"         // Always prevent sleep indefinitely
     case timer1h = "timer1h"           // Prevent sleep for 1 hour
     case timer3h = "timer3h"           // Prevent sleep for 3 hours
@@ -11,7 +11,7 @@ public enum AntiSleepMode: String, Codable, CaseIterable {
 
     public var displayName: String {
         switch self {
-        case .smartAuto: return "Smart Auto (ChatGPT / Claude / AGY Active)"
+        case .smartAuto: return "Smart Auto (Monitored Agents)"
         case .alwaysOn: return "Always Awake (Indefinite)"
         case .timer1h: return "Awake for 1 Hour"
         case .timer3h: return "Awake for 3 Hours"
@@ -30,7 +30,10 @@ public struct PowerStateInfo: Codable, Sendable {
 public final class SleepManager: @unchecked Sendable {
     public static let shared = SleepManager()
 
-    public static let trustedProviders: Set<AgentID> = [.chatgpt, .claude, .antigravity]
+    public static let supportedSmartAutoProviders: Set<AgentID> = Set(AgentID.allCases)
+    public static var trustedProviders: Set<AgentID> {
+        return supportedSmartAutoProviders
+    }
     public static let disableSleepMarkerPath: String = {
         let home = NSHomeDirectory()
         return "\(home)/.config/AgentSignalBar/disablesleep_active"
@@ -81,22 +84,22 @@ public final class SleepManager: @unchecked Sendable {
     }
 
     public func evaluateSmartAutoRequirement() -> (shouldKeepAwake: Bool, reason: String) {
-        let trusted = SleepManager.trustedProviders.filter { ConfigManager.shared.isAgentMonitored($0) }
+        let monitored = SleepManager.supportedSmartAutoProviders.filter { ConfigManager.shared.isAgentMonitored($0) }
 
         // Quota exhaustion is provider availability: providers with exhausted quota CANNOT execute
         // and must NOT independently keep Smart Auto awake or masquerade as a user-action gate.
-        let availableTrusted = trusted.filter { AgentStore.shared.getAvailability(for: $0) != .quotaExhausted }
+        let availableMonitored = monitored.filter { AgentStore.shared.getAvailability(for: $0) != .quotaExhausted }
 
-        // 1. Check child sessions of available trusted providers
-        let allSessions = AgentStore.shared.getAllSessions().filter { availableTrusted.contains($0.provider) }
+        // 1. Check child sessions of available monitored providers
+        let allSessions = AgentStore.shared.getAllSessions().filter { availableMonitored.contains($0.provider) }
         let workingSessions = allSessions.filter { $0.status == .working }
         let blockedSessions = allSessions.filter { $0.status == .blocked }
 
-        // 2. Check parent states of available trusted providers
+        // 2. Check parent states of available monitored providers
         let allStates = AgentStore.shared.getAllStates()
-        let trustedParentStates = allStates.filter { availableTrusted.contains($0.key) }
-        let workingParents = trustedParentStates.values.filter { $0.status == .working }
-        let blockedParents = trustedParentStates.values.filter { $0.status == .blocked }
+        let monitoredParentStates = allStates.filter { availableMonitored.contains($0.key) }
+        let workingParents = monitoredParentStates.values.filter { $0.status == .working }
+        let blockedParents = monitoredParentStates.values.filter { $0.status == .blocked }
 
         if !blockedSessions.isEmpty || !blockedParents.isEmpty {
             let blockedNames = Set(blockedSessions.map { $0.provider.displayName } + blockedParents.map { $0.id.displayName })
@@ -110,7 +113,7 @@ public final class SleepManager: @unchecked Sendable {
             return (true, "Smart Auto: Agent working (\(agentList))")
         }
 
-        return (false, "Smart Auto: All trusted agents idle/done/off")
+        return (false, "Smart Auto: All monitored agents idle/done/off")
     }
 
     public func updateSleepAssertionState() {

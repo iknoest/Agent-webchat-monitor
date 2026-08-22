@@ -1,0 +1,207 @@
+import Foundation
+
+public final class TelegramBridge: @unchecked Sendable {
+    public static let shared = TelegramBridge()
+
+    private let lock = NSLock()
+    public var transport: TelegramTransportProtocol
+    private var pollingTask: Task<Void, Never>?
+    public private(set) var isPollingActive: Bool = false
+    private var lastUpdateId: Int64 = 0
+    private var lastSentNotificationKeys: [String: Date] = [:]
+
+    public init(transport: TelegramTransportProtocol = URLSessionTelegramTransport()) {
+        self.transport = transport
+    }
+
+    public func setup() {
+        // Register observer on AgentStore for outbound lifecycle alerts
+        AgentStore.shared.addObserver(id: "TelegramBridge") { [weak self] agent, oldStatus, newStatus, detail in
+            self?.handleAgentStatusChange(agent: agent, oldStatus: oldStatus, newStatus: newStatus, detail: detail)
+        }
+
+        // Start polling if enabled and configured
+        startPollingIfEnabled()
+    }
+
+    public func startPollingIfEnabled() {
+        lock.lock()
+        let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        let alreadyActive = isPollingActive
+        lock.unlock()
+
+        if isEnabled && config.isConfigured && !alreadyActive {
+            startPolling()
+        }
+    }
+
+    public func startPolling() {
+        lock.lock()
+        if isPollingActive {
+            lock.unlock()
+            return
+        }
+        isPollingActive = true
+        lock.unlock()
+
+        pollingTask?.cancel()
+        pollingTask = Task { [weak self] in
+            var failureBackoffSeconds: UInt64 = 2
+
+            while !Task.isCancelled {
+                guard let self = self else { break }
+
+                let config = EnvConfigLoader.shared.getTelegramConfig()
+                guard config.isConfigured else {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    continue
+                }
+
+                let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+                guard isEnabled else {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    continue
+                }
+
+                do {
+                    let offset: Int? = self.lastUpdateId > 0 ? Int(self.lastUpdateId + 1) : nil
+                    let updates = try await self.transport.getUpdates(
+                        botToken: config.botToken,
+                        offset: offset,
+                        timeout: 20
+                    )
+
+                    failureBackoffSeconds = 2 // Reset backoff on success
+
+                    for update in updates {
+                        if update.update_id > self.lastUpdateId {
+                            self.lastUpdateId = update.update_id
+                        }
+
+                        if let msg = update.message {
+                            if let reply = await TelegramCommandRouter.shared.handleIncomingMessage(msg, configuredChatId: config.chatId) {
+                                _ = try? await self.transport.sendMessage(
+                                    botToken: config.botToken,
+                                    chatId: config.chatId,
+                                    text: reply.text,
+                                    parseMode: reply.parseMode
+                                )
+                            }
+                        }
+                    }
+                } catch {
+                    // Backoff on network failure without blocking main thread or crashing
+                    try? await Task.sleep(nanoseconds: failureBackoffSeconds * 1_000_000_000)
+                    failureBackoffSeconds = min(failureBackoffSeconds * 2, 15)
+                }
+            }
+        }
+    }
+
+    public func stopPolling() {
+        lock.lock()
+        isPollingActive = false
+        pollingTask?.cancel()
+        pollingTask = nil
+        lock.unlock()
+    }
+
+    public func sendTestNotification() async -> (success: Bool, error: String?) {
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        guard config.isConfigured else {
+            return (false, "Telegram credentials not configured in .env")
+        }
+
+        let testMessage = "✅ AgentSignalBar Telegram alerts connected"
+        do {
+            let ok = try await transport.sendMessage(
+                botToken: config.botToken,
+                chatId: config.chatId,
+                text: testMessage,
+                parseMode: nil
+            )
+            return (ok, ok ? nil : "Failed to deliver message via Telegram Bot API")
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
+    public func handleAgentStatusChange(agent: AgentID, oldStatus: AgentStatus, newStatus: AgentStatus, detail: String?) {
+        // 1. Monitored Agents Gate: disabled providers must never trigger alerts
+        guard ConfigManager.shared.isAgentMonitored(agent) else { return }
+
+        // 2. Telegram Enabled Gate
+        let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        guard isEnabled else { return }
+
+        // 3. Configuration Gate
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        guard config.isConfigured else { return }
+
+        // 4. Outbound Lifecycle Event Filtering: ONLY Needs You (blocked) and Done (done)
+        guard newStatus == .blocked || newStatus == .done else { return }
+
+        // 5. Deduplication Gate
+        let info = AgentStore.shared.getStatus(for: agent)
+        let relevantSession = AgentStore.shared.getSessions(for: agent).first(where: { $0.status == newStatus })
+        let sessionId = relevantSession?.sessionId ?? "parent"
+        let turnId = relevantSession?.turnId ?? "turn"
+        let dedupeKey = "\(agent.rawValue)_\(sessionId)_\(turnId)_\(newStatus.rawValue)"
+
+        lock.lock()
+        if let lastSent = lastSentNotificationKeys[dedupeKey], Date().timeIntervalSince(lastSent) < 120 {
+            lock.unlock()
+            return // Suppress duplicate notification for identical turn/state
+        }
+        lastSentNotificationKeys[dedupeKey] = Date()
+        lock.unlock()
+
+        // 6. Format Outbound Notification
+        let titleOrProject = relevantSession?.title ?? detail ?? "Active Task"
+        let text: String
+
+        if newStatus == .blocked {
+            let reason = relevantSession?.attentionReason ?? detail ?? "User input or permission required"
+            text = """
+            🔴 \(agent.displayName) needs you
+            Project: \(titleOrProject)
+            \(reason)
+            """
+        } else {
+            var durText = ""
+            if let dur = relevantSession?.lastDurationSeconds ?? info.lastDurationSeconds, dur > 0 {
+                let durInt = Int(dur)
+                if durInt >= 60 {
+                    durText = " (\(durInt / 60)m \(durInt % 60)s)"
+                } else {
+                    durText = " (\(durInt)s)"
+                }
+            }
+            text = """
+            🟢 \(agent.displayName) finished
+            Project: \(titleOrProject)
+            New output ready\(durText)
+            """
+        }
+
+        // 7. Non-blocking asynchronous outbound delivery
+        Task { [weak self] in
+            guard let self = self else { return }
+            _ = try? await self.transport.sendMessage(
+                botToken: config.botToken,
+                chatId: config.chatId,
+                text: text,
+                parseMode: nil
+            )
+        }
+    }
+
+    public func resetForTesting() {
+        lock.lock()
+        defer { lock.unlock() }
+        lastSentNotificationKeys.removeAll()
+        lastUpdateId = 0
+        stopPolling()
+    }
+}
