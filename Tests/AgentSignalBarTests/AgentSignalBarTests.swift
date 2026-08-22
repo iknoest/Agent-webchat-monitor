@@ -1801,6 +1801,11 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(cfg.isConfigured)
         XCTAssertFalse(cfg.diagnosticSummary.contains("999"))
         XCTAssertTrue(cfg.diagnosticSummary.contains("configured"))
+
+        // Inline comment test
+        let inlineParsed = loader.parseDotEnvString("TELEGRAM_BOT_TOKEN=111:TOKEN # comment\nTELEGRAM_CHAT_ID=222 # chat")
+        XCTAssertEqual(inlineParsed["TELEGRAM_BOT_TOKEN"], "111:TOKEN")
+        XCTAssertEqual(inlineParsed["TELEGRAM_CHAT_ID"], "222")
     }
 
     func testTelegramOutboundAlertsAndRouter() async throws {
@@ -1835,6 +1840,13 @@ final class AgentSignalBarTests: XCTestCase {
         let unauthMsg = TelegramMessage(message_id: 2, chat: TelegramChat(id: 9999), text: "/status")
         let unauthRes = await TelegramCommandRouter.shared.handleIncomingMessage(unauthMsg, configuredChatId: "1001")
         XCTAssertNil(unauthRes)
+
+        // Safe error description test
+        mock.shouldFailSendMessage = true
+        mock.mockFailDescription = "chat not found"
+        let testRes = await bridge.sendTestNotification()
+        XCTAssertFalse(testRes.success)
+        XCTAssertEqual(testRes.safeSummary, "Failed — chat not found")
 
         EnvConfigLoader.shared.reload()
     }

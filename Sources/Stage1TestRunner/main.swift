@@ -4602,4 +4602,72 @@ runAsyncTest("223. Telegram Test Notification: sendTestNotification() sends conn
     EnvConfigLoader.shared.reload()
 }
 
-print("🎉 All 223 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto & Telegram Bridge Foundation Tests Passed!")
+// 224. Telegram: Inline comments in .env (e.g. #t.me/bot) and quotes are properly stripped
+runTest("224. Telegram: Inline comments in .env (e.g. #t.me/bot) and quotes are properly stripped") {
+    let loader = EnvConfigLoader.shared
+    let rawEnv = """
+    # Full line comment
+    TELEGRAM_BOT_TOKEN=8620972525:AAED7mnqmHY0mEqX1VkN-gXf5TlyCvdmndo #t.me/AA_assistance_bot
+    TELEGRAM_CHAT_ID=5598992417 # My Telegram User ID
+    QUOTED_VAR="hello # not comment" # real comment
+    """
+    let parsed = loader.parseDotEnvString(rawEnv)
+    try assert(parsed["TELEGRAM_BOT_TOKEN"] == "8620972525:AAED7mnqmHY0mEqX1VkN-gXf5TlyCvdmndo", "Must strip inline comment #t.me/... from unquoted token: got \(parsed["TELEGRAM_BOT_TOKEN"] ?? "nil")")
+    try assert(parsed["TELEGRAM_CHAT_ID"] == "5598992417", "Must strip inline comment from chat ID: got \(parsed["TELEGRAM_CHAT_ID"] ?? "nil")")
+    try assert(parsed["QUOTED_VAR"] == "hello # not comment", "Must preserve # inside quotes")
+}
+
+// 225. Telegram: Non-2xx response preserves sanitized API error description without secret leakage
+runAsyncTest("225. Telegram: Non-2xx response preserves sanitized API error description without secret leakage") {
+    let mockTransport = MockTelegramTransport()
+    mockTransport.shouldFailSendMessage = true
+    mockTransport.mockFailHttpStatus = 400
+    mockTransport.mockFailErrorCode = 400
+    mockFailDesc: do {
+        mockTransport.mockFailDescription = "Bad Request: chat not found"
+    }
+
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "55555"))
+
+    let res = await bridge.sendTestNotification()
+    try assert(!res.success, "Must report failure")
+    try assert(res.httpStatus == 400, "Must record HTTP 400")
+    try assert(res.errorCode == 400, "Must record error code 400")
+    try assert(res.description == "Bad Request: chat not found", "Must record safe error description")
+    try assert(res.safeSummary == "Failed — Bad Request: chat not found", "safeSummary must format readable reason")
+    try assert(!res.safeSummary.contains("dummy_tok"), "safeSummary must never leak bot token")
+    try assert(!res.safeSummary.contains("55555"), "safeSummary must never leak chat ID")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 226. Telegram: Send Test records visible Delivered status and MenuBarManager reflects it
+runAsyncTest("226. Telegram: Send Test records visible Delivered status and MenuBarManager reflects it") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_ok", chatId: "111"))
+
+    let res = await bridge.sendTestNotification()
+    try assert(res.success)
+    try assert(bridge.lastDeliveryResult?.safeSummary == "Delivered")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 227. Telegram: Send Test records visible Failed status with safe description and MenuBarManager reflects it
+runAsyncTest("227. Telegram: Send Test records visible Failed status with safe description and MenuBarManager reflects it") {
+    let mockTransport = MockTelegramTransport()
+    mockTransport.shouldFailSendMessage = true
+    mockTransport.mockFailDescription = "Unauthorized"
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_bad", chatId: "222"))
+
+    let res = await bridge.sendTestNotification()
+    try assert(!res.success)
+    try assert(bridge.lastDeliveryResult?.safeSummary == "Failed — Unauthorized")
+
+    EnvConfigLoader.shared.reload()
+}
+
+print("🎉 All 227 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto & Telegram Bridge Foundation Tests Passed!")

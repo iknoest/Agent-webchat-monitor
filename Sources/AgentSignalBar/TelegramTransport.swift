@@ -40,20 +40,49 @@ public struct TelegramUpdate: Codable, Sendable, Equatable {
     }
 }
 
+public struct TelegramDeliveryResult: Sendable, Equatable {
+    public let success: Bool
+    public let httpStatus: Int
+    public let errorCode: Int?
+    public let description: String?
+
+    public init(success: Bool, httpStatus: Int = 0, errorCode: Int? = nil, description: String? = nil) {
+        self.success = success
+        self.httpStatus = httpStatus
+        self.errorCode = errorCode
+        self.description = description
+    }
+
+    public var safeSummary: String {
+        if success {
+            return "Delivered"
+        }
+        if let desc = description, !desc.isEmpty {
+            return "Failed — \(desc)"
+        }
+        if httpStatus > 0 {
+            return "Failed — HTTP \(httpStatus)"
+        }
+        return "Failed — Network Error"
+    }
+}
+
 public struct TelegramUpdatesResponse: Codable, Sendable {
     public let ok: Bool
+    public let error_code: Int?
     public let result: [TelegramUpdate]?
     public let description: String?
 }
 
 public struct TelegramSendMessageResponse: Codable, Sendable {
     public let ok: Bool
+    public let error_code: Int?
     public let result: TelegramMessage?
     public let description: String?
 }
 
 public protocol TelegramTransportProtocol: Sendable {
-    func sendMessage(botToken: String, chatId: String, text: String, parseMode: String?) async throws -> Bool
+    func sendMessage(botToken: String, chatId: String, text: String, parseMode: String?) async throws -> TelegramDeliveryResult
     func getUpdates(botToken: String, offset: Int?, timeout: Int) async throws -> [TelegramUpdate]
 }
 
@@ -64,10 +93,12 @@ public final class URLSessionTelegramTransport: TelegramTransportProtocol {
         self.session = session
     }
 
-    public func sendMessage(botToken: String, chatId: String, text: String, parseMode: String? = nil) async throws -> Bool {
-        guard !botToken.isEmpty, !chatId.isEmpty else { return false }
+    public func sendMessage(botToken: String, chatId: String, text: String, parseMode: String? = nil) async throws -> TelegramDeliveryResult {
+        guard !botToken.isEmpty, !chatId.isEmpty else {
+            return TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: "Missing bot token or chat ID")
+        }
         guard let url = URL(string: "https://api.telegram.org/bot\(botToken)/sendMessage") else {
-            return false
+            return TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: "Invalid Bot API URL")
         }
 
         var req = URLRequest(url: url)
@@ -84,19 +115,38 @@ public final class URLSessionTelegramTransport: TelegramTransportProtocol {
         }
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
-            return false
+            return TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: "Failed to serialize message payload")
         }
         req.httpBody = body
 
-        let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            return false
-        }
+        do {
+            let (data, response) = try await session.data(for: req)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
 
-        if let decoded = try? JSONDecoder().decode(TelegramSendMessageResponse.self, from: data) {
-            return decoded.ok
+            if let decoded = try? JSONDecoder().decode(TelegramSendMessageResponse.self, from: data) {
+                return TelegramDeliveryResult(
+                    success: decoded.ok,
+                    httpStatus: statusCode,
+                    errorCode: decoded.error_code,
+                    description: decoded.ok ? "Delivered" : decoded.description
+                )
+            }
+
+            let is2xx = (200...299).contains(statusCode)
+            return TelegramDeliveryResult(
+                success: is2xx,
+                httpStatus: statusCode,
+                errorCode: nil,
+                description: is2xx ? "Delivered" : "HTTP \(statusCode)"
+            )
+        } catch {
+            return TelegramDeliveryResult(
+                success: false,
+                httpStatus: 0,
+                errorCode: nil,
+                description: error.localizedDescription
+            )
         }
-        return false
     }
 
     public func getUpdates(botToken: String, offset: Int?, timeout: Int = 20) async throws -> [TelegramUpdate] {
@@ -142,6 +192,9 @@ public final class MockTelegramTransport: @unchecked Sendable, TelegramTransport
     public var sentMessages: [MockSentTelegramMessage] = []
     public var queuedUpdates: [TelegramUpdate] = []
     public var shouldFailSendMessage: Bool = false
+    public var mockFailHttpStatus: Int = 400
+    public var mockFailErrorCode: Int? = 400
+    public var mockFailDescription: String? = "Bad Request: chat not found"
     public var shouldFailGetUpdates: Bool = false
 
     public init() {}
@@ -152,17 +205,25 @@ public final class MockTelegramTransport: @unchecked Sendable, TelegramTransport
         sentMessages.removeAll()
         queuedUpdates.removeAll()
         shouldFailSendMessage = false
+        mockFailHttpStatus = 400
+        mockFailErrorCode = 400
+        mockFailDescription = "Bad Request: chat not found"
         shouldFailGetUpdates = false
     }
 
-    public func sendMessage(botToken: String, chatId: String, text: String, parseMode: String? = nil) async throws -> Bool {
+    public func sendMessage(botToken: String, chatId: String, text: String, parseMode: String? = nil) async throws -> TelegramDeliveryResult {
         lock.lock()
         defer { lock.unlock() }
         if shouldFailSendMessage {
-            return false
+            return TelegramDeliveryResult(
+                success: false,
+                httpStatus: mockFailHttpStatus,
+                errorCode: mockFailErrorCode,
+                description: mockFailDescription ?? "Mock network failure"
+            )
         }
         sentMessages.append(MockSentTelegramMessage(chatId: chatId, text: text, parseMode: parseMode))
-        return true
+        return TelegramDeliveryResult(success: true, httpStatus: 200, errorCode: nil, description: "Delivered")
     }
 
     public func getUpdates(botToken: String, offset: Int?, timeout: Int = 20) async throws -> [TelegramUpdate] {

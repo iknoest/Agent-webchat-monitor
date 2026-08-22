@@ -1006,3 +1006,28 @@ Next: Await Ava's human test notification confirmation.
 Blockers: none
 
 [RELEASE] Smart Auto Five-Provider Completion & Telegram Bridge Foundation v1 — antigravity — 2026-08-22T17:15:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: Telegram Bridge Diagnosis & Inline Comment Stripping Repair
+Done:
+1. Safe Live Telegram Probe & Diagnosis:
+   - Evaluated `getMe` against Telegram Bot API: HTTP 200 `ok: true`, Bot Name: `Assistance`, Bot Username: `AA_assistance_bot` (`TOKEN VALID`, matches `Assistance`).
+   - Evaluated `sendMessage`: HTTP 200 `ok: true`, `Delivered successfully`.
+   - Identified Root Cause: `.env` contained an unquoted inline comment (`#t.me/AA_assistance_bot`) after `TELEGRAM_BOT_TOKEN`. The initial `.env` parser did not strip inline `#...` comments from unquoted lines, causing the token to include spaces and `#`, which resulted in `URL(string:)` returning `nil`.
+2. Code & UX Repair:
+   - `EnvConfigLoader.swift`: Updated `parseDotEnvString()` to properly strip inline `#...` comments from unquoted variable values while preserving `#` within quoted strings.
+   - `TelegramTransport.swift`: Introduced `TelegramDeliveryResult` (tracking `success`, `httpStatus`, `errorCode`, `description`, `safeSummary`). Parsed Telegram error JSON even on non-2xx responses. Completely redacted tokens and chat IDs from all error/summary strings.
+   - `TelegramBridge.swift`: Recorded `lastDeliveryResult` on `sendTestNotification()`, outbound alerts, and inbound replies.
+   - `MenuBarManager.swift`: Added `Last Test: Delivered` / `Last Test: Failed — <safe description>` in `Telegram Alerts` submenu; refreshed menu on completion of `Send Test Notification`.
+3. Validation:
+   - Added Tests 224–227 in `Stage1TestRunner` (`227 / 227 PASSED`).
+   - Added unit tests in `Tests/AgentSignalBarTests/AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean).
+   - Relaunched `AgentSignalBar.app` (PID 17044).
+Verified: `swift run Stage1TestRunner` (227/227 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Await Ava's human verification of Send Test Notification and inbound `/status` command.
+Blockers: none
+
+[RELEASE] Telegram Bridge Diagnosis & Inline Comment Stripping Repair — antigravity — 2026-08-22T17:25:00+02:00

@@ -305,8 +305,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
         let tgEnabled = cfg.isTelegramEnabled ?? true
         let tgConfigured = EnvConfigLoader.shared.getTelegramConfig().isConfigured
+        let tgLastTest = TelegramBridge.shared.lastDeliveryResult?.safeSummary ?? "none"
 
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -844,6 +845,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         statusItem.isEnabled = false
         telegramSubmenu.addItem(statusItem)
 
+        if let last = TelegramBridge.shared.lastDeliveryResult {
+            let lastItem = NSMenuItem(title: "Last Test: \(last.safeSummary)", action: nil, keyEquivalent: "")
+            lastItem.isEnabled = false
+            telegramSubmenu.addItem(lastItem)
+        }
+
         telegramItem.submenu = telegramSubmenu
         settingsSubmenu.addItem(telegramItem)
 
@@ -1184,7 +1191,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             if res.success {
                 print("✅ Telegram Test Notification delivered successfully!")
             } else {
-                print("❌ Telegram Test Notification delivery failed: \(res.error ?? "unknown")")
+                print("❌ Telegram Test Notification delivery failed: \(res.description ?? "unknown")")
+            }
+            await MainActor.run {
+                self.updateTitleAndMenu()
             }
         }
     }

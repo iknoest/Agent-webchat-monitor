@@ -7,6 +7,7 @@ public final class TelegramBridge: @unchecked Sendable {
     public var transport: TelegramTransportProtocol
     private var pollingTask: Task<Void, Never>?
     public private(set) var isPollingActive: Bool = false
+    public private(set) var lastDeliveryResult: TelegramDeliveryResult?
     private var lastUpdateId: Int64 = 0
     private var lastSentNotificationKeys: [String: Date] = [:]
 
@@ -81,12 +82,15 @@ public final class TelegramBridge: @unchecked Sendable {
 
                         if let msg = update.message {
                             if let reply = await TelegramCommandRouter.shared.handleIncomingMessage(msg, configuredChatId: config.chatId) {
-                                _ = try? await self.transport.sendMessage(
+                                let res = try? await self.transport.sendMessage(
                                     botToken: config.botToken,
                                     chatId: config.chatId,
                                     text: reply.text,
                                     parseMode: reply.parseMode
                                 )
+                                if let res = res {
+                                    self.lastDeliveryResult = res
+                                }
                             }
                         }
                     }
@@ -107,23 +111,28 @@ public final class TelegramBridge: @unchecked Sendable {
         lock.unlock()
     }
 
-    public func sendTestNotification() async -> (success: Bool, error: String?) {
+    public func sendTestNotification() async -> TelegramDeliveryResult {
         let config = EnvConfigLoader.shared.getTelegramConfig()
         guard config.isConfigured else {
-            return (false, "Telegram credentials not configured in .env")
+            let res = TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: "Telegram credentials not configured in .env")
+            self.lastDeliveryResult = res
+            return res
         }
 
         let testMessage = "✅ AgentSignalBar Telegram alerts connected"
         do {
-            let ok = try await transport.sendMessage(
+            let res = try await transport.sendMessage(
                 botToken: config.botToken,
                 chatId: config.chatId,
                 text: testMessage,
                 parseMode: nil
             )
-            return (ok, ok ? nil : "Failed to deliver message via Telegram Bot API")
+            self.lastDeliveryResult = res
+            return res
         } catch {
-            return (false, error.localizedDescription)
+            let res = TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: error.localizedDescription)
+            self.lastDeliveryResult = res
+            return res
         }
     }
 
@@ -188,12 +197,15 @@ public final class TelegramBridge: @unchecked Sendable {
         // 7. Non-blocking asynchronous outbound delivery
         Task { [weak self] in
             guard let self = self else { return }
-            _ = try? await self.transport.sendMessage(
+            let res = try? await self.transport.sendMessage(
                 botToken: config.botToken,
                 chatId: config.chatId,
                 text: text,
                 parseMode: nil
             )
+            if let res = res {
+                self.lastDeliveryResult = res
+            }
         }
     }
 
@@ -201,6 +213,7 @@ public final class TelegramBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         lastSentNotificationKeys.removeAll()
+        lastDeliveryResult = nil
         lastUpdateId = 0
         stopPolling()
     }

@@ -107,7 +107,7 @@ public final class EnvConfigLoader: @unchecked Sendable {
         let lines = content.components(separatedBy: .newlines)
 
         for rawLine in lines {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") {
                 continue
             }
@@ -116,14 +116,32 @@ public final class EnvConfigLoader: @unchecked Sendable {
                 continue
             }
 
-            let key = String(line[..<eqIndex]).trimmingCharacters(in: .whitespaces)
-            var val = String(line[line.index(after: eqIndex)...]).trimmingCharacters(in: .whitespaces)
+            let key = String(line[..<eqIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            var val = String(line[line.index(after: eqIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
 
-            // Strip enclosing quotes if present ("value" or 'value')
-            if (val.hasPrefix("\"") && val.hasSuffix("\"") && val.count >= 2) ||
-               (val.hasPrefix("'") && val.hasSuffix("'") && val.count >= 2) {
-                val = String(val.dropFirst().dropLast())
+            // If value starts with a quote, extract up to closing quote
+            if val.hasPrefix("\"") && val.count >= 2 {
+                let rest = val.dropFirst()
+                if let endQuoteIdx = rest.firstIndex(of: "\"") {
+                    val = String(rest[..<endQuoteIdx])
+                } else if val.hasSuffix("\"") {
+                    val = String(val.dropFirst().dropLast())
+                }
+            } else if val.hasPrefix("'") && val.count >= 2 {
+                let rest = val.dropFirst()
+                if let endQuoteIdx = rest.firstIndex(of: "'") {
+                    val = String(rest[..<endQuoteIdx])
+                } else if val.hasSuffix("'") {
+                    val = String(val.dropFirst().dropLast())
+                }
+            } else {
+                // Unquoted value: strip trailing inline comments starting with '#'
+                if let commentIdx = val.firstIndex(of: "#") {
+                    val = String(val[..<commentIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
             }
+
+            val = val.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if !key.isEmpty {
                 result[key] = val
