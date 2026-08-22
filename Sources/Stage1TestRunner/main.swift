@@ -5281,4 +5281,103 @@ runTest("261. P1-7 & P1-8 Telegram Alerts first-level toggle configuration check
     try assert(tgConfig.isConfigured || !tgConfig.isConfigured)
 }
 
-print("🎉 All 261 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth & P1 UX Tests Passed!")
+// 262. Menu Bar Space: One Closed/Off provider is omitted from top status summary
+runTest("262. Menu Bar Space: One Closed/Off provider is omitted from top status summary") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .claude, status: .working)
+    store.updateStatus(for: .codex, status: .off)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .copilot, status: .idle)
+
+    let summary = store.overallSummary()
+    try assert(!summary.contains("CDX"), "Closed Codex must be omitted from top summary: got \(summary)")
+    try assert(summary.contains("CLD"), "Working Claude must remain visible: got \(summary)")
+    try assert(summary.contains("GPT"), "Idle ChatGPT must remain visible: got \(summary)")
+}
+
+// 263. Menu Bar Space: Idle provider remains visible in top status summary
+runTest("263. Menu Bar Space: Idle provider remains visible in top status summary") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .codex, status: .off)
+
+    let summary = store.overallSummary()
+    try assert(summary.contains("AGY"), "Idle Antigravity must be visible in top summary: got \(summary)")
+}
+
+// 264. Menu Bar Space: Working, Done, and Needs You remain visible in top status summary
+runTest("264. Menu Bar Space: Working, Done, and Needs You remain visible in top status summary") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .claude, status: .working)
+    store.updateStatus(for: .chatgpt, status: .done)
+    store.updateStatus(for: .antigravity, status: .blocked)
+    store.updateStatus(for: .codex, status: .off)
+    store.updateStatus(for: .copilot, status: .off)
+
+    let summary = store.overallSummary()
+    try assert(summary.contains("CLD"), "Working Claude must be visible")
+    try assert(summary.contains("GPT"), "Done ChatGPT must be visible")
+    try assert(summary.contains("AGY"), "Blocked Antigravity must be visible")
+    try assert(!summary.contains("CDX"), "Off Codex must not be visible")
+    try assert(!summary.contains("COP"), "Off Copilot must not be visible")
+}
+
+// 265. Menu Bar Space: Multiple Closed providers do not leave duplicate or trailing separators in Fun mode
+runTest("265. Menu Bar Space: Multiple Closed providers do not leave duplicate or trailing separators in Fun mode") {
+    let store = AgentStore.shared
+    store.currentTheme = .funEmoji
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .claude, status: .off)
+    store.updateStatus(for: .codex, status: .off)
+    store.updateStatus(for: .antigravity, status: .working)
+    store.updateStatus(for: .copilot, status: .off)
+
+    let titleAttr = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    let titleStr = titleAttr.string
+    try assert(titleStr.hasPrefix("["), "Must start with '['")
+    try assert(titleStr.hasSuffix("]"), "Must end with ']'")
+    try assert(!titleStr.contains(" |  | "), "Must NOT contain doubled separators")
+    try assert(!titleStr.contains("[ | "), "Must NOT have leading separator")
+    try assert(!titleStr.contains(" | ]"), "Must NOT have trailing separator")
+
+    // Must contain exactly one separator between the two visible providers (ChatGPT and Antigravity)
+    let separatorCount = titleStr.components(separatedBy: " | ").count - 1
+    try assert(separatorCount == 1, "Expected exactly 1 separator for 2 visible providers, got \(separatorCount) in \(titleStr)")
+
+    store.currentTheme = .classic
+}
+
+// 266. Menu Bar Space: All providers Closed produces non-empty fallback (never zero-width)
+runTest("266. Menu Bar Space: All providers Closed produces non-empty fallback (never zero-width)") {
+    let store = AgentStore.shared
+    for agent in AgentID.allCases {
+        store.updateStatus(for: agent, status: .off)
+    }
+
+    let classicSummary = store.overallSummary()
+    try assert(!classicSummary.isEmpty, "Classic summary must NOT be empty when all off")
+    try assert(classicSummary == "⚫", "Expected '⚫', got: \(classicSummary)")
+
+    store.currentTheme = .funEmoji
+    let funAttr = MenuBarManager.shared.makeEmojiFunAttributedTitle(displayMode: "detailed")
+    let funStr = funAttr.string
+    try assert(!funStr.isEmpty, "Fun mode title must NOT be empty when all off")
+    try assert(funStr == "[⚫]", "Expected '[⚫]', got: \(funStr)")
+
+    store.currentTheme = .classic
+}
+
+// 267. Menu Bar Space: Dropdown menu continues showing Closed provider status
+runTest("267. Menu Bar Space: Dropdown menu continues showing Closed provider status") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .codex, status: .off)
+
+    let codexInfo = store.getStatus(for: .codex)
+    try assert(codexInfo.status == .off)
+    try assert(codexInfo.effectiveDisplayStatus == .off)
+    // Monitored agents still include codex
+    try assert(ConfigManager.shared.isAgentMonitored(.codex))
+}
+
+print("🎉 All 267 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX & Closed-Provider Space Optimization Tests Passed!")

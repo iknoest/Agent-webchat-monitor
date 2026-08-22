@@ -2051,10 +2051,19 @@ public final class AgentStore: @unchecked Sendable {
 
         let monitored = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
         if monitored.isEmpty {
-            return "[-]"
+            return "-"
         }
 
-        return monitored.map { agent in
+        let visible = monitored.filter { agent in
+            let info = states[agent] ?? AgentInfo(id: agent, status: .off)
+            return info.status != .off && info.effectiveDisplayStatus != .off
+        }
+
+        if visible.isEmpty {
+            return "⚫"
+        }
+
+        return visible.map { agent in
             let info = states[agent] ?? AgentInfo(id: agent, status: .off)
             let customCfg = ConfigManager.shared.getAgentConfig(for: agent)
 

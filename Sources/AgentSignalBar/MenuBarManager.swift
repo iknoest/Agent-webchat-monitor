@@ -198,10 +198,16 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             }
         } else {
             let monitored = AgentID.allCases.filter { ConfigManager.shared.isAgentMonitored($0) }
-            if monitored.isEmpty {
-                result.append(NSAttributedString(string: "-"))
+            let visibleAgents = monitored.filter { agent in
+                let info = AgentStore.shared.getStatus(for: agent)
+                return info.status != .off && info.effectiveDisplayStatus != .off
+            }
+
+            if visibleAgents.isEmpty {
+                // Zero-width protection fallback when all monitored providers are closed
+                result.append(NSAttributedString(string: "⚫"))
             } else {
-                for (idx, agent) in monitored.enumerated() {
+                for (idx, agent) in visibleAgents.enumerated() {
                     if idx > 0 {
                         result.append(NSAttributedString(string: " | "))
                     }

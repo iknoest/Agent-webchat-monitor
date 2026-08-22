@@ -1116,3 +1116,27 @@ Blockers: none
 
 [RELEASE] P0/P1 Runtime Repairs, Codex Title Hierarchy, Thinking Timestamp Truth & UX Polish — antigravity — 2026-08-22T21:05:00+02:00
 
+## 2026-08-23 — antigravity — macos
+Status: DONE
+Phase: Closed/Off Provider Space Optimization
+Done:
+1. Closed/Off Top Summary Omission:
+   - Filtered out Closed/Off (`status == .off` / `effectiveDisplayStatus == .off`) providers from the top menu bar status summary in both Fun Emoji mode (`makeEmojiFunAttributedTitle` in `MenuBarManager.swift`) and Classic mode (`overallSummary()` in `AgentState.swift`).
+   - Active states (`Working`, `Needs You / Blocked`, `Done`, and `Idle`) remain 100% visible in the top summary.
+   - Closed/Off providers remain 100% visible in the dropdown menu with their real state (e.g. `⚫ Codex Desktop [App Closed]`).
+2. Zero-Width Fallback & Separator Cleanliness:
+   - Zero-width protection: when all monitored providers are Closed/Off, the top summary renders a non-empty indicator (`⚫` / `[⚫]`) so NSStatusItem never collapses to zero width.
+   - Clean separators in Fun mode: no leading separators, no trailing separators, and no doubled separators when closed providers are omitted.
+3. Verification:
+   - Added Tests 262 to 267 in `Stage1TestRunner` (`267 / 267 PASSED`).
+   - Executed `swift test` (clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (267/267 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), app relaunched cleanly.
+Next: Await Ava's Auto-Switch smoke check.
+Blockers: none
+
+[RELEASE] Closed/Off Provider Space Optimization — antigravity — 2026-08-23T00:25:00+02:00
+
+
