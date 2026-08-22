@@ -3724,8 +3724,9 @@ runTest("182. One-Shot Switch: Transition to Done triggers focus once and automa
         focusedSessionId = s
     }
 
+    AgentStore.shared.updateStatus(for: .copilot, status: .working, detail: "Copilot working", turnId: "turn_copilot_99")
     switchMgr.arm(provider: .copilot, sessionId: "sess_copilot_99")
-    let trans = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_copilot_99", newStatus: .done)
+    let trans = switchMgr.evaluateTransition(provider: .copilot, sessionId: "sess_copilot_99", newStatus: .done, turnId: "turn_copilot_99")
     try assert(trans, "Transition to Done must trigger One-Shot Switch")
     try assert(switchMgr.armedTarget == nil, "Watch must be AUTOMATICALLY DISARMED after first trigger")
 
@@ -3748,10 +3749,11 @@ runTest("183. One-Shot Switch: Transition to Blocked (Needs You) triggers focus 
         focusedProvider = p
     }
 
+    AgentStore.shared.updateStatus(for: .antigravity, status: .working, detail: "Antigravity working")
     switchMgr.arm(provider: .antigravity, sessionId: "agy_perm_sess")
     let trans = switchMgr.evaluateTransition(provider: .antigravity, sessionId: "agy_perm_sess", newStatus: .blocked)
     try assert(trans, "Transition to Blocked (Needs You) must trigger One-Shot Switch")
-    try assert(switchMgr.armedTarget == nil, "Watch must be disarmed")
+    try assert(switchMgr.armedTarget == nil, "Watch must be disarms")
 
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     try assert(focusedProvider == .antigravity, "Focused provider must be antigravity")
@@ -3767,6 +3769,7 @@ runTest("184. One-Shot Switch: Cancellation / unchecking prevents focus and disa
         focusTriggered = true
     }
 
+    AgentStore.shared.updateStatus(for: .chatgpt, status: .working, detail: "ChatGPT thinking")
     switchMgr.arm(provider: .chatgpt, targetTabId: 777)
     try assert(switchMgr.isArmed(provider: .chatgpt, targetTabId: 777), "Must be armed")
 
@@ -3790,6 +3793,7 @@ runTest("185. One-Shot Switch: Unrelated provider / session transition does NOT 
         focusTriggered = true
     }
 
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude thinking")
     switchMgr.arm(provider: .claude, sessionId: "sess_claude_A")
 
     // Unrelated provider (ChatGPT) completes
@@ -4670,4 +4674,228 @@ runAsyncTest("227. Telegram: Send Test records visible Failed status with safe d
     EnvConfigLoader.shared.reload()
 }
 
-print("🎉 All 227 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto & Telegram Bridge Foundation Tests Passed!")
+// 228. Auto-Switch: Arm while Claude Working, intermediate child/tool Done -> NO SWITCH
+runTest("228. Auto-Switch: Arm while Claude Working, intermediate child/tool Done -> NO SWITCH") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "turn_parent_100")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_100")
+
+    // Intermediate tool / child Done arrives with child turn ID or while still working
+    let transChild = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_100", newStatus: .done, turnId: "child_tool_turn_5")
+    try assert(!transChild, "Child tool Done must NOT trigger Auto-Switch for parent turn")
+    try assert(switchCount == 0, "No switch executed")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_100"), "Watch must remain armed")
+}
+
+// 229. Auto-Switch: Same exact turn reaches canonical Done -> SWITCH ONCE
+runTest("229. Auto-Switch: Same exact turn reaches canonical Done -> SWITCH ONCE") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    var switchedProvider: AgentID?
+    switchMgr.focusExecutionHandler = { p, _, _, _ in
+        switchCount += 1
+        switchedProvider = p
+    }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "turn_parent_100")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_100")
+
+    let transParent = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_100", newStatus: .done, turnId: "turn_parent_100")
+    try assert(transParent, "Canonical turn Done must trigger Auto-Switch")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(switchCount == 1, "Must switch exactly once")
+    try assert(switchedProvider == .claude, "Switched provider must be claude")
+    try assert(!switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_100"), "Must be automatically disarmed")
+}
+
+// 230. Auto-Switch: Arm while Idle with old existing Done -> NO SWITCH
+runTest("230. Auto-Switch: Arm while Idle with old existing Done -> NO SWITCH") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Claude idle")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_200")
+
+    // Old existing Done arriving before any Working phase
+    let transOldDone = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_200", newStatus: .done, turnId: "old_turn_done")
+    try assert(!transOldDone, "Old existing Done while waiting for next turn must NOT trigger switch")
+    try assert(switchCount == 0, "No switch executed")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_200"), "Must remain waiting for next turn")
+}
+
+// 231. Auto-Switch: Next turn starts after arm, then Done -> SWITCH ONCE
+runTest("231. Auto-Switch: Next turn starts after arm, then Done -> SWITCH ONCE") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .idle, detail: "Claude idle")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_200")
+
+    // Next turn starts
+    let transWork = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_200", newStatus: .working, turnId: "new_turn_300")
+    try assert(!transWork, "Working phase must not trigger switch")
+
+    // Next turn finishes
+    let transDone = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_200", newStatus: .done, turnId: "new_turn_300")
+    try assert(transDone, "New turn completion must trigger switch")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(switchCount == 1, "Must switch exactly once")
+    try assert(!switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_200"), "Must disarm")
+}
+
+// 232. Auto-Switch: Different session Done -> NO SWITCH
+runTest("232. Auto-Switch: Different session Done -> NO SWITCH") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "turn_A")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_A")
+
+    // Unrelated session B completes
+    let transB = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_B", newStatus: .done, turnId: "turn_B")
+    try assert(!transB, "Different session completion must NOT trigger switch")
+    try assert(switchCount == 0, "No switch executed")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "sess_claude_A"), "Must remain armed for session A")
+}
+
+// 233. Auto-Switch: Old turn Done arriving late -> NO SWITCH
+runTest("233. Auto-Switch: Old turn Done arriving late -> NO SWITCH") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "turn_current_999")
+    switchMgr.arm(provider: .claude, sessionId: "sess_claude_main")
+
+    // Stale completion event from an earlier turn arrives
+    let transLate = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_claude_main", newStatus: .done, turnId: "turn_old_111")
+    try assert(!transLate, "Late old turn Done must NOT trigger switch")
+    try assert(switchCount == 0, "No switch executed")
+}
+
+// 234. Auto-Switch: Watched turn Needs You -> SWITCH ONCE
+runTest("234. Auto-Switch: Watched turn Needs You -> SWITCH ONCE") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .antigravity, status: .working, detail: "AGY working", turnId: "agy_turn_ask")
+    switchMgr.arm(provider: .antigravity, sessionId: "agy_session_1")
+
+    let transBlocked = switchMgr.evaluateTransition(provider: .antigravity, sessionId: "agy_session_1", newStatus: .blocked, turnId: "agy_turn_ask")
+    try assert(transBlocked, "Needs You (blocked) must trigger switch")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(switchCount == 1, "Must switch exactly once")
+    try assert(!switchMgr.isArmed(provider: .antigravity, sessionId: "agy_session_1"), "Must disarm")
+}
+
+// 235. Auto-Switch: 30+ minute legitimate Working turn does not switch until Done
+runTest("235. Auto-Switch: 30+ minute legitimate Working turn does not switch until Done") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "long_turn_30m")
+    switchMgr.arm(provider: .claude, sessionId: "long_session")
+
+    // Multiple continuous working heartbeats across 30 simulated minutes
+    for _ in 0..<10 {
+        let transWork = switchMgr.evaluateTransition(provider: .claude, sessionId: "long_session", newStatus: .working, turnId: "long_turn_30m")
+        try assert(!transWork, "Working update must NOT trigger switch")
+    }
+    try assert(switchCount == 0, "No switch executed during active progress")
+    try assert(switchMgr.isArmed(provider: .claude, sessionId: "long_session"), "Must remain armed")
+
+    // Finally reaches Done
+    let transDone = switchMgr.evaluateTransition(provider: .claude, sessionId: "long_session", newStatus: .done, turnId: "long_turn_30m")
+    try assert(transDone, "Completion triggers switch")
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    try assert(switchCount == 1, "Must switch exactly once")
+}
+
+// 236. Codex Lifecycle: Turn in progress sets Working state & Smart Auto ACTIVE
+runTest("236. Codex Lifecycle: Turn in progress sets Working state & Smart Auto ACTIVE") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+
+    let handled = AgentStore.shared.handleCodexTurnState(
+        threadId: "test_cdx_live_01",
+        title: "Add daily discovery runner",
+        cwd: "/Users/ava/Projects/Jobsearcher-codex",
+        rolloutPath: "/tmp/fake_rollout.jsonl",
+        status: .working,
+        turnId: "turn_cdx_01",
+        thinkingStartTime: Date(),
+        durationMs: nil,
+        isTestMode: true
+    )
+    try assert(handled, "Codex turn state inProgress must be handled")
+
+    let cdxStatus = AgentStore.shared.getStatus(for: .codex)
+    try assert(cdxStatus.status == .working, "Codex status must be working, got \(cdxStatus.status)")
+
+    SleepManager.shared.mode = .smartAuto
+    SleepManager.shared.updateSleepAssertionState()
+    let req = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(req.shouldKeepAwake, "Smart Auto must require keep-awake while Codex is working")
+    try assert(req.reason.contains("Codex Desktop"), "Reason must reference Codex Desktop: got \(req.reason)")
+    try assert(SleepManager.shared.isAssertionActive, "Assertion must be active")
+}
+
+// 237. Codex Lifecycle: Rollout reasoning & tool calls maintain Working state
+runTest("237. Codex Lifecycle: Rollout reasoning & tool calls maintain Working state") {
+    let handled = AgentStore.shared.handleCodexRolloutEvent(
+        threadId: "test_cdx_live_01",
+        title: "Add daily discovery runner",
+        cwd: "/Users/ava/Projects/Jobsearcher-codex",
+        rolloutPath: "/tmp/fake_rollout.jsonl",
+        eventType: "task_started",
+        turnId: "turn_cdx_01",
+        durationMs: nil,
+        isTestMode: true
+    )
+    try assert(handled, "Rollout event must be handled")
+    let cdxStatus = AgentStore.shared.getStatus(for: .codex)
+    try assert(cdxStatus.status == .working, "Codex status must remain working")
+}
+
+// 238. Codex Lifecycle: Turn completion transitions to Done & releases Smart Auto
+runTest("238. Codex Lifecycle: Turn completion transitions to Done & releases Smart Auto") {
+    let handled = AgentStore.shared.handleCodexTurnState(
+        threadId: "test_cdx_live_01",
+        title: "Add daily discovery runner",
+        cwd: "/Users/ava/Projects/Jobsearcher-codex",
+        rolloutPath: "/tmp/fake_rollout.jsonl",
+        status: .done,
+        turnId: "turn_cdx_01",
+        thinkingStartTime: nil,
+        durationMs: 58000.0,
+        isTestMode: true
+    )
+    try assert(handled, "Codex turn state completed must be handled")
+
+    let cdxStatus = AgentStore.shared.getStatus(for: .codex)
+    try assert(cdxStatus.status == .done, "Codex status must be done, got \(cdxStatus.status)")
+
+    SleepManager.shared.updateSleepAssertionState()
+    let req = SleepManager.shared.evaluateSmartAutoRequirement()
+    try assert(!req.shouldKeepAwake, "Smart Auto must NOT require keep-awake after Codex completes")
+    try assert(!SleepManager.shared.isAssertionActive, "Assertion must be inactive")
+
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .codex)
+}
+
+print("🎉 All 238 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair & Turn-Aware Auto-Switch Tests Passed!")

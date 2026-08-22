@@ -797,6 +797,61 @@ public final class AutoMonitor: @unchecked Sendable {
         return nil
     }
 
+    public struct CodexHistoryTurnInfo {
+        public let threadId: String
+        public let turnId: String
+        public let status: String // "inProgress", "completed", "failed"
+        public let startedAt: Int64
+        public let completedAt: Int64?
+        public let durationMs: Double?
+
+        public init(threadId: String, turnId: String, status: String, startedAt: Int64, completedAt: Int64? = nil, durationMs: Double? = nil) {
+            self.threadId = threadId
+            self.turnId = turnId
+            self.status = status
+            self.startedAt = startedAt
+            self.completedAt = completedAt
+            self.durationMs = durationMs
+        }
+    }
+
+    public func fetchCodexHistoryTurns(limit: Int = 20) -> [String: CodexHistoryTurnInfo] {
+        let dbPath = NSString(string: "~/.codex/thread_history_1.sqlite").expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: dbPath) else { return [:] }
+
+        var turns: [String: CodexHistoryTurnInfo] = [:]
+        let query = "SELECT thread_id || '|||' || turn_id || '|||' || status || '|||' || started_at || '|||' || COALESCE(completed_at, 0) || '|||' || COALESCE(duration_ms, 0) FROM thread_turns ORDER BY started_at DESC LIMIT \(limit);"
+        if let output = runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+            arguments: [dbPath, query],
+            timeoutSeconds: 1.0
+        ) {
+            for line in output.components(separatedBy: "\n") {
+                let parts = line.components(separatedBy: "|||")
+                if parts.count >= 6 {
+                    let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let turnId = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let status = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let startedAt = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                    let compVal = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                    let durVal = Double(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+
+                    if !tid.isEmpty && turns[tid] == nil {
+                        turns[tid] = CodexHistoryTurnInfo(
+                            threadId: tid,
+                            turnId: turnId,
+                            status: status,
+                            startedAt: startedAt,
+                            completedAt: compVal > 0 ? compVal : nil,
+                            durationMs: durVal > 0 ? durVal : nil
+                        )
+                    }
+                }
+            }
+        }
+        return turns
+    }
+
     // Helper: Incremental Rollout Stream Parser for Codex Parent Turns
     public func processCodexRollout(thread: CodexThreadInfo) {
         let fm = FileManager.default
@@ -845,14 +900,16 @@ public final class AutoMonitor: @unchecked Sendable {
             guard !trimmed.isEmpty, trimmed.hasPrefix("{") && trimmed.hasSuffix("}") else { continue }
 
             guard let data = trimmed.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let payload = json["payload"] as? [String: Any],
-                  let payloadType = payload["type"] as? String else {
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }
 
-            let turnId = payload["turn_id"] as? String
-            let durationMs = payload["duration_ms"] as? Double
+            let payload = json["payload"] as? [String: Any]
+            let payloadType = payload?["type"] as? String ?? json["type"] as? String
+            let role = payload?["role"] as? String
+            let phase = payload?["phase"] as? String
+            let turnId = (payload?["turn_id"] as? String) ?? (json["turn_id"] as? String)
+            let durationMs = payload?["duration_ms"] as? Double
 
             if payloadType == "task_started" {
                 _ = AgentStore.shared.handleCodexRolloutEvent(
@@ -865,6 +922,39 @@ public final class AutoMonitor: @unchecked Sendable {
                     durationMs: nil
                 )
             } else if payloadType == "task_complete" {
+                _ = AgentStore.shared.handleCodexRolloutEvent(
+                    threadId: thread.id,
+                    title: thread.title,
+                    cwd: thread.cwd,
+                    rolloutPath: thread.rolloutPath,
+                    eventType: "task_complete",
+                    turnId: turnId,
+                    durationMs: durationMs
+                )
+            } else if payloadType == "message" && role == "user" {
+                // User prompt starts new turn
+                _ = AgentStore.shared.handleCodexRolloutEvent(
+                    threadId: thread.id,
+                    title: thread.title,
+                    cwd: thread.cwd,
+                    rolloutPath: thread.rolloutPath,
+                    eventType: "task_started",
+                    turnId: turnId,
+                    durationMs: nil
+                )
+            } else if payloadType == "reasoning" || payloadType == "custom_tool_call" || payloadType == "custom_tool_call_output" || payloadType == "token_count" {
+                // Active reasoning / tool execution / token updates in progress
+                _ = AgentStore.shared.handleCodexRolloutEvent(
+                    threadId: thread.id,
+                    title: thread.title,
+                    cwd: thread.cwd,
+                    rolloutPath: thread.rolloutPath,
+                    eventType: "task_started",
+                    turnId: turnId,
+                    durationMs: nil
+                )
+            } else if payloadType == "message" && role == "assistant" && phase != "commentary" {
+                // Final assistant message -> turn complete!
                 _ = AgentStore.shared.handleCodexRolloutEvent(
                     threadId: thread.id,
                     title: thread.title,
@@ -893,8 +983,39 @@ public final class AutoMonitor: @unchecked Sendable {
             return
         }
 
+        let historyTurns = fetchCodexHistoryTurns(limit: 20)
         let threads = fetchCodexThreads(limit: 10)
+
         for thread in threads {
+            // First check if thread_history_1.sqlite explicitly reports this thread's turn
+            if let turn = historyTurns[thread.id] {
+                if turn.status == "inProgress" {
+                    let start = Date(timeIntervalSince1970: Double(turn.startedAt))
+                    _ = AgentStore.shared.handleCodexTurnState(
+                        threadId: thread.id,
+                        title: thread.title,
+                        cwd: thread.cwd,
+                        rolloutPath: thread.rolloutPath,
+                        status: .working,
+                        turnId: turn.turnId,
+                        thinkingStartTime: start,
+                        durationMs: nil
+                    )
+                } else if turn.status == "completed" || turn.completedAt != nil {
+                    _ = AgentStore.shared.handleCodexTurnState(
+                        threadId: thread.id,
+                        title: thread.title,
+                        cwd: thread.cwd,
+                        rolloutPath: thread.rolloutPath,
+                        status: .done,
+                        turnId: turn.turnId,
+                        thinkingStartTime: nil,
+                        durationMs: turn.durationMs
+                    )
+                }
+            }
+
+            // Also incrementally process rollout file for live events (reasoning, tools, assistant message)
             processCodexRollout(thread: thread)
         }
 

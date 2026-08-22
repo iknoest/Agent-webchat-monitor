@@ -1031,3 +1031,30 @@ Next: Await Ava's human verification of Send Test Notification and inbound `/sta
 Blockers: none
 
 [RELEASE] Telegram Bridge Diagnosis & Inline Comment Stripping Repair — antigravity — 2026-08-22T17:25:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: Codex Desktop Lifecycle Repair & Turn-Aware Auto-Switch Implementation
+Done:
+1. Codex Lifecycle Root Cause & Repair:
+   - Diagnosed root cause: `AutoMonitor.swift` previously expected legacy rollout event strings (`payloadType == "task_started"` / `"task_complete"`). Modern Codex Desktop never outputs these; instead, `thread_history_1.sqlite` table `thread_turns` tracks authoritative turn status (`inProgress`, `completed`, `failed`), and rollout JSONL streams `message` (user prompt), `reasoning`, `custom_tool_call`, `custom_tool_call_output`, `token_count`, and `message` (assistant response).
+   - Added `fetchCodexHistoryTurns()` to query `~/.codex/thread_history_1.sqlite` for direct turn lifecycle states (`inProgress` -> `.working`, `completed` -> `.done`).
+   - Enhanced `processCodexRollout()` to recognize modern Codex events (`reasoning`, `custom_tool_call`, `token_count` -> `.working`; final assistant `message` -> `.done`).
+   - Added `handleCodexTurnState()` to `AgentStore.swift`.
+2. Turn-Aware Auto-Switch Repair:
+   - Refactored `OneShotSwitchManager.swift` with `AutoSwitchWatchState` (`.waitingForNextTurn`, `.waitingForTerminal(boundTurnId: armedAt:)`).
+   - Arming while `Working` immediately binds to the active turn and waits strictly for THAT turn's canonical Done / Blocked terminal state, ignoring child tool completion, helper/subagent events, or intermediate recomputations.
+   - Arming while `Idle`/`Done` enters `waitingForNextTurn` (old Done does not trigger), binds to the subsequent `Working` turn when it begins, and switches only when that new turn reaches canonical completion.
+   - Preserved single-fire, automatic disarm, session matching, and cancellation behavior.
+3. Validation:
+   - Added Tests 228 to 238 in `Stage1TestRunner` (`238 / 238 PASSED`).
+   - Executed `swift test` (clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean exit 0).
+   - Relaunched `AgentSignalBar.app`. Verified live Codex Working state and Smart Auto assertion (`Smart Auto: Agent working (Antigravity, Codex Desktop)`).
+Verified: `swift run Stage1TestRunner` (238/238 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean), live runtime verification via `/status`.
+Next: Await Ava's first test (Codex normal task Working -> Done).
+Blockers: none
+
+[RELEASE] Codex Desktop Lifecycle Repair & Turn-Aware Auto-Switch Implementation — antigravity — 2026-08-22T17:40:00+02:00
+

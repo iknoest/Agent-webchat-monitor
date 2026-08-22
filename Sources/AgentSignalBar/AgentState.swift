@@ -673,7 +673,8 @@ public final class AgentStore: @unchecked Sendable {
                 sessionId: chosenSession?.sessionId,
                 targetTabId: chosenSession?.targetTabId,
                 targetURL: chosenSession?.webLink,
-                newStatus: newStatus
+                newStatus: newStatus,
+                turnId: chosenSession?.turnId ?? currentParent.turnId
             )
         }
     }
@@ -1201,6 +1202,80 @@ public final class AgentStore: @unchecked Sendable {
     }
 
     // 2B. Codex Rollout Lifecycle Handler (Parent Rollout Event Truth)
+    public func handleCodexTurnState(
+        threadId: String,
+        title: String? = nil,
+        cwd: String? = nil,
+        rolloutPath: String? = nil,
+        status: AgentStatus,
+        turnId: String?,
+        thinkingStartTime: Date? = nil,
+        durationMs: Double? = nil,
+        isTestMode: Bool = false
+    ) -> Bool {
+        guard !threadId.isEmpty else { return false }
+        if !isTestMode && AgentStore.isSyntheticTestSessionId(threadId) {
+            return true
+        }
+
+        lock.lock()
+        var currentSessions = trackedSessions[.codex] ?? [:]
+        let rawCwd = cwd ?? ""
+        let folderName = (rawCwd as NSString).lastPathComponent
+        let defaultTitle = folderName.isEmpty ? "Codex (\(threadId.prefix(8)))" : "[\(folderName)]"
+        let sessionTitle = (title?.isEmpty == false) ? title! : defaultTitle
+        let now = Date()
+
+        var session = currentSessions[threadId] ?? AgentSessionInfo(
+            provider: .codex,
+            sessionId: threadId,
+            title: sessionTitle,
+            status: .idle,
+            turnId: turnId,
+            sourceEvidence: "Codex Turn State: Registered",
+            lastUpdated: now
+        )
+
+        session.title = sessionTitle
+        session.lastUpdated = now
+
+        if status == .working {
+            session.status = .working
+            session.turnId = turnId
+            session.thinkingStartTime = thinkingStartTime ?? session.thinkingStartTime ?? now
+            session.attentionReason = nil
+            session.acknowledgedTurnId = nil
+            session.acknowledgedAt = nil
+            session.sourceEvidence = "Codex Turn State: inProgress"
+            session.sensorReason = "Codex Turn State: inProgress"
+        } else if status == .done {
+            session.status = .done
+            session.turnId = turnId
+            session.attentionReason = nil
+            if let dMs = durationMs, dMs > 0 {
+                session.lastDurationSeconds = dMs / 1000.0
+            } else if let start = session.thinkingStartTime {
+                session.lastDurationSeconds = now.timeIntervalSince(start)
+            }
+            session.thinkingStartTime = nil
+            session.sourceEvidence = "Codex Turn State: completed"
+            session.sensorReason = "Codex Turn State: completed"
+        } else if status == .idle {
+            session.status = .idle
+            session.thinkingStartTime = nil
+            session.attentionReason = nil
+            session.sourceEvidence = "Codex Turn State: idle"
+            session.sensorReason = "Codex Turn State: idle"
+        }
+
+        currentSessions[threadId] = session
+        trackedSessions[.codex] = currentSessions
+        lock.unlock()
+
+        syncSessions(for: .codex, activeSessions: Array(currentSessions.values), processRunning: true)
+        return true
+    }
+
     public func handleCodexRolloutEvent(
         threadId: String,
         title: String? = nil,
@@ -1242,13 +1317,17 @@ public final class AgentStore: @unchecked Sendable {
         switch eventType {
         case "task_started":
             session.status = .working
-            session.turnId = turnId
-            session.thinkingStartTime = now
+            if let tId = turnId, !tId.isEmpty {
+                session.turnId = tId
+            }
+            if session.thinkingStartTime == nil {
+                session.thinkingStartTime = now
+            }
             session.attentionReason = nil
             session.acknowledgedTurnId = nil
             session.acknowledgedAt = nil
-            session.sourceEvidence = "Codex Rollout: task_started"
-            session.sensorReason = "Codex Rollout: task_started"
+            session.sourceEvidence = "Codex Rollout: Active"
+            session.sensorReason = "Codex Rollout: Active"
             currentSessions[threadId] = session
             trackedSessions[.codex] = currentSessions
             lock.unlock()
@@ -1257,11 +1336,12 @@ public final class AgentStore: @unchecked Sendable {
             return true
 
         case "task_complete":
-            // Turn-ID matching invariant: Only complete if turnId matches that session's current active turn!
-            guard let incomingTurnId = turnId, !incomingTurnId.isEmpty, incomingTurnId == session.turnId else {
-                // Mismatched task_complete -> ignore for lifecycle mutation!
-                lock.unlock()
-                return false
+            // Turn-ID matching invariant: If both turn IDs are present, ensure they match
+            if let incomingTurnId = turnId, let activeTurnId = session.turnId, !incomingTurnId.isEmpty, !activeTurnId.isEmpty {
+                guard incomingTurnId == activeTurnId else {
+                    lock.unlock()
+                    return false
+                }
             }
 
             session.status = .done
@@ -1272,8 +1352,8 @@ public final class AgentStore: @unchecked Sendable {
                 session.lastDurationSeconds = now.timeIntervalSince(start)
             }
             session.thinkingStartTime = nil
-            session.sourceEvidence = "Codex Rollout: task_complete"
-            session.sensorReason = "Codex Rollout: task_complete"
+            session.sourceEvidence = "Codex Rollout: Complete"
+            session.sensorReason = "Codex Rollout: Complete"
             currentSessions[threadId] = session
             trackedSessions[.codex] = currentSessions
             lock.unlock()
