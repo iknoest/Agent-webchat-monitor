@@ -955,3 +955,28 @@ Next: Ask Ava for menu bar visibility confirmation.
 Blockers: none
 
 [RELEASE] P0 Menu Bar Status Item Visibility Repair — antigravity — 2026-08-22T15:10:00+02:00
+
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: Menu Bar Provider Separator & Roadmap Alignment
+Done:
+1. Visual Adjustment:
+   - Added readable ` | ` separator between provider groups in Detailed Fun Mode (`[ChatGPTIcon 🐵 | CodexIcon 😴 | ClaudeIcon 🤔 | AGYIcon 😴 | CopilotIcon 🫥]`).
+   - Verified no leading separator, no trailing separator, Compact priority behavior preserved, and Classic mode unchanged.
+   - Frozen menu-bar visual polish per product decision.
+2. Roadmap Alignment:
+   - Updated `PLAN.md` and `AgentSignalBar_GitHub_Copilot_Handoff_2026-08-19.md`.
+   - Defined NEXT MILESTONE: Smart Auto Provider Completion (Target set: ChatGPT Web, Claude Code, Antigravity, Codex Desktop, GitHub Copilot. No user-facing trust promotion controls. Monitored Agents authoritative. Quota decoupled).
+   - Defined SUBSEQUENT MILESTONE: Telegram Mobile Alerts v1 (notification only, $\le$ 30s SLA, Needs You & Done / New Output Ready triggers, no remote agent commands).
+   - Clarified PARKED items: Telegram remote control, Quota Resume Orchestration L2-L3, Codex Desktop deep rollout watcher.
+3. Verification:
+   - Verified `swift run Stage1TestRunner` (206/206 passed).
+   - Verified `swift test` (clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check`.
+   - Relaunched `AgentSignalBar.app` (PID 3204).
+Verified: `swift run Stage1TestRunner` (206/206 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean).
+Next: Proceed to Smart Auto Provider Completion milestone.
+Blockers: none
+
+[RELEASE] Menu Bar Provider Separator & Roadmap Alignment — antigravity — 2026-08-22T15:38:00+02:00

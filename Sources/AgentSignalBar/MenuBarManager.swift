@@ -203,7 +203,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             } else {
                 for (idx, agent) in monitored.enumerated() {
                     if idx > 0 {
-                        result.append(NSAttributedString(string: " "))
+                        result.append(NSAttributedString(string: " | "))
                     }
                     let info = AgentStore.shared.getStatus(for: agent)
                     let thinkingDur: TimeInterval? = info.thinkingStartTime != nil ? Date().timeIntervalSince(info.thinkingStartTime!) : nil

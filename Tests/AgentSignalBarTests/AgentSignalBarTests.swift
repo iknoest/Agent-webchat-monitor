@@ -1612,6 +1612,9 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertGreaterThan(attrTitle.length, 0)
         XCTAssertTrue(attrTitle.string.contains("["))
         XCTAssertTrue(attrTitle.string.contains("]"))
+        XCTAssertTrue(attrTitle.string.contains(" | "))
+        XCTAssertFalse(attrTitle.string.hasPrefix("[ | "))
+        XCTAssertFalse(attrTitle.string.hasSuffix(" | ]"))
 
         AgentStore.shared.currentTheme = .classic
     }

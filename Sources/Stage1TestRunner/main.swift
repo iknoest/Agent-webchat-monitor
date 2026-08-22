@@ -3834,8 +3834,8 @@ runTest("191. ProviderIconLoader: Load template icons for providers") {
     try assert(agyIcon != nil, "Must load Antigravity icon")
 }
 
-// 192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title
-runTest("192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title") {
+// 192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title with | separator
+runTest("192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title with | separator") {
     AgentStore.shared.currentTheme = .funEmoji
     for agent in AgentID.allCases {
         AgentStore.shared.updateStatus(for: agent, status: .idle)
@@ -3845,6 +3845,9 @@ runTest("192. Fun/Emoji Mode: makeEmojiFunAttributedTitle produces valid title")
     try assert(attrTitle.length > 0, "Attributed title must not be empty")
     try assert(attrTitle.string.contains("["), "Must have bracket wrapper")
     try assert(attrTitle.string.contains("]"), "Must have bracket wrapper")
+    try assert(attrTitle.string.contains(" | "), "Must contain ' | ' separator between provider groups")
+    try assert(!attrTitle.string.hasPrefix("[ | "), "Must not have leading separator")
+    try assert(!attrTitle.string.hasSuffix(" | ]"), "Must not have trailing separator")
 }
 
 // 193. Classic Mode: Retains 3-letter provider labels

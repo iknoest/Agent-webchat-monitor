@@ -24,33 +24,46 @@
 - [x] **Closed-Lid V2 Smart Auto Keep-Awake**: Privileged `pmset disablesleep 1`/`0` integration under Smart Auto policy, battery floor safety (<20%), automatic restoration upon work completion (`[x] Ava accepted`: verified real 4-minute closed-lid continuous execution and automatic clean restoration to `SleepDisabled 0`; crash recovery automated verified)
 - [x] **Unified Display Status & Menu Bar Modes**: Shared `EffectiveDisplayStatus` derivation across Detailed (default) and Compact (optional provider-aware), persistent user preference, and stable status item autosave name (`[x] Implemented & Verified`)
 - [x] **Provider Availability & Quota v1**: Unified 4-case availability model (`available`, `limited`, `quotaExhausted`, `unknown`), multi-model family structure (`ModelFamilyQuota`), truthful unavailable reporting for unpersisted disk sources (Antigravity/Codex), Smart Auto keep-awake decoupling, and multi-model family dropdown dashboard (`[x] Implemented & Verified`)
+- [x] **Menu Bar Visual Direction**: Compact/Fun provider rendering with ` | ` separator between groups (`[x] Ava accepted`: visual polish frozen)
 
-### TESTING / HUMAN ACCEPTANCE PENDING
-- [ ] **Antigravity Permission**: Native hooks + AX notification center probe (`IMPLEMENTED — HUMAN ACCEPTANCE PENDING` pending next natural event)
+### ACTIVE / HUMAN DAILY-USE EVIDENCE
+- [x] **P0 Lifecycle State Reconciliation & HTTP Socket Teardown**: Fixed `NWConnection` state teardown, 5s fetch timeout protection, and OS process liveness reconciliation via `kill(pid, 0)`. Automated 206 tests passing; in daily real use.
+
+### NEXT MILESTONE — Smart Auto Provider Completion
+- [ ] **Smart Auto Full Provider Integration**:
+  - **Target Smart Keep-Awake Provider Set**:
+    1. ChatGPT Web
+    2. Claude Code
+    3. Antigravity
+    4. Codex Desktop
+    5. GitHub Copilot
+  - **Rules**:
+    - Codex and Copilot are not intended to remain permanently excluded.
+    - No user-facing "trust promotion" controls needed.
+    - When normal lifecycle evidence is sufficiently reliable without concrete runtime defects, integrate them directly into Smart Auto.
+    - Monitored Agents remains authoritative: a disabled provider must never influence Smart Auto.
+    - Quota remains strictly separated from lifecycle and must never activate Smart Auto by itself.
+
+### SUBSEQUENT MILESTONE — Telegram Mobile Alerts (v1)
+- [ ] **Telegram Mobile Push Notifications**:
+  - **Scope**: Notification only (one-way push).
+  - **Trigger Events**:
+    - `🔴 Needs You`
+    - `🟢 Done / New Output Ready`
+    - Abnormal monitor / provider failure worth user attention
+  - **SLA**: Target delivery $\le$ 30s.
+  - **Suppression**: NO notifications for `Working` or `Idle`.
+  - **Parked**: Remote task dispatch / remote agent commands remain parked for later.
 
 ### PARKED
+- [ ] **Telegram Remote Task / Control**: Parked until mobile notification v1 is fully accepted.
 - [ ] **Codex Desktop v1 Working/Done Lifecycle**: `IMPLEMENTED — HUMAN ACCEPTANCE PARKED` (Parent rollout watcher `task_started`/`task_complete` per-thread isolation implemented; human acceptance parked until quota availability around Aug 20; strictly excluded from Smart Auto `trustedProviders`)
 - [ ] **AGY extended provider-task lifetime tracking**: Parked to prioritize reliable Needs You (🔴) permission detection
 - [ ] **Relay**: Clean AI output relay enhancements
 - [ ] **Desktop exact-session navigation**: Parked until native accessibility / URL schemes exist
 - [ ] **Multi-agent autonomous turn orchestration**: Parked for future milestone
-
-### OPEN
-- [ ] **Telegram mobile notification**: Remote attention push notifications
-
-### FUTURE ROADMAP
 - [ ] **Quota Resume Orchestration** (`LEVEL 1 IMPLEMENTED / LEVEL 2-3 INVESTIGATION — P1`):
   - **Goal**: When a provider hits quota exhaustion, AgentSignalBar helps work continue after quota resets.
   - **Level 1 (`IMPLEMENTED — QUOTA RESTORATION AWARENESS`)**: Detect quota restoration (>0% left after exhaustion) and surface it to Ava via Fun theme 🥱 / Classic theme `[Quota Restored]` without acquiring keep-awake.
   - **Level 2 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: Use provider-native auto-resume when officially available from provider CLI/app.
   - **Level 3 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: For providers with stable CLI/session identity, investigate safe automatic resume of the exact interrupted session after quota restoration.
-  - **Safety Requirements for Any Future Level 3**:
-    1. Exact session identity verification
-    2. Positively verify quota is actually restored before attempting resume
-    3. Never bypass permission or explicit user-input gates
-    4. Never blindly replay destructive commands
-    5. Do not duplicate already-completed work
-    6. Crash-safe resume state persistence
-    7. Provider-specific opt-in
-    8. User-controllable global & per-provider ON/OFF switch
-    9. Truthful failure state and immediate user notification if resume cannot proceed
