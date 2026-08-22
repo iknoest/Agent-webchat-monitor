@@ -1058,3 +1058,28 @@ Blockers: none
 
 [RELEASE] Codex Desktop Lifecycle Repair & Turn-Aware Auto-Switch Implementation — antigravity — 2026-08-22T17:40:00+02:00
 
+## 2026-08-22 — antigravity — macos
+Status: DONE
+Phase: Claude Rate-Limit Semantics Repair & Telegram Privacy Hardening
+Done:
+1. P0-A Claude Rate-Limit StopFailure & Quota Recovery Reconciliation:
+   - Fixed `handleClaudeHookEvent` in `AgentState.swift`: rate limit / quota exhaustion errors (`rate_limit`, `429`, `quota`, `limit reached`, `overloaded`, `insufficient`) now map directly to `session.status = .idle`, `attentionReason = nil`, and mark quota as exhausted (`availability = .quotaExhausted`), resolving effective display status to `⦸ Quota Exhausted` instead of incorrectly remaining stuck in `🔴 Needs You / .blocked`.
+   - Generic non-actionable errors map to `session.status = .idle`, `attentionReason = nil`.
+   - Added `reconcileQuotaRecovery(for:)` in `AgentState.swift`: when quota recovers/refreshes to available, stale quota-derived blocks clear to `Idle / Quota Restored` while genuine user permission requests (`PermissionRequest`, `ask_question`, `ask_user`) are strictly preserved.
+   - Prevented rate-limit / quota StopFailure from triggering Auto-Switch When Ready or dispatching Telegram `🔴 Needs You` alerts.
+2. P0-B Telegram Privacy Leak Hardening & Outbound Sanitization:
+   - Created `TelegramPrivacySafeContext.swift`: implements `resolveSafeProjectContext`, `isSafeProjectName`, and `sanitizeAttentionReason`.
+   - Strict project context resolution: extracts safe folder basename from `session.cwd` (e.g. `/Users/ava/Projects/Jobsearcher` -> `Jobsearcher`), validating against strict privacy criteria (rejects `#`, `\n`, file paths, URLs, code snippets, prompt prefixes, attachment paths) and safely falling back to provider name (`ChatGPT Web`, `Claude Code`, `Codex Desktop`, etc.) or `Active Session`. Never leaks prompt-derived titles.
+   - Updated outbound Telegram notifications in `TelegramBridge.swift` and inbound `/sessions` command in `TelegramCommandRouter.swift` to use `TelegramPrivacySafeContext`.
+   - Removed 120s time-based window in Telegram deduplication: each stable turn/state notifies strictly ONCE.
+3. Test Suite & Verification:
+   - Added Tests 239 to 251 in `Stage1TestRunner` (`251 / 251 PASSED`).
+   - Executed `swift test` (clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (251/251 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), app relaunched cleanly.
+Next: Ask Ava for ONE immediate check only (Claude must not remain ATTENTION NEEDED solely because of historical Stop failed: rate_limit).
+Blockers: none
+
+[RELEASE] Claude Rate-Limit Semantics Repair & Telegram Privacy Hardening — antigravity — 2026-08-22T20:43:00+02:00

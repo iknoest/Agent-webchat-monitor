@@ -159,23 +159,24 @@ public final class TelegramBridge: @unchecked Sendable {
         let dedupeKey = "\(agent.rawValue)_\(sessionId)_\(turnId)_\(newStatus.rawValue)"
 
         lock.lock()
-        if let lastSent = lastSentNotificationKeys[dedupeKey], Date().timeIntervalSince(lastSent) < 120 {
+        if lastSentNotificationKeys[dedupeKey] != nil {
             lock.unlock()
             return // Suppress duplicate notification for identical turn/state
         }
         lastSentNotificationKeys[dedupeKey] = Date()
         lock.unlock()
 
-        // 6. Format Outbound Notification
-        let titleOrProject = relevantSession?.title ?? detail ?? "Active Task"
+        // 6. Format Privacy-Safe Outbound Notification
+        let safeProject = TelegramPrivacySafeContext.resolveSafeProjectContext(agent: agent, session: relevantSession)
         let text: String
 
         if newStatus == .blocked {
-            let reason = relevantSession?.attentionReason ?? detail ?? "User input or permission required"
+            let rawReason = relevantSession?.attentionReason ?? detail ?? "User input or permission required"
+            let safeReason = TelegramPrivacySafeContext.sanitizeAttentionReason(rawReason)
             text = """
             🔴 \(agent.displayName) needs you
-            Project: \(titleOrProject)
-            \(reason)
+            Project: \(safeProject)
+            \(safeReason)
             """
         } else {
             var durText = ""
@@ -189,7 +190,7 @@ public final class TelegramBridge: @unchecked Sendable {
             }
             text = """
             🟢 \(agent.displayName) finished
-            Project: \(titleOrProject)
+            Project: \(safeProject)
             New output ready\(durText)
             """
         }

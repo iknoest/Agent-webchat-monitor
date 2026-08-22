@@ -254,6 +254,9 @@ public final class AgentUsageStore: @unchecked Sendable {
             if wasExhausted && !currentIsExhausted {
                 // Genuine positive recovery transition: previously exhausted -> now available
                 AgentStore.shared.setQuotaRestored(for: agent, restored: true)
+                AgentStore.shared.reconcileQuotaRecovery(for: agent)
+            } else if !currentIsExhausted {
+                AgentStore.shared.reconcileQuotaRecovery(for: agent)
             }
             previousAuthoritativeExhausted[agent] = currentIsExhausted
         }
@@ -290,6 +293,21 @@ public final class AgentUsageStore: @unchecked Sendable {
             cfg.quotas = currentQuotas
             ConfigManager.shared.saveConfig(cfg)
         }
+    }
+
+    public func markQuotaExhausted(for agent: AgentID) {
+        lock.lock()
+        var current = usageData[agent] ?? AgentUsageData(agent: agent, isPercentUsed: false, isLiveSource: true)
+        current.isLiveSource = true
+        current.freshness = "Fresh"
+        current.isPercentUsed = false
+        current.sessionLimitPercent = 0.0
+        current.weeklyLimitPercent = 0.0
+        usageData[agent] = current
+        previousAuthoritativeExhausted[agent] = true
+        lock.unlock()
+
+        AgentStore.shared.updateAvailability(for: agent, availability: .quotaExhausted)
     }
 
     public func getUsage(for agent: AgentID) -> AgentUsageData? {

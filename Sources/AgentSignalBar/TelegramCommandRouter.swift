@@ -199,13 +199,13 @@ public final class TelegramCommandRouter: @unchecked Sendable {
         } else {
             for sess in allSessions {
                 let badge = sess.status.badge(theme: store.currentTheme)
-                let title = sess.title.isEmpty ? "Session (\(sess.sessionId))" : sess.title
+                let safeProject = TelegramPrivacySafeContext.resolveSafeProjectContext(agent: sess.provider, session: sess)
                 var stateDesc = sess.status.rawValue.capitalized
                 if sess.status == .working, let start = sess.thinkingStartTime {
                     let dur = Int(Date().timeIntervalSince(start))
                     stateDesc = "Working (\(dur)s)"
                 }
-                lines.append("\(badge) [\(sess.provider.shortTag)] \(title) — \(stateDesc)")
+                lines.append("\(badge) [\(sess.provider.shortTag)] \(safeProject) — \(stateDesc)")
             }
         }
 

@@ -300,6 +300,7 @@ public struct AgentSessionInfo: Codable, Sendable {
     public var sensorReason: String?
     public var pendingToolName: String?
     public var pendingToolTime: Date?
+    public var cwd: String?
 
     public var isAcknowledged: Bool {
         guard let ackId = acknowledgedTurnId, let tId = turnId, !ackId.isEmpty, !tId.isEmpty else {
@@ -325,7 +326,8 @@ public struct AgentSessionInfo: Codable, Sendable {
         acknowledgedAt: Date? = nil,
         sensorReason: String? = nil,
         pendingToolName: String? = nil,
-        pendingToolTime: Date? = nil
+        pendingToolTime: Date? = nil,
+        cwd: String? = nil
     ) {
         self.provider = provider
         self.sessionId = sessionId
@@ -344,6 +346,7 @@ public struct AgentSessionInfo: Codable, Sendable {
         self.sensorReason = sensorReason
         self.pendingToolName = pendingToolName
         self.pendingToolTime = pendingToolTime
+        self.cwd = cwd
     }
 }
 
@@ -901,6 +904,10 @@ public final class AgentStore: @unchecked Sendable {
 
         session.title = title
         session.lastUpdated = now
+        if !rawCwd.isEmpty {
+            session.cwd = rawCwd
+        }
+        var shouldMarkQuotaExhausted = false
 
         switch event {
         case "SessionStart":
@@ -949,11 +956,30 @@ public final class AgentStore: @unchecked Sendable {
             session.sensorReason = "Claude Hook: Turn complete (Stop)"
 
         case "StopFailure":
-            session.status = .blocked
-            let reasonStr = error != nil ? "Stop failed: \(error!)" : "Session stopped with failure"
-            session.attentionReason = reasonStr
-            session.sourceEvidence = "Claude Hook: StopFailure"
-            session.sensorReason = reasonStr
+            let errStr = (error ?? "").lowercased()
+            let isRateLimitOrQuota = errStr.contains("rate_limit") ||
+                                     errStr.contains("rate limit") ||
+                                     errStr.contains("quota") ||
+                                     errStr.contains("429") ||
+                                     errStr.contains("limit reached") ||
+                                     errStr.contains("overloaded") ||
+                                     errStr.contains("insufficient")
+
+            if isRateLimitOrQuota {
+                session.status = .idle
+                session.attentionReason = nil
+                session.sourceEvidence = "Claude Hook: Rate limit reached"
+                session.sensorReason = "Rate limit reached: \(error ?? "rate_limit")"
+                shouldMarkQuotaExhausted = true
+            } else if session.status == .blocked {
+                // Preserve genuine prior permission block
+            } else {
+                session.status = .idle
+                session.attentionReason = nil
+                let reasonStr = error != nil ? "Stop failed: \(error!)" : "Session stopped with failure"
+                session.sourceEvidence = "Claude Hook: StopFailure (stopped)"
+                session.sensorReason = reasonStr
+            }
             if let start = session.thinkingStartTime {
                 session.lastDurationSeconds = now.timeIntervalSince(start)
             }
@@ -983,6 +1009,10 @@ public final class AgentStore: @unchecked Sendable {
         currentSessions[sessionId] = session
         trackedSessions[.claude] = currentSessions
         lock.unlock()
+
+        if shouldMarkQuotaExhausted {
+            AgentUsageStore.shared.markQuotaExhausted(for: .claude)
+        }
 
         syncSessions(for: .claude, activeSessions: Array(currentSessions.values), processRunning: true)
         return true
@@ -1047,6 +1077,9 @@ public final class AgentStore: @unchecked Sendable {
 
         session.title = title
         session.lastUpdated = now
+        if !rawCwd.isEmpty {
+            session.cwd = rawCwd
+        }
 
         switch event {
         case "SessionStart":
@@ -1238,6 +1271,9 @@ public final class AgentStore: @unchecked Sendable {
 
         session.title = sessionTitle
         session.lastUpdated = now
+        if !rawCwd.isEmpty {
+            session.cwd = rawCwd
+        }
 
         if status == .working {
             session.status = .working
@@ -1313,6 +1349,9 @@ public final class AgentStore: @unchecked Sendable {
 
         session.title = sessionTitle
         session.lastUpdated = now
+        if !rawCwd.isEmpty {
+            session.cwd = rawCwd
+        }
 
         switch eventType {
         case "task_started":
@@ -1434,6 +1473,9 @@ public final class AgentStore: @unchecked Sendable {
 
         session.title = sessionTitle
         session.lastUpdated = now
+        if !cwd.isEmpty {
+            session.cwd = cwd
+        }
 
         let isStartHook = eventType == "hook.start" && (hookType == "userPromptSubmitted" || hookType == "UserPromptSubmit" || hookType == "SessionStart" || hookType == "SubagentStart")
         let isStopHook = (eventType == "hook.start" || eventType == "hook.end") && (hookType == "agentStop" || hookType == "Stop" || hookType == "SubagentStop")
@@ -1790,6 +1832,54 @@ public final class AgentStore: @unchecked Sendable {
             if oldAvail != availability {
                 notifyObservers(agent: agent, oldStatus: info.status, newStatus: info.status, detail: info.detail)
             }
+            if availability == .available {
+                reconcileQuotaRecovery(for: agent)
+            }
+        } else {
+            lock.unlock()
+        }
+    }
+
+    public func reconcileQuotaRecovery(for agent: AgentID) {
+        lock.lock()
+        var currentSessions = trackedSessions[agent] ?? [:]
+        var changed = false
+
+        for (sessionId, var session) in currentSessions {
+            if session.status == .blocked {
+                let reason = (session.attentionReason ?? "").lowercased()
+                let sensor = (session.sensorReason ?? "").lowercased()
+                let isQuotaBlocked = reason.contains("rate_limit") ||
+                                     reason.contains("rate limit") ||
+                                     reason.contains("quota") ||
+                                     reason.contains("429") ||
+                                     reason.contains("limit reached") ||
+                                     reason.contains("overloaded") ||
+                                     sensor.contains("rate_limit") ||
+                                     sensor.contains("quota")
+
+                let isGenuinePermission = reason.contains("permission") ||
+                                          reason.contains("approve") ||
+                                          reason.contains("confirm") ||
+                                          reason.contains("ask_") ||
+                                          reason.contains("askuser") ||
+                                          sensor.contains("permission")
+
+                if isQuotaBlocked && !isGenuinePermission {
+                    session.status = .idle
+                    session.attentionReason = nil
+                    session.sourceEvidence = "Quota Restored"
+                    session.sensorReason = "Quota Restored"
+                    currentSessions[sessionId] = session
+                    changed = true
+                }
+            }
+        }
+
+        if changed {
+            trackedSessions[agent] = currentSessions
+            lock.unlock()
+            syncSessions(for: agent, activeSessions: Array(currentSessions.values), processRunning: true)
         } else {
             lock.unlock()
         }

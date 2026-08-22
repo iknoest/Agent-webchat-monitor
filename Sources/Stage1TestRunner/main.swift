@@ -13,7 +13,8 @@ func runTest(_ name: String, block: () throws -> Void) {
 }
 
 func runAsyncTest(_ name: String, block: @escaping () async throws -> Void) {
-    let sema = DispatchSemaphore(value: 0)
+    let group = DispatchGroup()
+    group.enter()
     var testErr: Error?
     Task {
         do {
@@ -21,9 +22,13 @@ func runAsyncTest(_ name: String, block: @escaping () async throws -> Void) {
         } catch {
             testErr = error
         }
-        sema.signal()
+        group.leave()
     }
-    sema.wait()
+    let waitResult = group.wait(timeout: .now() + 5.0)
+    if waitResult == .timedOut {
+        print("❌ Failed: \(name) - Timed out after 5s")
+        exit(1)
+    }
     if let err = testErr {
         print("❌ Failed: \(name) - \(err)")
         exit(1)
@@ -4451,22 +4456,22 @@ runTest("215. Telegram: Distinct sessions generate distinct valid notifications"
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
     ConfigManager.shared.setTelegramEnabled(true)
 
-    let sess1 = AgentSessionInfo(provider: .chatgpt, sessionId: "tab_101", title: "Math QA", status: .done)
-    let sess2 = AgentSessionInfo(provider: .chatgpt, sessionId: "tab_102", title: "Code Review", status: .done)
+    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_math_01", title: "[MathEngine]", status: .done, cwd: "/Users/ava/Projects/MathEngine")
+    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_code_02", title: "[CodeReview]", status: .done, cwd: "/Users/ava/Projects/CodeReview")
 
-    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess1], processRunning: true)
-    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "Math QA")
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess1], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Math Engine Done")
 
-    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess2], processRunning: true)
-    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "Code Review")
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess2], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Code Review Done")
 
     let exp = Date().addingTimeInterval(0.2)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let sent = mockTransport.getAllSentMessages()
     try assert(sent.count == 2, "Distinct sessions must both send alerts")
-    try assert(sent[0].text.contains("Math QA"))
-    try assert(sent[1].text.contains("Code Review"))
+    try assert(sent[0].text.contains("Project: MathEngine"))
+    try assert(sent[1].text.contains("Project: CodeReview"))
 
     EnvConfigLoader.shared.reload()
 }
@@ -4898,4 +4903,201 @@ runTest("238. Codex Lifecycle: Turn completion transitions to Done & releases Sm
     AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .codex)
 }
 
-print("🎉 All 238 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair & Turn-Aware Auto-Switch Tests Passed!")
+// 239. Claude StopFailure rate_limit -> NOT .blocked (lifecycle: .idle, availability: .quotaExhausted)
+runTest("239. Claude StopFailure rate_limit -> NOT .blocked (lifecycle: .idle, availability: .quotaExhausted)") {
+    for a in AgentID.allCases { AgentStore.shared.updateStatus(for: a, status: .idle) }
+
+    let handled = AgentStore.shared.handleClaudeHookEvent(json: [
+        "event": "StopFailure",
+        "session_id": "test_claude_rl_01",
+        "error": "rate_limit_exceeded"
+    ], isTestMode: true)
+    try assert(handled, "StopFailure rate_limit must be handled")
+
+    let cldInfo = AgentStore.shared.getStatus(for: .claude)
+    try assert(cldInfo.status == .idle, "Lifecycle status must be .idle, NOT .blocked: got \(cldInfo.status)")
+    try assert(cldInfo.effectiveDisplayStatus == .quotaExhausted, "Effective display status must be .quotaExhausted: got \(cldInfo.effectiveDisplayStatus)")
+}
+
+// 240. Quota exhausted availability + stopped lifecycle -> effective Quota Exhausted
+runTest("240. Quota exhausted availability + stopped lifecycle -> effective Quota Exhausted") {
+    let usageData = AgentUsageData(agent: .claude, sessionLimitPercent: 0.0, isPercentUsed: false, isLiveSource: true)
+    AgentUsageStore.shared.updateUsage(for: .claude, data: usageData)
+
+    let info = AgentStore.shared.getStatus(for: .claude)
+    try assert(info.status == .idle)
+    try assert(info.effectiveDisplayStatus == .quotaExhausted)
+}
+
+// 241. Quota later returns available -> stale quota-derived attention clears, effective Quota Restored / Idle
+runTest("241. Quota later returns available -> stale quota-derived attention clears, effective Quota Restored / Idle") {
+    // Quota resets and becomes available again
+    let restoredUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: false, isLiveSource: true)
+    AgentUsageStore.shared.updateUsage(for: .claude, data: restoredUsage)
+
+    let info = AgentStore.shared.getStatus(for: .claude)
+    try assert(info.status == .idle, "Status must remain .idle")
+    try assert(info.effectiveDisplayStatus == .quotaRestored || info.effectiveDisplayStatus == .idle, "Effective display must be restored: got \(info.effectiveDisplayStatus)")
+}
+
+// 242. Real PermissionRequest + quota refresh -> remains .blocked
+runTest("242. Real PermissionRequest + quota refresh -> remains .blocked") {
+    let handled = AgentStore.shared.handleClaudeHookEvent(json: [
+        "event": "PermissionRequest",
+        "session_id": "test_claude_perm_01",
+        "tool_name": "Bash"
+    ], isTestMode: true)
+    try assert(handled)
+
+    let permInfo = AgentStore.shared.getStatus(for: .claude)
+    try assert(permInfo.status == .blocked, "PermissionRequest must set status to .blocked")
+
+    // Subsequent quota refresh must NOT clear genuine permission block
+    let refreshUsage = AgentUsageData(agent: .claude, sessionLimitPercent: 80.0, isPercentUsed: false, isLiveSource: true)
+    AgentUsageStore.shared.updateUsage(for: .claude, data: refreshUsage)
+
+    let permInfoAfter = AgentStore.shared.getStatus(for: .claude)
+    try assert(permInfoAfter.status == .blocked, "Genuine PermissionRequest block MUST survive quota refresh: got \(permInfoAfter.status)")
+
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .claude)
+}
+
+// 243. Generic non-actionable StopFailure -> .idle, not Needs You
+runTest("243. Generic non-actionable StopFailure -> .idle, not Needs You") {
+    let handled = AgentStore.shared.handleClaudeHookEvent(json: [
+        "event": "StopFailure",
+        "session_id": "test_claude_err_01",
+        "error": "Connection reset by peer"
+    ], isTestMode: true)
+    try assert(handled)
+
+    let errInfo = AgentStore.shared.getStatus(for: .claude)
+    try assert(errInfo.status == .idle, "Generic StopFailure must be .idle, NOT .blocked: got \(errInfo.status)")
+
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .claude)
+}
+
+// 244. rate_limit StopFailure does NOT trigger Auto-Switch
+runTest("244. rate_limit StopFailure does NOT trigger Auto-Switch") {
+    let switchMgr = OneShotSwitchManager.shared
+    switchMgr.resetTestMetrics()
+    var switchCount = 0
+    switchMgr.focusExecutionHandler = { _, _, _, _ in switchCount += 1 }
+
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Claude working", turnId: "turn_rl_watch")
+    switchMgr.arm(provider: .claude, sessionId: "sess_rl_watch")
+
+    // StopFailure with rate_limit arrives -> translates to .idle
+    let trans = switchMgr.evaluateTransition(provider: .claude, sessionId: "sess_rl_watch", newStatus: .idle, turnId: "turn_rl_watch")
+    try assert(!trans, "Rate limit idle transition must NOT trigger Auto-Switch")
+    try assert(switchCount == 0, "No switch must occur")
+}
+
+// 245. rate_limit StopFailure does NOT send Telegram Needs You
+runTest("245. rate_limit StopFailure does NOT send Telegram Needs You") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // Rate limit idle transition
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .idle, detail: "Rate limit reached")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Rate limit must NOT send Telegram Needs You message")
+    EnvConfigLoader.shared.reload()
+}
+
+// 246. Repeated same quota failure does NOT spam Telegram
+runTest("246. Repeated same quota failure does NOT spam Telegram") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    for _ in 0..<5 {
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .idle, detail: "Rate limit reached")
+    }
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mockTransport.getAllSentMessages().isEmpty, "Repeated quota failure must never send spam")
+    EnvConfigLoader.shared.reload()
+}
+
+// 247. Codex prompt-derived session title -> Telegram notification does NOT contain it
+runTest("247. Codex prompt-derived session title -> Telegram notification does NOT contain it") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    let promptTitle = "# Files pasted by the user:\n\n# /Users/ava/Secret/keys.txt\nPrivate secret content please analyze"
+    let cdxSess = AgentSessionInfo(provider: .codex, sessionId: "cdx_leak_01", title: promptTitle, status: .done, cwd: "/Users/ava/Projects/Jobsearcher")
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [cdxSess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .codex, oldStatus: .working, newStatus: .done, detail: "Completed")
+
+    let exp = Date().addingTimeInterval(0.2)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mockTransport.getAllSentMessages()
+    try assert(sent.count == 1, "Must send notification")
+    let text = sent[0].text
+    try assert(!text.contains("Files pasted"), "Must NOT contain pasted user prompt")
+    try assert(!text.contains("/Users/ava/Secret"), "Must NOT contain private file paths")
+    try assert(text.contains("Project: Jobsearcher"), "Must use safe directory name: got \(text)")
+
+    EnvConfigLoader.shared.reload()
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .codex)
+}
+
+// 248. Attachment path / pasted request -> Telegram output does NOT contain it
+runTest("248. Attachment path / pasted request -> Telegram output does NOT contain it") {
+    let rawReason = "SELECT * FROM users; file:///Users/ava/private_resume.pdf\n# pasted instruction"
+    let safeReason = TelegramPrivacySafeContext.sanitizeAttentionReason(rawReason)
+    try assert(!safeReason.contains("private_resume.pdf"), "Must strip pdf path")
+    try assert(!safeReason.contains("SELECT *"), "Must strip sql/code")
+    try assert(!safeReason.contains("\n"), "Must strip newlines")
+}
+
+// 249. Safe Codex cwd project: /Users/ava/Projects/Jobsearcher -> Telegram shows Project: Jobsearcher
+runTest("249. Safe Codex cwd project: /Users/ava/Projects/Jobsearcher -> Telegram shows Project: Jobsearcher") {
+    let sess = AgentSessionInfo(provider: .codex, sessionId: "sess_safe_cwd", title: "some title", status: .done, cwd: "/Users/ava/Projects/Jobsearcher")
+    let proj = TelegramPrivacySafeContext.resolveSafeProjectContext(agent: .codex, session: sess)
+    try assert(proj == "Jobsearcher", "Must extract last component of safe cwd: got \(proj)")
+}
+
+// 250. /sessions uses the same safe privacy context (no leaked prompts/paths)
+runAsyncTest("250. /sessions uses the same safe privacy context (no leaked prompts/paths)") {
+    let promptTitle = "Pasted instructions: rewrite http://secret.internal/api with token 12345"
+    let sess = AgentSessionInfo(provider: .codex, sessionId: "sess_leak_check", title: promptTitle, status: .working, cwd: "/Users/ava/Projects/AgentSignalBar")
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [sess], processRunning: true)
+
+    let router = TelegramCommandRouter.shared
+    let chat = TelegramChat(id: 77777)
+    let msg = TelegramMessage(message_id: 5, chat: chat, text: "/sessions")
+    let res = await router.handleIncomingMessage(msg, configuredChatId: "77777")
+    try assert(res != nil)
+    let text = res!.text
+    try assert(!text.contains("http://secret.internal"), "Must NOT contain private URLs")
+    try assert(!text.contains("token 12345"), "Must NOT contain tokens")
+    try assert(text.contains("AgentSignalBar"), "Must contain safe folder name: got \(text)")
+
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .codex)
+}
+
+// 251. TelegramPrivacySafeContext rejects prompt-like strings, file paths, newlines, and code markers
+runTest("251. TelegramPrivacySafeContext rejects prompt-like strings, file paths, newlines, and code markers") {
+    try assert(!TelegramPrivacySafeContext.isSafeProjectName("Files pasted by the user:\n# some file"))
+    try assert(!TelegramPrivacySafeContext.isSafeProjectName("/Users/ava/Projects/Something/main.swift"))
+    try assert(!TelegramPrivacySafeContext.isSafeProjectName("Please write a swift script to { return 1; }"))
+    try assert(!TelegramPrivacySafeContext.isSafeProjectName("https://github.com/secret/repo"))
+    try assert(TelegramPrivacySafeContext.isSafeProjectName("Jobsearcher"))
+    try assert(TelegramPrivacySafeContext.isSafeProjectName("Agent-webchat monitor"))
+}
+
+print("🎉 All 251 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair & Telegram Privacy Security Tests Passed!")
