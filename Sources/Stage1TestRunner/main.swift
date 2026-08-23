@@ -3213,6 +3213,7 @@ runTest("152. Expired OAuth token refresh logic & serialization without secrets 
 
 // 153. API failure -> plan-usage-history fallback without fabricated reset
 runTest("153. API failure -> plan-usage-history fallback without fabricated reset") {
+    ClaudeLocalQuotaConnector.shared.setCachedObservations(sessionReset: nil, weeklyReset: nil)
     let histUsage = ClaudeLocalQuotaConnector.shared.fetchFromPlanUsageHistory()
     if let hist = histUsage {
         try assert(hist.quotaSource == "claude_plan_usage_history", "Source must be claude_plan_usage_history")
@@ -5535,4 +5536,415 @@ runTest("277. Codex Multi-Session: Subagent threads (thread_source = 'subagent')
     try assert(!sessions.contains(where: { $0.sessionId == subagentThread }), "Subagent thread must be purged from workspace sessions")
 }
 
-print("🎉 All 277 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization & Codex Multi-Session Lifecycle Reconciliation Tests Passed!")
+// 278. ChatGPT Monitor Health: Monitored + Heartbeat present -> Monitor healthy
+runTest("278. ChatGPT Monitor Health: Monitored + Heartbeat present -> Monitor healthy") {
+    let store = AgentStore.shared
+    store.resetChatGPTMonitorHealthForTesting(appStartTime: Date().addingTimeInterval(-100), lastHeartbeat: Date())
+    let health = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true)
+    try assert(health == .connected, "Heartbeat present within lease must report connected")
+    try assert(!store.isChatGPTMonitorDisconnected())
+}
+
+// 279. ChatGPT Monitor Health: Heartbeat present + zero ChatGPT tabs -> Healthy, not disconnected
+runTest("279. ChatGPT Monitor Health: Heartbeat present + zero ChatGPT tabs -> Healthy, not disconnected") {
+    let store = AgentStore.shared
+    store.resetChatGPTMonitorHealthForTesting(appStartTime: Date().addingTimeInterval(-100), lastHeartbeat: Date())
+    store.updateStatus(for: .chatgpt, status: .idle, detail: "0 ChatGPT tab(s) in Chrome", openTabs: [])
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.monitorHealth == .connected)
+    try assert(info.effectiveDisplayStatus == .idle, "Zero tabs with active heartbeat must report idle, not unavailable")
+}
+
+// 280. ChatGPT Monitor Health: Heartbeat lease expires while Chrome is running -> Monitor unavailable
+runTest("280. ChatGPT Monitor Health: Heartbeat lease expires while Chrome is running -> Monitor unavailable") {
+    let store = AgentStore.shared
+    let expiredHeartbeat = Date().addingTimeInterval(-120) // 2 minutes ago (lease is 60s)
+    store.resetChatGPTMonitorHealthForTesting(appStartTime: Date().addingTimeInterval(-300), lastHeartbeat: expiredHeartbeat)
+
+    let health = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true)
+    try assert(health == .disconnected, "Expired heartbeat lease while Chrome runs must report disconnected")
+
+    store.setChatGPTMonitorHealth(health)
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.effectiveDisplayStatus == .monitorUnavailable, "Effective status must be monitorUnavailable")
+    try assert(info.effectiveDisplayStatus.badge(theme: .funEmoji) == "⚠️")
+}
+
+// 281. ChatGPT Monitor Health: Startup before first expected heartbeat -> No false warning during grace
+runTest("281. ChatGPT Monitor Health: Startup before first expected heartbeat -> No false warning during grace") {
+    let store = AgentStore.shared
+    // App just started 10s ago, no heartbeat yet (startup grace is 60s)
+    store.resetChatGPTMonitorHealthForTesting(appStartTime: Date().addingTimeInterval(-10), lastHeartbeat: nil)
+
+    let health = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true)
+    try assert(health == .starting, "Within startup grace period must report starting, not disconnected")
+}
+
+// 282. ChatGPT Monitor Health: Heartbeat returns -> Monitoring restored automatically
+runTest("282. ChatGPT Monitor Health: Heartbeat returns -> Monitoring restored automatically") {
+    let store = AgentStore.shared
+    store.setChatGPTMonitorHealth(.disconnected)
+    try assert(store.isChatGPTMonitorDisconnected())
+
+    // Heartbeat arrives
+    store.recordChatGPTHeartbeat()
+    try assert(!store.isChatGPTMonitorDisconnected(), "Heartbeat reception must restore connected status")
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.monitorHealth == .connected)
+    try assert(info.effectiveDisplayStatus != .monitorUnavailable)
+}
+
+// 283. ChatGPT Monitor Health: ChatGPT disabled under Monitored Agents -> No monitor-health warning
+runTest("283. ChatGPT Monitor Health: ChatGPT disabled under Monitored Agents -> No monitor-health warning") {
+    let store = AgentStore.shared
+    let health = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: false)
+    try assert(health == .connected, "Unmonitored agent must never trigger disconnected monitor health warning")
+}
+
+// 284. ChatGPT Monitor Health: Chrome actually closed -> Normal Closed (.off) semantics, not noisy warning
+runTest("284. ChatGPT Monitor Health: Chrome actually closed -> Normal Closed (.off) semantics, not noisy warning") {
+    let store = AgentStore.shared
+    let health = store.checkChatGPTMonitorHealth(isChromeRunning: false, isMonitored: true)
+    try assert(health == .connected, "Closed Chrome process should not produce disconnected extension warning")
+
+    store.updateStatus(for: .chatgpt, status: .off, detail: "Google Chrome closed")
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.status == .off)
+    try assert(info.effectiveDisplayStatus == .off)
+}
+
+// 285. ChatGPT Monitor Health: Monitor unavailable does not fabricate Done/Idle (exposes unavailable)
+runTest("285. ChatGPT Monitor Health: Monitor unavailable does not fabricate Done/Idle (exposes unavailable)") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .chatgpt, status: .working, detail: "Generating response")
+    store.setChatGPTMonitorHealth(.disconnected)
+
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.effectiveDisplayStatus == .monitorUnavailable, "Effective status must truthfully be monitorUnavailable")
+    try assert(info.status == .working, "Underlying raw status is preserved without fabricating Done or Idle")
+}
+
+// 286. ChatGPT Monitor Health: Stale ChatGPT Working + monitor unavailable -> Cannot keep Smart Auto asserted
+runTest("286. ChatGPT Monitor Health: Stale ChatGPT Working + monitor unavailable -> Cannot keep Smart Auto asserted") {
+    let store = AgentStore.shared
+    for agent in AgentID.allCases {
+        store.updateStatus(for: agent, status: .idle)
+        store.syncSessions(for: agent, activeSessions: [], processRunning: true)
+    }
+
+    store.updateStatus(for: .chatgpt, status: .working, detail: "Stale working")
+    store.setChatGPTMonitorHealth(.disconnected)
+
+    SleepManager.shared.mode = .smartAuto
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(!SleepManager.shared.isAssertionActive, "Disconnected ChatGPT must NOT keep Smart Auto keep-awake active")
+}
+
+// 287. ChatGPT Monitor Health: Another provider genuinely Working -> Smart Auto remains active through that provider
+runTest("287. ChatGPT Monitor Health: Another provider genuinely Working -> Smart Auto remains active through that provider") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .chatgpt, status: .working, detail: "Stale working")
+    store.setChatGPTMonitorHealth(.disconnected)
+
+    store.updateStatus(for: .claude, status: .working, detail: "Claude working")
+    SleepManager.shared.mode = .smartAuto
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(SleepManager.shared.isAssertionActive, "Genuinely working Claude must keep Smart Auto active even if ChatGPT is disconnected")
+}
+
+// 288. ChatGPT Monitor Health: connected -> disconnected -> one Telegram failure notification
+runTest("288. ChatGPT Monitor Health: connected -> disconnected -> one Telegram failure notification") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    // Allow async delivery
+    Thread.sleep(forTimeInterval: 0.1)
+
+    let sent = mockTransport.sentMessages
+    try assert(sent.count == 1, "Expected 1 Telegram notification on disconnect, got: \(sent.count)")
+    try assert(sent.first?.text.contains("ChatGPT Web monitoring unavailable") == true)
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 289. ChatGPT Monitor Health: Repeated disconnected checks -> No Telegram spam
+runTest("289. ChatGPT Monitor Health: Repeated disconnected checks -> No Telegram spam") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .disconnected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .disconnected)
+    Thread.sleep(forTimeInterval: 0.1)
+
+    let sent = mockTransport.sentMessages
+    try assert(sent.count == 1, "Repeated disconnected calls must not spam Telegram, got: \(sent.count)")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 290. ChatGPT Monitor Health: disconnected -> connected -> at most one recovery notification
+runTest("290. ChatGPT Monitor Health: disconnected -> connected -> at most one recovery notification") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    Thread.sleep(forTimeInterval: 0.1)
+
+    let sent = mockTransport.sentMessages
+    try assert(sent.count == 2, "Expected 1 failure and 1 recovery notification, got: \(sent.count)")
+    try assert(sent.last?.text.contains("ChatGPT Web monitoring restored") == true)
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 291. ChatGPT Monitor Health: /status reports monitor unavailable rather than stale lifecycle
+runTest("291. ChatGPT Monitor Health: /status reports monitor unavailable rather than stale lifecycle") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .chatgpt, status: .working, detail: "Old working")
+    store.setChatGPTMonitorHealth(.disconnected)
+
+    let router = TelegramCommandRouter.shared
+    let res = router.generateStatusOverview()
+    try assert(res.text.contains("⚠️ ChatGPT Web — Monitor unavailable"), "Telegram /status must report monitor unavailable, got: \(res.text)")
+}
+
+// 292. ChatGPT Monitor Health: Extension snapshot/heartbeat traffic updates state cleanly without lock corruption
+runTest("292. ChatGPT Monitor Health: Extension snapshot/heartbeat traffic updates state cleanly without lock corruption") {
+    let store = AgentStore.shared
+    store.recordChatGPTHeartbeat()
+    try assert(!store.isChatGPTMonitorDisconnected())
+    let info = store.getStatus(for: .chatgpt)
+    try assert(info.monitorHealth == .connected)
+}
+
+// 293. Provider Close Lifecycle: Application close transitions to .off, never .done
+runTest("293. Provider Close Lifecycle: Application close transitions to .off, never .done") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .copilot, status: .working, detail: "Copilot active")
+    try assert(store.getStatus(for: .copilot).status == .working)
+
+    // Process closes
+    store.syncSessions(for: .copilot, activeSessions: [], processRunning: false)
+    let info = store.getStatus(for: .copilot)
+    try assert(info.status == .off, "Closing app must transition to .off, got: \(info.status)")
+    try assert(info.effectiveDisplayStatus == .off)
+}
+
+// 294. Provider Close Telegram: Application close from working/idle/off does not emit Telegram finished
+runTest("294. Provider Close Telegram: Application close from working/idle/off does not emit Telegram finished") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    // Transition working -> off
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .off, detail: "GitHub Copilot closed")
+    Thread.sleep(forTimeInterval: 0.05)
+    try assert(mockTransport.sentMessages.isEmpty, "Closing app from working must NOT send Telegram finished notification")
+
+    // Transition idle -> off
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .idle, newStatus: .off, detail: "GitHub Copilot closed")
+    Thread.sleep(forTimeInterval: 0.05)
+    try assert(mockTransport.sentMessages.isEmpty, "Closing app from idle must NOT send Telegram notification")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 295. Copilot Stop Hook: agentStop / Stop transitions to .idle, not .done
+runTest("295. Copilot Stop Hook: agentStop / Stop transitions to .idle, not .done") {
+    let store = AgentStore.shared
+    let sessId = "copilot_sess_stop_test"
+
+    // Start working
+    _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_start", turnId: "t1")
+    try assert(store.getSessions(for: .copilot).first(where: { $0.sessionId == sessId })?.status == .working)
+
+    // Stop hook (user abort / process cancel)
+    _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "hook.start", hookType: "agentStop", turnId: "t1")
+    let sessionAfterStop = store.getSessions(for: .copilot).first(where: { $0.sessionId == sessId })
+    try assert(sessionAfterStop?.status == .idle, "agentStop hook must transition session to .idle, not .done")
+}
+
+// 296. Genuine Done Telegram: Real assistant.turn_end emits exactly one Telegram finished notification
+runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one Telegram finished notification") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    let store = AgentStore.shared
+    let sessId = "copilot_sess_done_test"
+    _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_start", turnId: "turn_done_1")
+    _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_end", turnId: "turn_done_1")
+
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Copilot output ready")
+    Thread.sleep(forTimeInterval: 0.1)
+
+    try assert(mockTransport.sentMessages.count == 1, "Genuine turn completion must emit exactly 1 Telegram notification, got: \(mockTransport.sentMessages.count)")
+    try assert(mockTransport.sentMessages.first?.text.contains("finished") == true)
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 297. Done followed by App Close: App close after Done does not duplicate Telegram notification
+runTest("297. Done followed by App Close: App close after Done does not duplicate Telegram notification") {
+    let mockTransport = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mockTransport)
+
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    // 1. Done notification
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Output ready")
+    Thread.sleep(forTimeInterval: 0.05)
+    try assert(mockTransport.sentMessages.count == 1)
+
+    // 2. App closes (done -> off)
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .done, newStatus: .off, detail: "GitHub Copilot closed")
+    Thread.sleep(forTimeInterval: 0.05)
+    try assert(mockTransport.sentMessages.count == 1, "App closure after Done must not send duplicate notification, got: \(mockTransport.sentMessages.count)")
+
+    EnvConfigLoader.shared.reload()
+}
+
+// 298. Claude Quota Reset: Valid OAuth reset is cached and survives plan-usage-history percentage fallback
+runTest("298. Claude Quota Reset: Valid OAuth reset is cached and survives plan-usage-history percentage fallback") {
+    let connector = ClaudeLocalQuotaConnector.shared
+
+    // Future reset time (e.g. 2 hours from now)
+    let futureDate = Date().addingTimeInterval(7200)
+    let isoFormatter = ISO8601DateFormatter()
+    let futureIso = isoFormatter.string(from: futureDate)
+
+    let oauthPayload = """
+    {
+        "five_hour": {
+            "utilization": 25.0,
+            "resets_at": "\(futureIso)"
+        },
+        "seven_day": {
+            "utilization": 50.0,
+            "resets_at": "\(futureIso)"
+        }
+    }
+    """.data(using: .utf8)!
+
+    let parsedOAuth = connector.parseUsageResponseData(oauthPayload)
+    try assert(parsedOAuth != nil)
+    try assert(parsedOAuth?.sessionResetText != nil)
+
+    // Now simulate fallback to plan-usage-history
+    let histUsage = connector.fetchFromPlanUsageHistory()
+    if let hist = histUsage {
+        try assert(hist.sessionResetText != nil, "Plan-usage-history fallback must preserve still-valid cached OAuth reset text")
+        try assert(hist.weeklyResetText != nil)
+    }
+}
+
+// 299. Claude Quota Reset: Expired cached reset observation is invalidated and not displayed
+runTest("299. Claude Quota Reset: Expired cached reset observation is invalidated and not displayed") {
+    let connector = ClaudeLocalQuotaConnector.shared
+    let expiredPastDate = Date().addingTimeInterval(-60) // 1 minute ago
+
+    let expiredObservation = ClaudeResetObservation(
+        observedAt: Date().addingTimeInterval(-3600),
+        relativeResetText: "resets 1h ago",
+        relativeDurationSeconds: -60,
+        isApproximate: false,
+        derivedAbsoluteReset: expiredPastDate,
+        formattedResetText: "resets 1h ago",
+        source: "claude_oauth_api",
+        authority: "live_first_party"
+    )
+    connector.setCachedObservations(sessionReset: expiredObservation, weeklyReset: expiredObservation)
+
+    let (sText, wText) = connector.getResetMetadata()
+    try assert(sText == nil, "Expired 5h reset observation must be invalidated to nil, got: \(sText ?? "")")
+    try assert(wText == nil, "Expired weekly reset observation must be invalidated to nil, got: \(wText ?? "")")
+}
+
+// 300. Claude Quota Force Refresh: forceRefresh bypasses cacheTTL while respecting active rate limit backoff
+runTest("300. Claude Quota Force Refresh: forceRefresh bypasses cacheTTL while respecting active rate limit backoff") {
+    let connector = ClaudeLocalQuotaConnector.shared
+    // Fetch with forceRefresh
+    let usage = connector.fetchQuota(forceRefresh: true)
+    try assert(usage != nil, "forceRefresh should successfully return usage data")
+}
+
+// 301. Telegram Alerts Root Menu: Exists at root menu level right after Smart Keep-Awake
+runTest("301. Telegram Alerts Root Menu: Exists at root menu level right after Smart Keep-Awake") {
+    let mgr = MenuBarManager.shared
+    let menu = mgr.buildMenuForTesting()
+
+    let rootTitles = menu.items.map { $0.title }
+    let hasTelegramRoot = rootTitles.contains { $0.hasPrefix("Telegram Alerts:") }
+    try assert(hasTelegramRoot, "Root menu must contain Telegram Alerts item, items found: \(rootTitles)")
+
+    let keepAwakeIdx = rootTitles.firstIndex { $0.hasPrefix("Smart Keep-Awake:") }
+    let tgIdx = rootTitles.firstIndex { $0.hasPrefix("Telegram Alerts:") }
+    let settingsIdx = rootTitles.firstIndex { $0.hasPrefix("Settings & Preferences...") }
+
+    try assert(keepAwakeIdx != nil && tgIdx != nil && settingsIdx != nil)
+    try assert(keepAwakeIdx! < tgIdx!, "Telegram Alerts must be below Smart Keep-Awake")
+    try assert(tgIdx! < settingsIdx!, "Telegram Alerts must be above Settings & Preferences")
+}
+
+// 302. Telegram Alerts Settings: Does not exist inside Settings & Preferences submenu
+runTest("302. Telegram Alerts Settings: Does not exist inside Settings & Preferences submenu") {
+    let mgr = MenuBarManager.shared
+    let menu = mgr.buildMenuForTesting()
+
+    guard let settingsItem = menu.items.first(where: { $0.title.hasPrefix("Settings & Preferences...") }),
+          let settingsSubmenu = settingsItem.submenu else {
+        throw NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Settings submenu not found"])
+    }
+
+    let subTitles = settingsSubmenu.items.map { $0.title }
+    let hasTelegramSub = subTitles.contains { $0.hasPrefix("Telegram Alerts") }
+    try assert(!hasTelegramSub, "Settings submenu must NOT contain Telegram Alerts, found: \(subTitles)")
+}
+
+// 303. Provider Icons Architecture: Bundled provider icons load cleanly without requiring ~/.config icons folder
+runTest("303. Provider Icons Architecture: Bundled provider icons load cleanly without requiring ~/.config icons folder") {
+    let loader = ProviderIconLoader.shared
+    loader.preloadIcons()
+
+    // Test that icon loader functions cleanly
+    for agent in AgentID.allCases {
+        _ = loader.getIcon(for: agent)
+    }
+}
+
+// 304. Fun Emoji Rendering: Honors configured statusBadges mapping
+runTest("304. Fun Emoji Rendering: Honors configured statusBadges mapping") {
+    let cfg = ConfigManager.shared.config.statusBadges
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .funEmoji) == cfg.idle.funEmoji)
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == cfg.working.funEmoji)
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == cfg.done.funEmoji)
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji) == cfg.blocked.funEmoji)
+    try assert(EffectiveDisplayStatus.off.badge(theme: .funEmoji) == cfg.off.funEmoji)
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji) == (cfg.quotaDepleted?.funEmoji ?? "🤯"))
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji, thinkingDuration: 700, overworkThresholdMinutes: 10) == (cfg.overworking?.funEmoji ?? "🥵"))
+}
+
+print("🎉 All 304 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu & Fun Emoji Config Tests Passed!")

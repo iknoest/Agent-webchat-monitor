@@ -210,6 +210,57 @@ public final class TelegramBridge: @unchecked Sendable {
         }
     }
 
+    public func handleChatGPTMonitorHealthChange(oldHealth: MonitorHealth, newHealth: MonitorHealth) {
+        guard ConfigManager.shared.isAgentMonitored(.chatgpt) else { return }
+        let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        guard isEnabled else { return }
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        guard config.isConfigured else { return }
+
+        guard oldHealth != newHealth else { return }
+
+        let text: String
+        if newHealth == .disconnected {
+            text = """
+            ⚠️ ChatGPT Web monitoring unavailable
+            Chrome extension is not connected
+            """
+        } else if newHealth == .connected && oldHealth == .disconnected {
+            text = """
+            ✅ ChatGPT Web monitoring restored
+            """
+        } else {
+            return
+        }
+
+        let dedupeKey = "chatgpt_monitor_health_\(newHealth.rawValue)"
+        lock.lock()
+        if lastSentNotificationKeys[dedupeKey] != nil {
+            lock.unlock()
+            return
+        }
+        if newHealth == .disconnected {
+            lastSentNotificationKeys.removeValue(forKey: "chatgpt_monitor_health_connected")
+        } else {
+            lastSentNotificationKeys.removeValue(forKey: "chatgpt_monitor_health_disconnected")
+        }
+        lastSentNotificationKeys[dedupeKey] = Date()
+        lock.unlock()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let res = try? await self.transport.sendMessage(
+                botToken: config.botToken,
+                chatId: config.chatId,
+                text: text,
+                parseMode: nil
+            )
+            if let res = res {
+                self.lastDeliveryResult = res
+            }
+        }
+    }
+
     public func resetForTesting() {
         lock.lock()
         defer { lock.unlock() }

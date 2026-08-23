@@ -1272,21 +1272,27 @@ public final class AutoMonitor: @unchecked Sendable {
         }
     }
 
-    // 5. ChatGPT Expiry check
+    // 5. ChatGPT Expiry & Monitor Health check
     private func checkChatGPTExpiry() {
         let workspace = NSWorkspace.shared
-        let isChromeRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.Chrome" })
+        let isChromeRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.Chrome" || $0.localizedName == "Google Chrome" })
+        let isMonitored = ConfigManager.shared.isAgentMonitored(.chatgpt)
 
         if !isChromeRunning {
             let current = AgentStore.shared.getStatus(for: .chatgpt)
             if current.status != .off {
                 AgentStore.shared.updateStatus(for: .chatgpt, status: .off, detail: "Google Chrome closed")
             }
-        } else {
+            AgentStore.shared.setChatGPTMonitorHealth(.connected)
+        } else if isMonitored {
+            let health = AgentStore.shared.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true)
             let current = AgentStore.shared.getStatus(for: .chatgpt)
+
             if current.status == .off {
                 AgentStore.shared.updateStatus(for: .chatgpt, status: .idle, detail: "Google Chrome running")
             }
+
+            AgentStore.shared.setChatGPTMonitorHealth(health)
         }
     }
 }

@@ -26,8 +26,8 @@ public struct StatusBadgesConfig: Codable {
         done: StatusBadgeItem = StatusBadgeItem(classic: "🟢", funEmoji: "🐶"),
         blocked: StatusBadgeItem = StatusBadgeItem(classic: "🔴", funEmoji: "🥶"),
         off: StatusBadgeItem = StatusBadgeItem(classic: "⚫", funEmoji: "😴"),
-        overworking: StatusBadgeItem = StatusBadgeItem(classic: "🟡🔥", funEmoji: "🥵"),
-        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "🔴⚠️", funEmoji: "🤯")
+        overworking: StatusBadgeItem = StatusBadgeItem(classic: "🟡", funEmoji: "🥵"),
+        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⦸", funEmoji: "🤯")
     ) {
         self.idle = idle
         self.working = working
@@ -143,11 +143,11 @@ public struct AppConfig: Codable {
             customMainIconPath: nil,
             disabledAgents: [],
             agents: [
-                "chatgpt": AgentCustomConfig(displayName: "ChatGPT Web", symbol: "💬", shortTag: "GPT", customIconPath: "~/.config/AgentSignalBar/icons/chatgpt.png"),
-                "codex": AgentCustomConfig(displayName: "Codex Desktop", symbol: "💻", shortTag: "CDX", customIconPath: "~/.config/AgentSignalBar/icons/codex.png"),
-                "claude": AgentCustomConfig(displayName: "Claude Code", symbol: "🤖", shortTag: "CLD", customIconPath: "~/.config/AgentSignalBar/icons/claude.png"),
-                "antigravity": AgentCustomConfig(displayName: "Antigravity", symbol: "🚀", shortTag: "AGY", customIconPath: "~/.config/AgentSignalBar/icons/antigravity.png"),
-                "copilot": AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: "~/.config/AgentSignalBar/icons/copilot.png")
+                "chatgpt": AgentCustomConfig(displayName: "ChatGPT Web", symbol: "💬", shortTag: "GPT", customIconPath: nil),
+                "codex": AgentCustomConfig(displayName: "Codex Desktop", symbol: "💻", shortTag: "CDX", customIconPath: nil),
+                "claude": AgentCustomConfig(displayName: "Claude Code", symbol: "🤖", shortTag: "CLD", customIconPath: nil),
+                "antigravity": AgentCustomConfig(displayName: "Antigravity", symbol: "🚀", shortTag: "AGY", customIconPath: nil),
+                "copilot": AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: nil)
             ],
             quotas: [
                 "antigravity": AgentQuotaConfig(
@@ -231,11 +231,6 @@ public final class ConfigManager: @unchecked Sendable {
             try? fm.createDirectory(atPath: dirPath, withIntermediateDirectories: true)
         }
 
-        let iconsDir = "\(dirPath)/icons"
-        if !fm.fileExists(atPath: iconsDir) {
-            try? fm.createDirectory(atPath: iconsDir, withIntermediateDirectories: true)
-        }
-
         if !fm.fileExists(atPath: configPath) {
             saveConfig(AppConfig.defaultConfig)
             return
@@ -248,15 +243,18 @@ public final class ConfigManager: @unchecked Sendable {
             // Auto-backfill overworking and quotaDepleted if missing in existing config.json
             var needsSave = false
             if decoded.statusBadges.overworking == nil {
-                decoded.statusBadges.overworking = StatusBadgeItem(classic: "🟡🔥", funEmoji: "🥵")
+                decoded.statusBadges.overworking = StatusBadgeItem(classic: "🟡", funEmoji: "🥵")
                 needsSave = true
             }
             if decoded.statusBadges.quotaDepleted == nil {
-                decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "🔴⚠️", funEmoji: "🤯")
+                decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "⦸", funEmoji: "🤯")
+                needsSave = true
+            } else if decoded.statusBadges.quotaDepleted?.classic == "🔴⚠️" {
+                decoded.statusBadges.quotaDepleted?.classic = "⦸"
                 needsSave = true
             }
             if decoded.agents["copilot"] == nil {
-                decoded.agents["copilot"] = AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: "~/.config/AgentSignalBar/icons/copilot.png")
+                decoded.agents["copilot"] = AgentCustomConfig(displayName: "GitHub Copilot", symbol: "🐙", shortTag: "COP", customIconPath: nil)
                 needsSave = true
             }
 
@@ -303,13 +301,6 @@ public final class ConfigManager: @unchecked Sendable {
 
     public func openConfigFileInEditor() {
         let url = URL(fileURLWithPath: configPath)
-        NSWorkspace.shared.open(url)
-    }
-
-    public func openIconsFolder() {
-        let home = NSHomeDirectory()
-        let iconsDir = "\(home)/.config/AgentSignalBar/icons"
-        let url = URL(fileURLWithPath: iconsDir)
         NSWorkspace.shared.open(url)
     }
 }

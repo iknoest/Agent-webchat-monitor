@@ -1162,5 +1162,64 @@ Blockers: none
 
 [RELEASE] Codex Multi-Session Lifecycle Reconciliation & Subagent Filtering — antigravity — 2026-08-23T11:55:00+02:00
 
+## 2026-08-23 — antigravity — macos
+Status: DONE
+Phase: ChatGPT Monitor Health & Disconnect Detection
+Done:
+1. Chrome Extension Periodic Heartbeat & Alarm Infrastructure:
+   - Added `"alarms"` to `adapters/chrome-extension/manifest.json`.
+   - Updated `adapters/chrome-extension/background.js` with `HEARTBEAT_INTERVAL_MS = 25000`, `lastSuccessfulSendTimestamp` tracking, and `chrome.alarms` listener (`agentSignalBarHeartbeat`) to continuously guarantee heartbeat transmission even when tab snapshot payload is unchanged.
+   - Added JS Test 29 to `background_test.js` verifying periodic heartbeat transmission.
+2. Swift Backend Monitor Health & Lifecycle Separation:
+   - Added `MonitorHealth` (`.connected`, `.disconnected`, `.starting`) and `EffectiveDisplayStatus.monitorUnavailable` (`⚠️`) in `AgentState.swift`.
+   - Implemented `lastChatGPTHeartbeat`, `startupGraceSeconds` (60s), `heartbeatLeaseSeconds` (60s), `recordChatGPTHeartbeat()`, `checkChatGPTMonitorHealth()`, and `setChatGPTMonitorHealth()` in `AgentStore`.
+   - Updated `HTTPServer.swift` `POST /status` to record heartbeat upon receiving ChatGPT updates.
+   - Updated `AutoMonitor.swift`'s `checkChatGPTExpiry()` to periodically evaluate Chrome status and update monitor health.
+   - Updated `SleepManager.swift`'s `evaluateSmartAutoRequirement()` to exclude disconnected ChatGPT from keeping macOS awake.
+   - Added `openChromeExtensionsClicked` and warning banner items in `MenuBarManager.swift`.
+   - Added `handleChatGPTMonitorHealthChange` in `TelegramBridge.swift` (1 failure alert on disconnect, 1 recovery alert on reconnect, deduplicated).
+   - Updated `TelegramCommandRouter.swift` `/status` to report `⚠️ ChatGPT Web — Monitor unavailable`.
+3. Verification:
+   - Added Tests 278 to 292 in `Stage1TestRunner` (`292 / 292 PASSED`).
+   - Ran `node adapters/chrome-extension/background_test.js` (`29 / 29 passed`).
+   - Ran `swift test` (clean exit 0).
+   - Ran `./build_app.sh` (clean exit 0).
+   - Ran `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app` and verified live status output.
+Verified: `swift run Stage1TestRunner` (292/292 passed), `background_test.js` (29/29 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present full report to Ava in Traditional Chinese and ask for the single human validation test.
+Blockers: none
 
+[RELEASE] ChatGPT Monitor Health & Disconnect Detection — antigravity — 2026-08-23T12:30:00+02:00
+
+## 2026-08-23 — antigravity — macos
+Status: DONE
+Phase: Lifecycle Truth, Quota Reset Preservation & Root UX Closeout
+Done:
+1. P0-A: Provider Close Lifecycle Truth (Zero False-Done On Application Shutdown):
+   - Separated `isStopHook` (`agentStop`, `Stop`, `SubagentStop`) from genuine turn completions (`assistant.turn_end`) in `AgentState.swift`.
+   - Mapped `isStopHook` to `.idle` ("Copilot Event: Stopped / Cancelled") instead of `.done`.
+   - Verified that application closure (`copilotApp == nil`) transitions to `.off` with zero Telegram notifications emitted.
+2. P0-B: Claude Quota Reset Timestamp Caching & Fallback Preservation:
+   - Updated `ClaudeLocalQuotaConnector.swift`'s `parseUsageResponseData()` to cache authoritative ISO 8601 `five_hour.resets_at` and `seven_day.resets_at` timestamps as `ClaudeResetObservation`.
+   - Updated `fetchFromPlanUsageHistory()` and `fetchFromCLI()` to inherit and carry forward still-valid cached reset observations, preventing percentage fallback paths from erasing first-party reset metadata.
+   - Ensured expired cached reset timestamps (`now >= derivedAbsoluteReset`) are invalidated and suppressed from display.
+   - Updated `fetchQuota(forceRefresh: true)` to bypass local cache TTL while respecting active hard 429 server backoff.
+3. P1: Root Menu Telegram Alerts Placement & Submenu Cleanups:
+   - Moved `Telegram Alerts: On` / `Telegram Alerts: Off` / `Telegram Alerts: Not Configured` to the true ROOT menu level in `MenuBarManager.swift`, directly below `Smart Keep-Awake:` and above `Settings & Preferences...`.
+   - Removed the duplicate Telegram Alerts toggle from inside `Settings & Preferences...`.
+   - Audited icon infrastructure: confirmed `ProviderIconLoader` cleanly loads bundled assets from `Bundle.main.resourcePath + "/icons"`.
+   - Removed dead `Custom Icons` submenu from `Appearance` and stopped creating unused `~/.config/AgentSignalBar/icons` directory in `ConfigManager.swift`.
+   - Verified config-aware Fun emoji rendering across all status badge items.
+4. Verification:
+   - Added Tests 293 to 304 in `Stage1TestRunner` (`304 / 304 PASSED`).
+   - Ran `node adapters/chrome-extension/background_test.js` (`29 / 29 passed`).
+   - Ran `swift test` (clean exit 0).
+   - Ran `./build_app.sh` (clean exit 0, `.app` bundle generated).
+   - Ran `git diff --check` (clean exit 0).
+Verified: `swift run Stage1TestRunner` (304/304 passed), `background_test.js` (29/29 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Commit and push `feat/telegram-bridge`, deliver final closeout report in Traditional Chinese, and prepare for M2 Release Candidate Seal in fresh session.
+Blockers: none
+
+[RELEASE] Lifecycle Truth, Quota Reset Preservation & Root UX Closeout — antigravity — 2026-08-23T13:20:00+02:00
 

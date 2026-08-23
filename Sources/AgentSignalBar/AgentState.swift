@@ -164,39 +164,49 @@ public enum AgentStatus: String, Codable, Sendable {
     }
 }
 
+public enum MonitorHealth: String, Codable, Sendable {
+    case connected = "connected"
+    case disconnected = "disconnected"
+    case starting = "starting"
+}
+
 public enum EffectiveDisplayStatus: String, Codable, Sendable {
     case blocked = "blocked"
     case working = "working"
     case done = "done"
     case quotaRestored = "quotaRestored"
     case quotaExhausted = "quotaExhausted"
+    case monitorUnavailable = "monitorUnavailable"
     case idle = "idle"
     case off = "off"
 
     public func badge(theme: BadgeThemeMode = .classic, thinkingDuration: TimeInterval? = nil, overworkThresholdMinutes: Int = 10) -> String {
+        let customBadges = ConfigManager.shared.config.statusBadges
         switch theme {
         case .classic:
             switch self {
-            case .off: return "⚫"
-            case .idle, .quotaRestored: return "⚪"
-            case .working: return "🟡"
-            case .done: return "🟢"
-            case .blocked: return "🔴"
-            case .quotaExhausted: return "⦸"
+            case .off: return customBadges.off.classic
+            case .idle, .quotaRestored: return customBadges.idle.classic
+            case .working: return customBadges.working.classic
+            case .done: return customBadges.done.classic
+            case .blocked: return customBadges.blocked.classic
+            case .quotaExhausted: return customBadges.quotaDepleted?.classic ?? "⦸"
+            case .monitorUnavailable: return "⚠️"
             }
         case .funEmoji:
             switch self {
-            case .off: return "😴"
-            case .idle: return "🫥"
+            case .off: return customBadges.off.funEmoji
+            case .idle: return customBadges.idle.funEmoji
             case .quotaRestored: return "🥱"
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
-                    return "🥵"
+                    return customBadges.overworking?.funEmoji ?? "🥵"
                 }
-                return "🤔"
-            case .done: return "🐶"
-            case .blocked: return "🥶"
-            case .quotaExhausted: return "🤯"
+                return customBadges.working.funEmoji
+            case .done: return customBadges.done.funEmoji
+            case .blocked: return customBadges.blocked.funEmoji
+            case .quotaExhausted: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
+            case .monitorUnavailable: return "⚠️"
             }
         }
     }
@@ -214,6 +224,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         case .done: color = NSColor.systemGreen
         case .blocked: color = NSColor.systemRed
         case .quotaExhausted: color = NSColor.systemOrange
+        case .monitorUnavailable: color = NSColor.systemYellow
         }
 
         let rect = NSRect(x: 1, y: 1, width: 10, height: 10)
@@ -235,6 +246,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         case .done: return "NEW Output Ready!"
         case .blocked: return "ATTENTION NEEDED!"
         case .quotaExhausted: return "Quota Exhausted"
+        case .monitorUnavailable: return "Monitor Not Connected"
         }
     }
 
@@ -368,6 +380,7 @@ public struct AgentInfo: Codable {
     public var revision: Int?
     public var turnId: String?
     public var isQuotaRestored: Bool
+    public var monitorHealth: MonitorHealth
 
     public init(
         id: AgentID,
@@ -386,7 +399,8 @@ public struct AgentInfo: Codable {
         openTabs: [ChatGPTTabInfo] = [],
         revision: Int? = nil,
         turnId: String? = nil,
-        isQuotaRestored: Bool = false
+        isQuotaRestored: Bool = false,
+        monitorHealth: MonitorHealth = .connected
     ) {
         self.id = id
         self.status = status
@@ -405,11 +419,15 @@ public struct AgentInfo: Codable {
         self.revision = revision
         self.turnId = turnId
         self.isQuotaRestored = isQuotaRestored
+        self.monitorHealth = monitorHealth
     }
 
     public var effectiveDisplayStatus: EffectiveDisplayStatus {
         if status == .off {
             return .off
+        }
+        if id == .chatgpt && monitorHealth == .disconnected {
+            return .monitorUnavailable
         }
         if status == .blocked {
             return .blocked
@@ -448,6 +466,91 @@ public final class AgentStore: @unchecked Sendable {
 
     private var lastSeenAntigravityHookFingerprint: String = ""
     private var lastSeenAntigravityHookTime: Date = .distantPast
+
+    private var lastChatGPTHeartbeat: Date? = nil
+    private var appStartTime: Date = Date()
+    public var startupGraceSeconds: TimeInterval = 60.0
+    public var heartbeatLeaseSeconds: TimeInterval = 60.0
+
+    public func recordChatGPTHeartbeat(date: Date = Date()) {
+        lock.lock()
+        lastChatGPTHeartbeat = date
+        var info = states[.chatgpt] ?? AgentInfo(id: .chatgpt, status: .off)
+        let oldHealth = info.monitorHealth
+        info.monitorHealth = .connected
+        states[.chatgpt] = info
+        let changed = (oldHealth != .connected)
+        lock.unlock()
+
+        if changed {
+            TelegramBridge.shared.handleChatGPTMonitorHealthChange(oldHealth: oldHealth, newHealth: .connected)
+            MenuBarManager.shared.scheduleTitleAndMenuUpdate()
+        }
+    }
+
+    public func checkChatGPTMonitorHealth(isChromeRunning: Bool, isMonitored: Bool, now: Date = Date()) -> MonitorHealth {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isMonitored else {
+            return .connected
+        }
+
+        guard isChromeRunning else {
+            return .connected
+        }
+
+        if let lastHb = lastChatGPTHeartbeat {
+            let elapsed = now.timeIntervalSince(lastHb)
+            if elapsed > heartbeatLeaseSeconds {
+                return .disconnected
+            } else {
+                return .connected
+            }
+        } else {
+            let elapsedSinceStart = now.timeIntervalSince(appStartTime)
+            if elapsedSinceStart < startupGraceSeconds {
+                return .starting
+            } else {
+                return .disconnected
+            }
+        }
+    }
+
+    public func setChatGPTMonitorHealth(_ health: MonitorHealth) {
+        lock.lock()
+        var info = states[.chatgpt] ?? AgentInfo(id: .chatgpt, status: .off)
+        let oldHealth = info.monitorHealth
+        info.monitorHealth = health
+        states[.chatgpt] = info
+        let changed = (oldHealth != health)
+        lock.unlock()
+
+        if changed {
+            TelegramBridge.shared.handleChatGPTMonitorHealthChange(oldHealth: oldHealth, newHealth: health)
+            MenuBarManager.shared.scheduleTitleAndMenuUpdate()
+        }
+    }
+
+    public func isChatGPTMonitorDisconnected() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return (states[.chatgpt]?.monitorHealth == .disconnected)
+    }
+
+    public func resetChatGPTMonitorHealthForTesting(appStartTime: Date? = nil, lastHeartbeat: Date? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let st = appStartTime {
+            self.appStartTime = st
+        } else {
+            self.appStartTime = Date()
+        }
+        self.lastChatGPTHeartbeat = lastHeartbeat
+        var info = states[.chatgpt] ?? AgentInfo(id: .chatgpt, status: .off)
+        info.monitorHealth = (lastHeartbeat != nil) ? .connected : .starting
+        states[.chatgpt] = info
+    }
 
     public var onStateChanged: ((AgentID, AgentStatus, AgentStatus, String?) -> Void)? {
         get { nil }
@@ -1678,7 +1781,7 @@ public final class AgentStore: @unchecked Sendable {
             }
             lock.unlock()
             return false
-        } else if eventType == "assistant.turn_end" || isStopHook {
+        } else if eventType == "assistant.turn_end" {
             session.status = .done
             session.attentionReason = nil
             if let dMs = durationMs, dMs > 0 {
@@ -1687,8 +1790,23 @@ public final class AgentStore: @unchecked Sendable {
                 session.lastDurationSeconds = now.timeIntervalSince(start)
             }
             session.thinkingStartTime = nil
-            session.sourceEvidence = "Copilot Event: \(eventType)\(hookType != nil ? " (\(hookType!))" : "")"
-            session.sensorReason = session.sourceEvidence
+            session.sourceEvidence = "Copilot Event: Turn complete (assistant.turn_end)"
+            session.sensorReason = "Copilot Event: Turn complete (assistant.turn_end)"
+            currentSessions[sessionId] = session
+            trackedSessions[.copilot] = currentSessions
+            lock.unlock()
+
+            syncSessions(for: .copilot, activeSessions: Array(currentSessions.values), processRunning: true)
+            return true
+        } else if isStopHook {
+            session.status = .idle
+            session.attentionReason = nil
+            if let start = session.thinkingStartTime {
+                session.lastDurationSeconds = now.timeIntervalSince(start)
+            }
+            session.thinkingStartTime = nil
+            session.sourceEvidence = "Copilot Event: Stopped / Cancelled (\(hookType ?? "agentStop"))"
+            session.sensorReason = "Copilot Event: Stopped / Cancelled (\(hookType ?? "agentStop"))"
             currentSessions[sessionId] = session
             trackedSessions[.copilot] = currentSessions
             lock.unlock()
@@ -2050,6 +2168,9 @@ public final class AgentStore: @unchecked Sendable {
     public static func canonicalPriorityRank(for info: AgentInfo) -> Int {
         if info.effectiveDisplayStatus == .blocked {
             return 100
+        }
+        if info.effectiveDisplayStatus == .monitorUnavailable {
+            return 35 // Surfaces warning if all else is idle, but respects real active working/done
         }
         if info.status == .done && info.availability != .quotaExhausted {
             return 80

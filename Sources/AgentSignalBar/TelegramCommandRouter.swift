@@ -91,6 +91,11 @@ public final class TelegramCommandRouter: @unchecked Sendable {
         } else {
             for agent in monitored {
                 let info = store.getStatus(for: agent)
+                if agent == .chatgpt && info.effectiveDisplayStatus == .monitorUnavailable {
+                    lines.append("⚠️ \(agent.displayName) — Monitor unavailable")
+                    continue
+                }
+
                 let badge = info.effectiveDisplayStatus.badge(theme: theme)
                 var statusText = info.effectiveDisplayStatus.rawValue.capitalized
 

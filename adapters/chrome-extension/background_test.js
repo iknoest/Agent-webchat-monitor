@@ -1,5 +1,17 @@
 const assert = require('assert');
-const { computeOverallStatus, processRawSignal, reinjectContentScriptsInExistingTabs, tabRegistry } = require('./background.js');
+const {
+    computeOverallStatus,
+    processRawSignal,
+    reinjectContentScriptsInExistingTabs,
+    tabRegistry,
+    aggregateAndSend,
+    getLastSentPayloadJSON,
+    getIsFetchInFlight,
+    getPendingPayloadJSON,
+    getLastSuccessfulSendTimestamp,
+    setLastSuccessfulSendTimestamp,
+    resetLastSentPayload
+} = require('./background.js');
 
 console.log('🧪 Running Retained Production JS Multi-Tab Aggregate Tests...');
 
@@ -648,6 +660,44 @@ function test28_FetchInterceptorSingletonGuardAndSensorReason() {
     console.log('✅ Test 28 Passed: Main-world fetch interceptor singleton guard & sensorReason propagation');
 }
 
+// 29. Periodic heartbeat is sent when payload is unchanged after lease interval (25s)
+async function test29_PeriodicHeartbeatSentWhenPayloadUnchangedAfterLeaseInterval() {
+    resetState();
+    resetLastSentPayload();
+
+    let fetchCount = 0;
+    global.fetch = async (url, opts) => {
+        fetchCount++;
+        return { ok: true, json: async () => ({}) };
+    };
+    global.chrome = {
+        tabs: {
+            query: async () => [{ id: 9901, title: 'Chat', url: 'https://chatgpt.com/c/9901', active: true }]
+        }
+    };
+
+    // First send: should fetch
+    const res1 = await aggregateAndSend();
+    assert.strictEqual(res1, true);
+    assert.strictEqual(fetchCount, 1);
+
+    // Immediate second send with same tabs/payload: suppressed because within 25s
+    const res2 = await aggregateAndSend();
+    assert.strictEqual(res2, false);
+    assert.strictEqual(fetchCount, 1);
+
+    // Fast-forward timestamp by 26 seconds (exceeding 25s heartbeat lease):
+    const currentSent = getLastSuccessfulSendTimestamp();
+    setLastSuccessfulSendTimestamp(currentSent - 26000);
+
+    // Third send with same tabs: should send heartbeat because lease interval elapsed!
+    const res3 = await aggregateAndSend();
+    assert.strictEqual(res3, true);
+    assert.strictEqual(fetchCount, 2);
+
+    console.log('✅ Test 29 Passed: Periodic heartbeat sent when payload unchanged after lease interval');
+}
+
 async function runAll() {
     test1_ActiveTabIdlePlusDoneTabProducesAggregateDone();
     test2_SwitchingActiveTabsLeavesAggregateUnchanged();
@@ -677,10 +727,8 @@ async function runAll() {
     test26_CleanResponseCompletionClearsPriorErrors();
     test27_TabNavigationResetsSessionIdentityAndStatus();
     test28_FetchInterceptorSingletonGuardAndSensorReason();
-    console.log('🎉 All 28 Multi-Tab, State Consistency & Raw Sensor Repair JS Stress Tests Passed!');
+    await test29_PeriodicHeartbeatSentWhenPayloadUnchangedAfterLeaseInterval();
+    console.log('🎉 All 29 Multi-Tab, State Consistency, Raw Sensor Repair & Heartbeat Lease JS Stress Tests Passed!');
 }
 
 runAll();
-
-
-

@@ -474,6 +474,10 @@ public final class HTTPServer: @unchecked Sendable {
             return false
         }
 
+        if agent == .chatgpt {
+            AgentStore.shared.recordChatGPTHeartbeat()
+        }
+
         AgentStore.shared.updateStatus(
             for: agent,
             status: status,

@@ -517,6 +517,34 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
         let sessionResetText = ClaudeLocalQuotaConnector.formatResetText(from: fhResetsAt, now: now)
         let weeklyResetText = ClaudeLocalQuotaConnector.formatResetText(from: sdResetsAt, now: now)
 
+        // Cache authoritative first-party reset observations
+        lock.lock()
+        if let fhDate = ClaudeLocalQuotaConnector.parseISODate(fhResetsAt), fhDate > now {
+            cached5hReset = ClaudeResetObservation(
+                observedAt: now,
+                relativeResetText: sessionResetText ?? "",
+                relativeDurationSeconds: fhDate.timeIntervalSince(now),
+                isApproximate: false,
+                derivedAbsoluteReset: fhDate,
+                formattedResetText: sessionResetText ?? "",
+                source: "claude_oauth_api",
+                authority: "live_first_party"
+            )
+        }
+        if let sdDate = ClaudeLocalQuotaConnector.parseISODate(sdResetsAt), sdDate > now {
+            cachedWeeklyReset = ClaudeResetObservation(
+                observedAt: now,
+                relativeResetText: weeklyResetText ?? "",
+                relativeDurationSeconds: sdDate.timeIntervalSince(now),
+                isApproximate: false,
+                derivedAbsoluteReset: sdDate,
+                formattedResetText: weeklyResetText ?? "",
+                source: "claude_oauth_api",
+                authority: "live_first_party"
+            )
+        }
+        lock.unlock()
+
         // Parse optional model specific limits
         var modelFamilies: [ModelFamilyQuota] = []
         if let sonnet = json["seven_day_sonnet"] as? [String: Any],
@@ -575,12 +603,15 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
         let now = Date()
         let isStale = sampleDate != nil && now.timeIntervalSince(sampleDate!) > 86400
 
+        // Preserve still-valid authoritative reset observations across history fallback
+        let (cachedSessionReset, cachedWeeklyReset) = getResetMetadata()
+
         return AgentUsageData(
             agent: .claude,
             sessionLimitPercent: fh,
-            sessionResetText: nil, // No fabricated reset time from local history
+            sessionResetText: cachedSessionReset,
             weeklyLimitPercent: sd,
-            weeklyResetText: nil,
+            weeklyResetText: cachedWeeklyReset,
             isPercentUsed: true,
             isLiveSource: true,
             quotaSource: "claude_plan_usage_history",
@@ -703,12 +734,18 @@ public final class ClaudeLocalQuotaConnector: @unchecked Sendable {
         guard sessionPercent != nil || weeklyPercent != nil else { return nil }
         let now = Date()
 
+        var finalSessionReset = sessionReset
+        var finalWeeklyReset = weeklyReset
+        let (cachedSessionReset, cachedWeeklyReset) = getResetMetadata()
+        if finalSessionReset == nil { finalSessionReset = cachedSessionReset }
+        if finalWeeklyReset == nil { finalWeeklyReset = cachedWeeklyReset }
+
         return AgentUsageData(
             agent: .claude,
             sessionLimitPercent: sessionPercent ?? 0.0,
-            sessionResetText: sessionReset,
+            sessionResetText: finalSessionReset,
             weeklyLimitPercent: weeklyPercent ?? 0.0,
-            weeklyResetText: weeklyReset,
+            weeklyResetText: finalWeeklyReset,
             isPercentUsed: true,
             isLiveSource: true,
             quotaSource: "claude_cli_usage",

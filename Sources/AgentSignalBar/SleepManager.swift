@@ -88,7 +88,16 @@ public final class SleepManager: @unchecked Sendable {
 
         // Quota exhaustion is provider availability: providers with exhausted quota CANNOT execute
         // and must NOT independently keep Smart Auto awake or masquerade as a user-action gate.
-        let availableMonitored = monitored.filter { AgentStore.shared.getAvailability(for: $0) != .quotaExhausted }
+        // Also: disconnected ChatGPT monitor must NOT assert keep-awake.
+        let availableMonitored = monitored.filter { agent in
+            if AgentStore.shared.getAvailability(for: agent) == .quotaExhausted {
+                return false
+            }
+            if agent == .chatgpt && AgentStore.shared.isChatGPTMonitorDisconnected() {
+                return false
+            }
+            return true
+        }
 
         // 1. Check child sessions of available monitored providers
         let allSessions = AgentStore.shared.getAllSessions().filter { availableMonitored.contains($0.provider) }

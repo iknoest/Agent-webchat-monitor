@@ -341,6 +341,8 @@ async function reinjectContentScriptsInExistingTabs() {
 let isFetchInFlight = false;
 let pendingPayloadJSON = null;
 let retryTimer = null;
+let lastSuccessfulSendTimestamp = 0;
+const HEARTBEAT_INTERVAL_MS = 25000;
 
 async function aggregateAndSend() {
     try {
@@ -360,8 +362,10 @@ async function aggregateAndSend() {
         };
 
         const payloadJSON = JSON.stringify(payload);
-        if (payloadJSON === lastSentPayloadJSON && !pendingPayloadJSON) {
-            return false; // Suppress redundant HTTP publication of already delivered payload
+        const isHeartbeatDue = (Date.now() - lastSuccessfulSendTimestamp) >= HEARTBEAT_INTERVAL_MS;
+
+        if (payloadJSON === lastSentPayloadJSON && !pendingPayloadJSON && !isHeartbeatDue) {
+            return false; // Suppress redundant HTTP publication of already delivered payload if heartbeat not due
         }
 
         if (isFetchInFlight) {
@@ -400,6 +404,7 @@ async function executeFetchPayload(payloadJSON) {
 
         if (res && res.ok) {
             lastSentPayloadJSON = payloadJSON;
+            lastSuccessfulSendTimestamp = Date.now();
             const nextPending = pendingPayloadJSON;
             pendingPayloadJSON = null;
             isFetchInFlight = false;
@@ -446,10 +451,13 @@ if (typeof module !== 'undefined' && module.exports) {
         getLastSentPayloadJSON: () => lastSentPayloadJSON,
         getIsFetchInFlight: () => isFetchInFlight,
         getPendingPayloadJSON: () => pendingPayloadJSON,
+        getLastSuccessfulSendTimestamp: () => lastSuccessfulSendTimestamp,
+        setLastSuccessfulSendTimestamp: (ts) => { lastSuccessfulSendTimestamp = ts; },
         resetLastSentPayload: () => {
             lastSentPayloadJSON = '';
             isFetchInFlight = false;
             pendingPayloadJSON = null;
+            lastSuccessfulSendTimestamp = 0;
             if (retryTimer) {
                 clearTimeout(retryTimer);
                 retryTimer = null;
@@ -537,6 +545,15 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
 
         chrome.tabs.onActivated.addListener(() => {
             aggregateAndSend();
+        });
+    }
+
+    if (typeof chrome !== 'undefined' && chrome.alarms) {
+        chrome.alarms.create('agentSignalBarHeartbeat', { periodInMinutes: 0.4 });
+        chrome.alarms.onAlarm.addListener((alarm) => {
+            if (alarm && alarm.name === 'agentSignalBarHeartbeat') {
+                aggregateAndSend();
+            }
         });
     }
 

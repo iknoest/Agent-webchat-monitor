@@ -59,6 +59,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
     private var lastRebuildTime: Date = Date.distantPast
     private var pendingThrottledTimer: Timer?
 
+    public func buildMenuForTesting() -> NSMenu {
+        let testMenu = NSMenu()
+        self.menu = testMenu
+        rebuildMenu()
+        return testMenu
+    }
+
     private func cachedStatusDotImage(for status: AgentStatus) -> NSImage {
         if let cached = imageCache[status] {
             return cached
@@ -118,6 +125,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         let idleBadge = EffectiveDisplayStatus.idle.badge(theme: theme)
         items.append((.idle, idleBadge, "\(idleBadge) Idle / Standby", "Agent process is running and standby for input"))
+
+        let warnBadge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: theme)
+        items.append((.monitorUnavailable, warnBadge, "\(warnBadge) Monitor Not Connected / Sensor Unavailable", "ChatGPT Web monitoring extension is not reporting while Chrome is open"))
 
         let offBadge = EffectiveDisplayStatus.off.badge(theme: theme)
         items.append((.off, offBadge, "\(offBadge) App Closed / Process Terminated", "Agent process or browser tab is not running"))
@@ -339,7 +349,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         return "last known · \(timeStr)"
     }
 
-    private func rebuildMenu() {
+    public func rebuildMenu() {
         guard let menu = menu else { return }
         menu.removeAllItems()
 
@@ -465,7 +475,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 displayStatusLabel = statusLabel
             }
             let title: String
-            if displayStatus == .quotaRestored {
+            if agent == .chatgpt && displayStatus == .monitorUnavailable {
+                title = "⚠️ \(agent.displayName) — Monitor Not Connected"
+            } else if displayStatus == .quotaRestored {
                 title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [Quota Restored] [Idle]"
             } else {
                 title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [\(displayStatusLabel)]\(durationTag)"
@@ -480,6 +492,22 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let submenu = NSMenu()
 
             if agent == .chatgpt {
+                if displayStatus == .monitorUnavailable {
+                    let warnItem = NSMenuItem(title: "⚠️ Web Monitor Not Connected", action: nil, keyEquivalent: "")
+                    warnItem.isEnabled = false
+                    submenu.addItem(warnItem)
+
+                    let descItem = NSMenuItem(title: "   Chrome extension is not reporting", action: nil, keyEquivalent: "")
+                    descItem.isEnabled = false
+                    submenu.addItem(descItem)
+
+                    let openExtItem = NSMenuItem(title: "   Open Chrome Extensions…", action: #selector(openChromeExtensionsClicked(_:)), keyEquivalent: "")
+                    openExtItem.target = self
+                    submenu.addItem(openExtItem)
+
+                    submenu.addItem(NSMenuItem.separator())
+                }
+
                 if !info.openTabs.isEmpty {
                     let tabsHeader = NSMenuItem(title: "Open ChatGPT Chrome Tabs (\(info.openTabs.count)):", action: nil, keyEquivalent: "")
                     tabsHeader.isEnabled = false
@@ -502,7 +530,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
                         submenu.addItem(tabSwitchItem)
                     }
-                } else {
+                } else if displayStatus != .monitorUnavailable {
                     let noTabsItem = NSMenuItem(title: "No open ChatGPT tabs in Chrome", action: nil, keyEquivalent: "")
                     noTabsItem.isEnabled = false
                     submenu.addItem(noTabsItem)
@@ -752,6 +780,23 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         sleepMainItem.submenu = sleepSubmenu
         menu.addItem(sleepMainItem)
 
+        // Operational Controls: Telegram Alerts (Root Menu Sibling of Smart Keep-Awake and Settings)
+        let tgConfig = EnvConfigLoader.shared.getTelegramConfig()
+        let isTelegramEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        let tgTitle: String
+        if !tgConfig.isConfigured {
+            tgTitle = "Telegram Alerts: Not Configured"
+        } else if isTelegramEnabled {
+            tgTitle = "Telegram Alerts: On"
+        } else {
+            tgTitle = "Telegram Alerts: Off"
+        }
+        let telegramItem = NSMenuItem(title: tgTitle, action: tgConfig.isConfigured ? #selector(toggleTelegramAlertsClicked) : nil, keyEquivalent: "")
+        telegramItem.target = self
+        telegramItem.state = (isTelegramEnabled && tgConfig.isConfigured) ? .on : .off
+        telegramItem.isEnabled = tgConfig.isConfigured
+        menu.addItem(telegramItem)
+
         // 4. Consolidated Settings & Preferences Submenu
         let settingsItem = NSMenuItem(title: "Settings & Preferences...", action: nil, keyEquivalent: ",")
         let settingsSubmenu = NSMenu()
@@ -837,17 +882,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         alertsItem.submenu = alertsSubmenu
         settingsSubmenu.addItem(alertsItem)
 
-        // 4D. Telegram Alerts Direct Toggle (First-Level under Settings)
-        let tgConfig = EnvConfigLoader.shared.getTelegramConfig()
-        let isTelegramEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
-        let tgTitle = tgConfig.isConfigured ? "Telegram Alerts" : "Telegram Alerts (Not Configured in .env)"
-        let telegramItem = NSMenuItem(title: tgTitle, action: tgConfig.isConfigured ? #selector(toggleTelegramAlertsClicked) : nil, keyEquivalent: "")
-        telegramItem.target = self
-        telegramItem.state = (isTelegramEnabled && tgConfig.isConfigured) ? .on : .off
-        telegramItem.isEnabled = tgConfig.isConfigured
-        settingsSubmenu.addItem(telegramItem)
-
-        // 4E. Appearance Submenu
+        // 4D. Appearance Submenu
         let appearanceItem = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
         let appearanceSubmenu = NSMenu()
 
@@ -889,25 +924,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         themeMenuItem.submenu = themeSubmenu
         appearanceSubmenu.addItem(themeMenuItem)
-
-        // Custom Icons Submenu
-        let customIconsItem = NSMenuItem(title: "Custom Icons", action: nil, keyEquivalent: "")
-        let customIconsSubmenu = NSMenu()
-
-        let openConfigItem = NSMenuItem(title: "Edit Config… (config.json)", action: #selector(openConfigClicked), keyEquivalent: "")
-        openConfigItem.target = self
-        customIconsSubmenu.addItem(openConfigItem)
-
-        let openIconsFolderItem = NSMenuItem(title: "Open Icons Folder (~/.config/AgentSignalBar/icons)", action: #selector(openIconsFolderClicked), keyEquivalent: "")
-        openIconsFolderItem.target = self
-        customIconsSubmenu.addItem(openIconsFolderItem)
-
-        let reloadConfigItem = NSMenuItem(title: "Reload Icons", action: #selector(reloadConfigClicked), keyEquivalent: "")
-        reloadConfigItem.target = self
-        customIconsSubmenu.addItem(reloadConfigItem)
-
-        customIconsItem.submenu = customIconsSubmenu
-        appearanceSubmenu.addItem(customIconsItem)
 
         appearanceItem.submenu = appearanceSubmenu
         settingsSubmenu.addItem(appearanceItem)
@@ -1098,20 +1114,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func openConfigClicked() {
-        print("🎨 Opening config.json in TextEdit...")
-        ConfigManager.shared.openConfigFileInEditor()
-    }
-
-    @objc private func openIconsFolderClicked() {
-        print("📁 Opening icons directory in Finder...")
-        ConfigManager.shared.openIconsFolder()
-    }
-
-    @objc private func reloadConfigClicked() {
-        print("🔄 Reloading config.json...")
-        ConfigManager.shared.loadConfig()
-        updateTitleAndMenu()
+    @objc public func openChromeExtensionsClicked(_ sender: Any?) {
+        print("🧩 Opening Chrome Extensions page...")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-a", "Google Chrome", "chrome://extensions"]
+        try? task.run()
     }
 
     @objc private func toggleNotificationsClicked() {
