@@ -1139,4 +1139,28 @@ Blockers: none
 
 [RELEASE] Closed/Off Provider Space Optimization — antigravity — 2026-08-23T00:25:00+02:00
 
+## 2026-08-23 — antigravity — macos
+Status: DONE
+Phase: Codex Multi-Session Lifecycle Reconciliation & Subagent Filtering
+Done:
+1. Codex Multi-Session Root Cause Analysis & Subagent Filtering:
+   - Root cause identified: Codex Desktop tool executions / approval checks spawn internal sub-threads (`thread_source = 'subagent'`) with empty `name`, resolving their title to the repository folder (`Jobsearcher`). These internal threads lacked terminal rows in `thread_turns`, remaining stuck in `.working` state in `AgentStore` and preventing parent Codex from reaching `Done`.
+   - Updated `AutoMonitor.swift`'s `fetchCodexThreads(limit: 10)` to filter `COALESCE(thread_source, 'user') != 'subagent'` so internal review/approval threads are never treated as workspace conversation sessions.
+2. Authoritative Multi-Session Reconciliation:
+   - Implemented `reconcileCodexSessions(validThreadIds:historyTurns:)` in `AgentState.swift`: purges obsolete/subagent threads from `trackedSessions[.codex]` and reconciles inProgress sessions against `thread_turns` authoritative `completed` / `failed` states.
+   - Added completed turn-ID guard in `handleCodexTurnState`: prevents completed turns from falsely regressing back to `.working` upon subsequent polls.
+   - Verified that genuine background tasks remain `.working` indefinitely without arbitrary timeout pruning.
+3. Verification:
+   - Added Tests 268 to 277 in `Stage1TestRunner` (`277 / 277 PASSED`).
+   - Executed `swift test` (clean exit 0).
+   - Built release bundle `./build_app.sh` (clean exit 0).
+   - Validated formatting with `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (277/277 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), app relaunched cleanly.
+Next: Report runtime investigation and resolution to Ava.
+Blockers: none
+
+[RELEASE] Codex Multi-Session Lifecycle Reconciliation & Subagent Filtering — antigravity — 2026-08-23T11:55:00+02:00
+
+
 

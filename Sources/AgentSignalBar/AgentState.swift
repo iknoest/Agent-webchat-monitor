@@ -1335,6 +1335,13 @@ public final class AgentStore: @unchecked Sendable {
         }
 
         if status == .working {
+            // Guard: If this exact session and turnId has already completed (.done) via rollout or history reconciliation,
+            // do NOT regress back to .working unless a NEW turnId is provided!
+            if session.status == .done, let curTurnId = session.turnId, let incomingTurnId = turnId, curTurnId == incomingTurnId {
+                lock.unlock()
+                return true
+            }
+
             session.status = .working
             session.turnId = turnId
             session.thinkingStartTime = thinkingStartTime ?? session.thinkingStartTime
@@ -1469,6 +1476,71 @@ public final class AgentStore: @unchecked Sendable {
         default:
             lock.unlock()
             return false
+        }
+    }
+
+    public func reconcileCodexSessions(
+        validThreadIds: Set<String>,
+        historyTurns: [String: AutoMonitor.CodexHistoryTurnInfo]? = nil
+    ) {
+        lock.lock()
+        var currentSessions = trackedSessions[.codex] ?? [:]
+        var changed = false
+        let now = Date()
+
+        for (sessionId, session) in currentSessions {
+            // 1. If session is a synthetic test session, ignore here (handled in unit tests)
+            if AgentStore.isSyntheticTestSessionId(sessionId) {
+                continue
+            }
+
+            // 2. If session is not among valid top-level threads (e.g. subagents, deleted, archived), remove it!
+            if !validThreadIds.contains(sessionId) {
+                currentSessions.removeValue(forKey: sessionId)
+                changed = true
+                continue
+            }
+
+            // 3. If session is currently marked .working, verify with authoritative history turns
+            if session.status == .working, let turns = historyTurns, let turnInfo = turns[sessionId] {
+                if turnInfo.status == "completed" || turnInfo.completedAt != nil {
+                    var updated = session
+                    updated.status = .done
+                    updated.turnId = turnInfo.turnId
+                    updated.attentionReason = nil
+                    if let dMs = turnInfo.durationMs, dMs > 0 {
+                        updated.lastDurationSeconds = dMs / 1000.0
+                    } else if let start = session.thinkingStartTime {
+                        updated.lastDurationSeconds = now.timeIntervalSince(start)
+                    }
+                    updated.thinkingStartTime = nil
+                    updated.sourceEvidence = "Codex History Reconciliation: completed"
+                    updated.sensorReason = "Codex History Reconciliation: completed"
+                    updated.lastUpdated = now
+                    currentSessions[sessionId] = updated
+                    changed = true
+                } else if turnInfo.status == "failed" {
+                    var updated = session
+                    updated.status = .idle
+                    updated.turnId = turnInfo.turnId
+                    updated.attentionReason = nil
+                    updated.thinkingStartTime = nil
+                    updated.sourceEvidence = "Codex History Reconciliation: failed"
+                    updated.sensorReason = "Codex History Reconciliation: failed"
+                    updated.lastUpdated = now
+                    currentSessions[sessionId] = updated
+                    changed = true
+                }
+            }
+        }
+
+        if changed {
+            trackedSessions[.codex] = currentSessions
+        }
+        lock.unlock()
+
+        if changed {
+            syncSessions(for: .codex, activeSessions: Array(currentSessions.values), processRunning: true)
         }
     }
 

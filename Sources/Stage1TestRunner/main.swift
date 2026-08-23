@@ -5380,4 +5380,159 @@ runTest("267. Menu Bar Space: Dropdown menu continues showing Closed provider st
     try assert(ConfigManager.shared.isAgentMonitored(.codex))
 }
 
-print("🎉 All 267 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX & Closed-Provider Space Optimization Tests Passed!")
+// 268. Codex Multi-Session: Two sessions (A Working, B Done) -> Parent is Working
+runTest("268. Codex Multi-Session: Two sessions (A Working, B Done) -> Parent is Working") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    let sessA = AgentSessionInfo(provider: .codex, sessionId: "thread_codex_A", title: "Refactor API", status: .working, turnId: "turn_A_1", thinkingStartTime: Date().addingTimeInterval(-60))
+    let sessB = AgentSessionInfo(provider: .codex, sessionId: "thread_codex_B", title: "Update Docs", status: .done, turnId: "turn_B_1", lastDurationSeconds: 45)
+
+    store.syncSessions(for: .codex, activeSessions: [sessA, sessB], processRunning: true)
+    let parent = store.getStatus(for: .codex)
+    try assert(parent.status == .working, "Parent must be working when at least one session is working")
+    try assert(parent.thinkingStartTime != nil, "Parent must have thinking start time")
+}
+
+// 269. Codex Multi-Session: A receives authoritative terminal evidence -> Parent transitions to Done
+runTest("269. Codex Multi-Session: A receives authoritative terminal evidence -> Parent transitions to Done") {
+    let store = AgentStore.shared
+    let sessA = AgentSessionInfo(provider: .codex, sessionId: "thread_codex_A", title: "Refactor API", status: .working, turnId: "turn_A_1", thinkingStartTime: Date().addingTimeInterval(-60))
+    let sessB = AgentSessionInfo(provider: .codex, sessionId: "thread_codex_B", title: "Update Docs", status: .done, turnId: "turn_B_1", lastDurationSeconds: 45)
+    store.syncSessions(for: .codex, activeSessions: [sessA, sessB], processRunning: true)
+
+    // A receives authoritative completion
+    let turnACompleted = AutoMonitor.CodexHistoryTurnInfo(threadId: "thread_codex_A", turnId: "turn_A_1", status: "completed", startedAt: 1787400000, completedAt: 1787400060, durationMs: 60000)
+    store.reconcileCodexSessions(validThreadIds: ["thread_codex_A", "thread_codex_B"], historyTurns: ["thread_codex_A": turnACompleted])
+
+    let parent = store.getStatus(for: .codex)
+    try assert(parent.status == .done, "Parent must transition to Done when all active sessions complete")
+    try assert(parent.thinkingStartTime == nil, "Parent thinking duration must stop")
+}
+
+// 270. Codex Multi-Session: Historical inProgress + authoritative terminal evidence reconciles away from Working
+runTest("270. Codex Multi-Session: Historical inProgress + authoritative terminal evidence reconciles away from Working") {
+    let store = AgentStore.shared
+    _ = store.handleCodexTurnState(threadId: "thread_codex_stale_1", title: "Old Task", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_old_1", isTestMode: true)
+
+    let sessBefore = store.getSessions(for: .codex).first(where: { $0.sessionId == "thread_codex_stale_1" })
+    try assert(sessBefore?.status == .working)
+
+    let terminalTurn = AutoMonitor.CodexHistoryTurnInfo(threadId: "thread_codex_stale_1", turnId: "turn_old_1", status: "completed", startedAt: 1787400000, completedAt: 1787400500, durationMs: 500000)
+    store.reconcileCodexSessions(validThreadIds: ["thread_codex_stale_1"], historyTurns: ["thread_codex_stale_1": terminalTurn])
+
+    let sessAfter = store.getSessions(for: .codex).first(where: { $0.sessionId == "thread_codex_stale_1" })
+    try assert(sessAfter?.status == .done, "Stale inProgress session must reconcile to Done upon authoritative terminal evidence")
+    try assert(sessAfter?.thinkingStartTime == nil)
+}
+
+// 271. Codex Multi-Session: Active inProgress preserved indefinitely without age timeout
+runTest("271. Codex Multi-Session: Active inProgress preserved indefinitely without age timeout") {
+    let store = AgentStore.shared
+    let oldStartTime = Date().addingTimeInterval(-7200) // 2 hours ago
+    _ = store.handleCodexTurnState(threadId: "thread_codex_long_run", title: "Heavy Migration", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_long_1", thinkingStartTime: oldStartTime, isTestMode: true)
+
+    let inProgressTurn = AutoMonitor.CodexHistoryTurnInfo(threadId: "thread_codex_long_run", turnId: "turn_long_1", status: "inProgress", startedAt: Int64(oldStartTime.timeIntervalSince1970))
+    store.reconcileCodexSessions(validThreadIds: ["thread_codex_long_run"], historyTurns: ["thread_codex_long_run": inProgressTurn])
+    store.pruneStaleCodexSessions()
+
+    let sess = store.getSessions(for: .codex).first(where: { $0.sessionId == "thread_codex_long_run" })
+    try assert(sess?.status == .working, "Genuinely active 2-hour task must remain Working indefinitely without timeout pruning")
+    try assert(sess?.thinkingStartTime == oldStartTime)
+}
+
+// 272. Codex Multi-Session: User switches from A to B while A runs -> A remains Working
+runTest("272. Codex Multi-Session: User switches from A to B while A runs -> A remains Working") {
+    let store = AgentStore.shared
+    _ = store.handleCodexTurnState(threadId: "thread_codex_bg", title: "Background Job", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_bg_1", isTestMode: true)
+    _ = store.handleCodexTurnState(threadId: "thread_codex_fg", title: "Foreground Chat", cwd: "/Users/ava/Projects/Jobsearcher", status: .idle, turnId: nil, isTestMode: true)
+
+    let sessions = store.getSessions(for: .codex)
+    let bgSess = sessions.first(where: { $0.sessionId == "thread_codex_bg" })
+    try assert(bgSess?.status == .working, "Background thread A must remain working when user selects conversation B")
+}
+
+// 273. Codex Multi-Session: App restart while turn is active recovers Working state truthfully
+runTest("273. Codex Multi-Session: App restart while turn is active recovers Working state truthfully") {
+    let store = AgentStore.shared
+    let origStart = Date(timeIntervalSince1970: 1787470000)
+    _ = store.handleCodexTurnState(threadId: "thread_codex_restart", title: "Build Task", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_rst_1", thinkingStartTime: origStart, isTestMode: true)
+
+    let sess = store.getSessions(for: .codex).first(where: { $0.sessionId == "thread_codex_restart" })
+    try assert(sess?.status == .working)
+    try assert(sess?.thinkingStartTime == origStart, "Recovered start time must match authoritative turn start")
+}
+
+// 274. Codex Multi-Session: Stale A does not keep Smart Auto active after authoritative terminal reconciliation
+runTest("274. Codex Multi-Session: Stale A does not keep Smart Auto active after authoritative terminal reconciliation") {
+    let store = AgentStore.shared
+    for agent in AgentID.allCases {
+        store.updateStatus(for: agent, status: .idle)
+        store.syncSessions(for: agent, activeSessions: [], processRunning: true)
+    }
+
+    _ = store.handleCodexTurnState(threadId: "thread_codex_sleep_test", title: "Finished Job", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_slp_1", isTestMode: true)
+    SleepManager.shared.mode = .smartAuto
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(SleepManager.shared.isAssertionActive, "Smart Auto must be active while Codex is Working")
+
+    // Reconcile to completed
+    let completedTurn = AutoMonitor.CodexHistoryTurnInfo(threadId: "thread_codex_sleep_test", turnId: "turn_slp_1", status: "completed", startedAt: 1787400000, completedAt: 1787400010)
+    store.reconcileCodexSessions(validThreadIds: ["thread_codex_sleep_test"], historyTurns: ["thread_codex_sleep_test": completedTurn])
+
+    SleepManager.shared.updateSleepAssertionState()
+    try assert(!SleepManager.shared.isAssertionActive, "Smart Auto must release keep-awake assertion after terminal reconciliation")
+}
+
+// 275. Codex Multi-Session: Parent thinking duration does not use obsolete Working session
+runTest("275. Codex Multi-Session: Parent thinking duration does not use obsolete Working session") {
+    let store = AgentStore.shared
+    let oldStaleStart = Date().addingTimeInterval(-4200) // 70 minutes ago
+    let freshStart = Date().addingTimeInterval(-120)     // 2 minutes ago
+
+    let staleSess = AgentSessionInfo(provider: .codex, sessionId: "thread_stale_obsolete", title: "Jobsearcher", status: .working, turnId: "turn_obs", thinkingStartTime: oldStaleStart)
+    let freshSess = AgentSessionInfo(provider: .codex, sessionId: "thread_fresh_active", title: "Active Feature", status: .working, turnId: "turn_act", thinkingStartTime: freshStart)
+    store.syncSessions(for: .codex, activeSessions: [staleSess, freshSess], processRunning: true)
+
+    // Reconcile: thread_stale_obsolete is NOT a valid top-level thread (e.g. subagent or stale)
+    store.reconcileCodexSessions(validThreadIds: ["thread_fresh_active"])
+
+    let parent = store.getStatus(for: .codex)
+    try assert(parent.status == .working)
+    try assert(parent.thinkingStartTime == freshStart, "Parent thinking duration must use fresh active session, not purged obsolete session")
+}
+
+// 276. Codex Multi-Session: Completion of B does not terminate genuinely Working A
+runTest("276. Codex Multi-Session: Completion of B does not terminate genuinely Working A") {
+    let store = AgentStore.shared
+    let sessA = AgentSessionInfo(provider: .codex, sessionId: "thread_keep_working", title: "Long Test Run", status: .working, turnId: "turn_A_keep", thinkingStartTime: Date())
+    let sessB = AgentSessionInfo(provider: .codex, sessionId: "thread_finishing", title: "Quick Edit", status: .working, turnId: "turn_B_done", thinkingStartTime: Date())
+    store.syncSessions(for: .codex, activeSessions: [sessA, sessB], processRunning: true)
+
+    _ = store.handleCodexTurnState(threadId: "thread_finishing", title: "Quick Edit", cwd: "/Users/ava/Projects/Jobsearcher", status: .done, turnId: "turn_B_done", isTestMode: true)
+
+    let parent = store.getStatus(for: .codex)
+    try assert(parent.status == .working, "Parent must remain Working while session A is still working")
+    let currentSessions = store.getSessions(for: .codex)
+    try assert(currentSessions.first(where: { $0.sessionId == "thread_keep_working" })?.status == .working)
+}
+
+// 277. Codex Multi-Session: Subagent threads (thread_source = 'subagent') are excluded from workspace sessions
+runTest("277. Codex Multi-Session: Subagent threads (thread_source = 'subagent') are excluded from workspace sessions") {
+    let store = AgentStore.shared
+    let userThread = "thread_user_top_level"
+    let subagentThread = "thread_subagent_approval"
+
+    // Simulate both being registered
+    _ = store.handleCodexTurnState(threadId: userThread, title: "Feature UX", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_u1", isTestMode: true)
+    _ = store.handleCodexTurnState(threadId: subagentThread, title: "Jobsearcher", cwd: "/Users/ava/Projects/Jobsearcher", status: .working, turnId: "turn_s1", isTestMode: true)
+
+    // Top-level thread query only yields userThread (subagents excluded)
+    store.reconcileCodexSessions(validThreadIds: [userThread])
+
+    let sessions = store.getSessions(for: .codex)
+    try assert(sessions.contains(where: { $0.sessionId == userThread }), "User top-level thread must be retained")
+    try assert(!sessions.contains(where: { $0.sessionId == subagentThread }), "Subagent thread must be purged from workspace sessions")
+}
+
+print("🎉 All 277 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization & Codex Multi-Session Lifecycle Reconciliation Tests Passed!")

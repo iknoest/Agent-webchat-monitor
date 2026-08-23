@@ -769,7 +769,7 @@ public final class AutoMonitor: @unchecked Sendable {
 
         if fm.fileExists(atPath: dbPath) {
             if let tid = targetThreadId {
-                let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0;"
+                let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0 AND COALESCE(thread_source, 'user') != 'subagent';"
                 if let output = runProcessWithTimeout(
                     executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                     arguments: [dbPath, query],
@@ -792,7 +792,7 @@ public final class AutoMonitor: @unchecked Sendable {
                 }
             }
 
-            let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 ORDER BY updated_at_ms DESC LIMIT \(limit);"
+            let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
             if let output = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                 arguments: [dbPath, query],
@@ -1020,6 +1020,10 @@ public final class AutoMonitor: @unchecked Sendable {
 
         let historyTurns = fetchCodexHistoryTurns(limit: 20)
         let threads = fetchCodexThreads(limit: 10)
+        let validThreadIds = Set(threads.map { $0.id })
+
+        // 1. Authoritative Multi-Session Reconciliation: Purge obsolete threads & reconcile completed turns
+        AgentStore.shared.reconcileCodexSessions(validThreadIds: validThreadIds, historyTurns: historyTurns)
 
         for thread in threads {
             // First check if thread_history_1.sqlite explicitly reports this thread's turn
@@ -1043,6 +1047,17 @@ public final class AutoMonitor: @unchecked Sendable {
                         cwd: thread.cwd,
                         rolloutPath: thread.rolloutPath,
                         status: .done,
+                        turnId: turn.turnId,
+                        thinkingStartTime: nil,
+                        durationMs: turn.durationMs
+                    )
+                } else if turn.status == "failed" {
+                    _ = AgentStore.shared.handleCodexTurnState(
+                        threadId: thread.id,
+                        title: thread.title,
+                        cwd: thread.cwd,
+                        rolloutPath: thread.rolloutPath,
+                        status: .idle,
                         turnId: turn.turnId,
                         thinkingStartTime: nil,
                         durationMs: turn.durationMs
