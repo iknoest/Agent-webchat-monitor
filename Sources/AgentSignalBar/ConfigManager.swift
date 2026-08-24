@@ -29,7 +29,7 @@ public struct StatusBadgesConfig: Codable {
         blocked: StatusBadgeItem = StatusBadgeItem(classic: "🔴", funEmoji: "🥶"),
         off: StatusBadgeItem = StatusBadgeItem(classic: "⚫", funEmoji: "😴"),
         overworking: StatusBadgeItem = StatusBadgeItem(classic: "🟡", funEmoji: "🥵"),
-        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⦸", funEmoji: "🤯"),
+        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⛔", funEmoji: "🤯"),
         quotaRestored: StatusBadgeItem = StatusBadgeItem(classic: "⚪", funEmoji: "🥱"),
         monitorUnavailable: StatusBadgeItem = StatusBadgeItem(classic: "⚠️", funEmoji: "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
     ) {
@@ -127,6 +127,7 @@ public struct AppConfig: Codable {
     public var isClosedLidEnabled: Bool? // default false
     public var minBatteryPercentForClosedLid: Int? // default 20
     public var isTelegramEnabled: Bool? // default true
+    public var isTelegramQuotaAlertsEnabled: Bool? // default true
     public var telegramDoneThresholdMinutes: Int? // default 5 (0 means Off / per-session override only)
     public var customMainIconPath: String?
     public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
@@ -147,6 +148,7 @@ public struct AppConfig: Codable {
             isClosedLidEnabled: nil,
             minBatteryPercentForClosedLid: 20,
             isTelegramEnabled: true,
+            isTelegramQuotaAlertsEnabled: true,
             telegramDoneThresholdMinutes: 5,
             customMainIconPath: nil,
             disabledAgents: [],
@@ -197,6 +199,7 @@ public final class ConfigManager: @unchecked Sendable {
 
     public private(set) var config: AppConfig
     private let configPath: String
+    public var configPathString: String { return configPath }
 
     private init() {
         let home = NSHomeDirectory()
@@ -255,10 +258,10 @@ public final class ConfigManager: @unchecked Sendable {
                 needsSave = true
             }
             if decoded.statusBadges.quotaDepleted == nil {
-                decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "⦸", funEmoji: "🤯")
+                decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "⛔", funEmoji: "🤯")
                 needsSave = true
-            } else if decoded.statusBadges.quotaDepleted?.classic == "🔴⚠️" {
-                decoded.statusBadges.quotaDepleted?.classic = "⦸"
+            } else if decoded.statusBadges.quotaDepleted?.classic == "🔴⚠️" || decoded.statusBadges.quotaDepleted?.classic == "⦸" {
+                decoded.statusBadges.quotaDepleted?.classic = "⛔"
                 needsSave = true
             }
             if decoded.statusBadges.quotaRestored == nil {
@@ -266,11 +269,18 @@ public final class ConfigManager: @unchecked Sendable {
                 needsSave = true
             }
             if decoded.statusBadges.monitorUnavailable == nil {
-                decoded.statusBadges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: "😶🌫️")
+                decoded.statusBadges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
+                needsSave = true
+            } else if decoded.statusBadges.monitorUnavailable?.funEmoji == "😶🌫️" || decoded.statusBadges.monitorUnavailable?.funEmoji == "🌫️" {
+                decoded.statusBadges.monitorUnavailable?.funEmoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
                 needsSave = true
             }
             if decoded.telegramDoneThresholdMinutes == nil {
                 decoded.telegramDoneThresholdMinutes = 5
+                needsSave = true
+            }
+            if decoded.isTelegramQuotaAlertsEnabled == nil {
+                decoded.isTelegramQuotaAlertsEnabled = true
                 needsSave = true
             }
             if decoded.agents["copilot"] == nil {
@@ -363,6 +373,12 @@ public final class ConfigManager: @unchecked Sendable {
             break
         }
         cfg.statusBadges = badges
+        saveConfig(cfg)
+    }
+
+    public func setTelegramQuotaAlertsEnabled(_ enabled: Bool) {
+        var cfg = config
+        cfg.isTelegramQuotaAlertsEnabled = enabled
         saveConfig(cfg)
     }
 

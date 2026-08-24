@@ -879,7 +879,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
         XCTAssertEqual(store.getStatus(for: .claude).availability, .available)
 
-        // Quota Exhausted -> CLD:⦸
+        // Quota Exhausted -> CLD:⛔
         let exhaustedUsage = AgentUsageData(
             agent: .claude,
             sessionLimitPercent: 100.0,
@@ -890,15 +890,15 @@ final class AgentSignalBarTests: XCTestCase {
         )
         usageStore.updateUsage(for: .claude, data: exhaustedUsage)
         store.updateStatus(for: .claude, status: .idle)
-        XCTAssertTrue(store.overallSummary().contains("CLD:⦸"))
+        XCTAssertTrue(store.overallSummary().contains("CLD:⛔"))
         XCTAssertEqual(store.getStatus(for: .claude).status, .idle)
         XCTAssertEqual(store.getStatus(for: .claude).availability, .quotaExhausted)
 
-        // Compact when all else idle -> CLD⦸
+        // Compact when all else idle -> CLD⛔
         store.updateStatus(for: .chatgpt, status: .idle)
         store.updateStatus(for: .codex, status: .idle)
         store.updateStatus(for: .antigravity, status: .idle)
-        XCTAssertEqual(store.compactSummary(), "CLD⦸")
+        XCTAssertEqual(store.compactSummary(), "CLD⛔")
 
         // Compact when AGY Working -> AGY🟡
         store.updateStatus(for: .antigravity, status: .working)
@@ -935,7 +935,7 @@ final class AgentSignalBarTests: XCTestCase {
         store.updateStatus(for: .claude, status: .idle)
         let exhaustedInfo = store.getStatus(for: .claude)
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
-        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⦸")
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .funEmoji), "🤯")
         XCTAssertEqual(exhaustedInfo.status, .idle)
 
@@ -1041,7 +1041,7 @@ final class AgentSignalBarTests: XCTestCase {
         let exhaustedInfo = store.getStatus(for: .antigravity)
         XCTAssertEqual(exhaustedInfo.availability, .quotaExhausted)
         XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus, .quotaExhausted)
-        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⦸")
+        XCTAssertEqual(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic), "⛔")
 
         // 4. Codex Honest Unknown
         let cdxUnknown = AgentUsageData(agent: .codex, isLiveSource: false, freshness: "Unavailable")
@@ -1322,7 +1322,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(classicBadges.contains("⚪"))
         XCTAssertTrue(classicBadges.contains("🟡"))
         XCTAssertTrue(classicBadges.contains("🔴"))
-        XCTAssertTrue(classicBadges.contains("⦸"))
+        XCTAssertTrue(classicBadges.contains("⛔"))
 
         // 2. Structured ISO8601 formatting
         let now = Date()
@@ -1987,6 +1987,72 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(mock.getAllSentMessages().count, 3)
 
         EnvConfigLoader.shared.reload()
+    }
+
+    func testM21FinalHumanQAP0AndP1Features() async throws {
+        // 1. Antigravity Permission Requested -> .blocked & 1 high priority Telegram alert
+        let hookPayload: [String: Any] = [
+            "event": "PermissionRequested",
+            "agent": "antigravity",
+            "session_id": "agy_perm_test_sess",
+            "reason": "Allow reading this URL?"
+        ]
+        let jsonData = try JSONSerialization.data(withJSONObject: hookPayload)
+        AgentStore.shared.handleAntigravityHookEvent(jsonData: jsonData)
+
+        let info = AgentStore.shared.getStatus(for: .antigravity)
+        XCTAssertEqual(info.status, .blocked)
+
+        // Permission resolved -> working
+        let resolvePayload: [String: Any] = [
+            "event": "PermissionResolved",
+            "agent": "antigravity",
+            "session_id": "agy_perm_test_sess"
+        ]
+        let resJsonData = try JSONSerialization.data(withJSONObject: resolvePayload)
+        AgentStore.shared.handleAntigravityHookEvent(jsonData: resJsonData)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .antigravity).status, .working)
+
+        // 2. Global Network Health does NOT mutate agent lifecycle
+        AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Running task")
+        NetworkHealthMonitor.shared.setIsConnectedForTesting(false)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .claude).status, .working)
+
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+
+        bridge.handleNetworkHealthChange(isConnected: false)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+        XCTAssertTrue(mock.getAllSentMessages()[0].contains("🌐 AgentBridge connection unavailable"))
+
+        bridge.handleNetworkHealthChange(isConnected: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+        XCTAssertTrue(mock.getAllSentMessages()[1].contains("✅ AgentBridge connection restored"))
+
+        // 3. Quota Exhausted / Restored Telegram alerts
+        ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+        bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:00")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 3)
+        XCTAssertTrue(mock.getAllSentMessages()[2].contains("⛔ Claude Code quota exhausted"))
+
+        bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: false, resetText: nil)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 4)
+        XCTAssertTrue(mock.getAllSentMessages()[3].contains("🥱 Claude Code quota restored"))
+
+        // 4. Classic Quota Exhausted symbol is ⛔
+        XCTAssertEqual(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic), "⛔")
+
+        // 5. Emoji validation
+        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🐶"))
+        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🤯"))
+        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("🐶🤯"))
+        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("text"))
     }
 }
 #endif

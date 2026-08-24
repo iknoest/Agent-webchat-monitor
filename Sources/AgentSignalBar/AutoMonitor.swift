@@ -93,6 +93,7 @@ public final class AutoMonitor: @unchecked Sendable {
     }
 
     public func start() {
+        NetworkHealthMonitor.shared.start()
         DispatchQueue.main.async { [weak self] in
             self?.timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
                 DispatchQueue.global(qos: .utility).async {
@@ -595,10 +596,94 @@ public final class AutoMonitor: @unchecked Sendable {
         }
     }
 
-    // 2. Antigravity Process Watcher (Provider-Native Lifecycle Hooks)
+    // 2. Antigravity Process Watcher (Provider-Native Lifecycle Hooks & Native Transcript Probe)
+    public func scanActiveAntigravityTranscript(brainDir: String = ("~/.gemini/antigravity/brain" as NSString).expandingTildeInPath) -> (sessionId: String, title: String, status: AgentStatus, reason: String?, duration: Double?)? {
+        guard FileManager.default.fileExists(atPath: brainDir) else { return nil }
+        guard let subdirs = try? FileManager.default.contentsOfDirectory(atPath: brainDir) else { return nil }
+
+        // Find newest user-facing conversation directory
+        var newestDir: (path: String, modDate: Date, id: String)? = nil
+        let now = Date()
+
+        for dir in subdirs {
+            guard dir.count == 36, dir.contains("-") else { continue } // Standard UUID format
+            guard AgentStore.isUserFacingAntigravitySession(dir) else { continue }
+            let dirPath = "\(brainDir)/\(dir)"
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: dirPath),
+                  let mod = attrs[.modificationDate] as? Date else { continue }
+
+            if newestDir == nil || mod > newestDir!.modDate {
+                newestDir = (dirPath, mod, dir)
+            }
+        }
+
+        guard let active = newestDir else { return nil }
+        // If the newest conversation is older than 2 hours and not recently modified, return nil
+        if now.timeIntervalSince(active.modDate) > 7200 { return nil }
+
+        let transcriptPath = "\(active.path)/.system_generated/logs/transcript.jsonl"
+        guard FileManager.default.fileExists(atPath: transcriptPath),
+              let transcriptData = readTailOfFile(atPath: transcriptPath, maxBytes: 32768) else {
+            return nil
+        }
+
+        let lines = transcriptData.components(separatedBy: CharacterSet.newlines).filter { !$0.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty }
+        guard let lastLine = lines.last else { return nil }
+
+        guard let json = try? JSONSerialization.jsonObject(with: Data(lastLine.utf8)) as? [String: Any] else {
+            return nil
+        }
+
+        let stepType = json["type"] as? String ?? ""
+        let toolCalls = json["tool_calls"] as? [[String: Any]]
+
+        let folderName = (active.path as NSString).lastPathComponent
+        let title = "[\(folderName.prefix(8))]"
+
+        if stepType == "PLANNER_RESPONSE" {
+            if let tools = toolCalls, !tools.isEmpty {
+                // Check if tool is ask_question or permission gate
+                let hasAskQuestion = tools.contains { t in
+                    (t["name"] as? String) == "ask_question"
+                }
+                if hasAskQuestion {
+                    return (active.id, title, .blocked, "Permission / Question gate (ask_question)", nil)
+                }
+                let timeSinceMod = now.timeIntervalSince(active.modDate)
+                if timeSinceMod > 20.0 {
+                    let firstTool = tools.first
+                    let toolName = (firstTool?["name"] as? String) ?? "Action"
+                    return (active.id, title, .blocked, "Permission approval required (\(toolName))", nil)
+                } else {
+                    return (active.id, title, .working, nil, nil)
+                }
+            } else {
+                let timeSinceMod = now.timeIntervalSince(active.modDate)
+                if timeSinceMod < 120.0 {
+                    return (active.id, title, .done, nil, timeSinceMod)
+                } else {
+                    return (active.id, title, .idle, nil, nil)
+                }
+            }
+        } else if stepType == "USER_INPUT" {
+            return (active.id, title, .working, nil, nil)
+        } else if stepType == "GENERIC" {
+            let timeSinceMod = now.timeIntervalSince(active.modDate)
+            if timeSinceMod < 60.0 {
+                return (active.id, title, .working, nil, nil)
+            }
+        }
+
+        return nil
+    }
+
     private func checkAntigravityLog() {
         let workspace = NSWorkspace.shared
-        let isAppRunning = workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.google.antigravity" || $0.localizedName?.lowercased() == "antigravity" })
+        let isAppRunning = workspace.runningApplications.contains(where: {
+            $0.bundleIdentifier == "com.google.antigravity" ||
+            $0.localizedName?.lowercased() == "antigravity" ||
+            $0.bundleIdentifier == "com.google.Antigravity"
+        })
 
         guard isAppRunning else {
             AgentStore.shared.updateStatus(for: .antigravity, status: .off, detail: "Antigravity closed")
@@ -611,8 +696,22 @@ public final class AutoMonitor: @unchecked Sendable {
 
         let currentAntigravitySessions = AgentStore.shared.getSessions(for: .antigravity)
         if currentAntigravitySessions.isEmpty {
-            AgentStore.shared.updateStatus(for: .antigravity, status: .idle, detail: "Monitoring via Antigravity Native Hooks (Ready)")
-            AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+            if let diskSession = scanActiveAntigravityTranscript() {
+                let sess = AgentSessionInfo(
+                    provider: .antigravity,
+                    sessionId: diskSession.sessionId,
+                    title: diskSession.title,
+                    status: diskSession.status,
+                    attentionReason: diskSession.reason,
+                    lastDurationSeconds: diskSession.duration,
+                    sourceEvidence: "Antigravity Native Transcript Probe"
+                )
+                AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+                AgentStore.shared.updateStatus(for: .antigravity, status: diskSession.status, detail: diskSession.reason ?? "Monitoring via Antigravity Native Probe")
+            } else {
+                AgentStore.shared.updateStatus(for: .antigravity, status: .idle, detail: "Monitoring via Antigravity Native Hooks (Ready)")
+                AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+            }
         }
     }
 

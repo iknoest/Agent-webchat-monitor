@@ -5,7 +5,7 @@ set -e
 echo "🔨 Building Swift Release Binary..."
 swift build -c release
 
-APP_DIR="AgentSignalBar.app"
+APP_DIR="AgentBridge.app"
 MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
 
@@ -47,5 +47,31 @@ cat <<EOF > "$APP_DIR/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+# Maintain backward compatibility link in repository
+ln -sfn "$APP_DIR" AgentSignalBar.app
+
 echo "✅ AgentBridge ($APP_DIR) bundle created successfully!"
-echo "💡 You can launch it with: open AgentSignalBar.app"
+
+# Install to /Applications if writable
+if [ -w "/Applications" ]; then
+    echo "📲 Installing to /Applications/AgentBridge.app..."
+    rm -rf "/Applications/AgentBridge.app"
+    cp -Rf "$APP_DIR" "/Applications/AgentBridge.app"
+
+    # Clean up obsolete AgentSignalBar.app if present and matches our bundle ID
+    if [ -d "/Applications/AgentSignalBar.app" ]; then
+        OLD_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "/Applications/AgentSignalBar.app/Contents/Info.plist" 2>/dev/null || true)
+        if [ "$OLD_BUNDLE_ID" = "com.ava.AgentSignalBar" ]; then
+            echo "🧹 Removing obsolete duplicate /Applications/AgentSignalBar.app..."
+            rm -rf "/Applications/AgentSignalBar.app"
+        fi
+    fi
+
+    # Refresh LaunchServices database
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/AgentBridge.app" 2>/dev/null || true
+    echo "✨ Installed to /Applications/AgentBridge.app successfully!"
+    echo "💡 You can launch it with: open /Applications/AgentBridge.app"
+else
+    echo "💡 You can launch it with: open AgentBridge.app"
+fi

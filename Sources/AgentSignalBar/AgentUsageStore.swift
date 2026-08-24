@@ -255,6 +255,10 @@ public final class AgentUsageStore: @unchecked Sendable {
                 // Genuine positive recovery transition: previously exhausted -> now available
                 AgentStore.shared.setQuotaRestored(for: agent, restored: true)
                 AgentStore.shared.reconcileQuotaRecovery(for: agent)
+                TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: false, resetText: nil)
+            } else if !wasExhausted && currentIsExhausted {
+                let resetInfo = toStore.sessionResetText ?? toStore.weeklyResetText
+                TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: true, resetText: resetInfo)
             } else if !currentIsExhausted {
                 AgentStore.shared.reconcileQuotaRecovery(for: agent)
             }
@@ -308,6 +312,8 @@ public final class AgentUsageStore: @unchecked Sendable {
         lock.unlock()
 
         AgentStore.shared.updateAvailability(for: agent, availability: .quotaExhausted)
+        let resetInfo = current.sessionResetText ?? current.weeklyResetText
+        TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: true, resetText: resetInfo)
     }
 
     public func getUsage(for agent: AgentID) -> AgentUsageData? {

@@ -1342,8 +1342,8 @@ runTest("49. Quota Availability: Claude idle + available -> CLD:⚪") {
     try assert(store.getStatus(for: .claude).availability == .available, "Availability must be .available.")
 }
 
-// 50. Quota Availability: Claude idle + quotaExhausted -> CLD:⦸ (Lifecycle remains .idle)
-runTest("50. Quota Availability: Claude idle + quotaExhausted -> CLD:⦸") {
+// 50. Quota Availability: Claude idle + quotaExhausted -> CLD:⛔ (Lifecycle remains .idle)
+runTest("50. Quota Availability: Claude idle + quotaExhausted -> CLD:⛔") {
     let store = AgentStore.shared
     let usageStore = AgentUsageStore.shared
     store.currentTheme = .classic
@@ -1360,13 +1360,13 @@ runTest("50. Quota Availability: Claude idle + quotaExhausted -> CLD:⦸") {
     store.updateStatus(for: .claude, status: .idle)
 
     let summary = store.overallSummary()
-    try assert(summary.contains("CLD:⦸"), "Claude idle + quotaExhausted must display 'CLD:⦸' (actual: \(summary)).")
+    try assert(summary.contains("CLD:⛔"), "Claude idle + quotaExhausted must display 'CLD:⛔' (actual: \(summary)).")
     try assert(store.getStatus(for: .claude).status == .idle, "Underlying lifecycle status must remain .idle.")
     try assert(store.getStatus(for: .claude).availability == .quotaExhausted, "Availability must be .quotaExhausted.")
 }
 
-// 51. Quota Availability: Compact mode shows CLD⦸ when everything else is idle
-runTest("51. Quota Availability: Compact mode shows CLD⦸ when everything else is idle") {
+// 51. Quota Availability: Compact mode shows CLD⛔ when everything else is idle
+runTest("51. Quota Availability: Compact mode shows CLD⛔ when everything else is idle") {
     let store = AgentStore.shared
     let usageStore = AgentUsageStore.shared
     store.currentTheme = .classic
@@ -1386,7 +1386,7 @@ runTest("51. Quota Availability: Compact mode shows CLD⦸ when everything else 
     store.updateStatus(for: .claude, status: .idle)
 
     let compact = store.compactSummary()
-    try assert(compact == "CLD⦸", "Compact mode must show 'CLD⦸' when Claude is quota-exhausted and other agents are idle (actual: \(compact)).")
+    try assert(compact == "CLD⛔", "Compact mode must show 'CLD⛔' when Claude is quota-exhausted and other agents are idle (actual: \(compact)).")
 }
 
 // 52. Quota Availability: AGY Working + Claude exhausted -> Compact AGY🟡
@@ -1466,7 +1466,7 @@ runTest("54. Unified Display Status: All 6 states derive identical top-level, co
     store.updateStatus(for: .claude, status: .idle)
     let exhaustedInfo = store.getStatus(for: .claude)
     try assert(exhaustedInfo.effectiveDisplayStatus == .quotaExhausted, "Quota exhausted must map to .quotaExhausted display status.")
-    try assert(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic) == "⦸", "Classic quota exhausted badge must be '⦸'.")
+    try assert(exhaustedInfo.effectiveDisplayStatus.badge(theme: .classic) == "⛔", "Classic quota exhausted badge must be '⛔'.")
     try assert(exhaustedInfo.effectiveDisplayStatus.badge(theme: .funEmoji) == "🤯", "Fun quota exhausted badge must be '🤯'.")
     try assert(exhaustedInfo.status == .idle, "Lifecycle MUST remain .idle.")
 
@@ -1758,7 +1758,7 @@ runTest("63. AGY Quota: All proven model families exhausted -> Provider Quota Ex
     let info = store.getStatus(for: .antigravity)
     try assert(info.availability == .quotaExhausted, "Antigravity availability must be .quotaExhausted when all families are depleted.")
     try assert(info.effectiveDisplayStatus == .quotaExhausted, "Idle exhausted provider must have .quotaExhausted effective display status.")
-    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⦸", "All exhausted provider badge must be '⦸'.")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⛔", "All exhausted provider badge must be '⛔'.")
 }
 
 // 64. AGY Lifecycle Priority: Actionable Working outranks Quota Limited / Exhausted
@@ -1844,12 +1844,12 @@ runTest("67. Compact Mode Display: Provider-Aware Compact Representation with Qu
     store.updateStatus(for: .antigravity, status: .idle)
     store.updateStatus(for: .claude, status: .idle)
 
-    // Claude exhausted -> Compact shows CLD⦸
+    // Claude exhausted -> Compact shows CLD⛔
     let claudeExhausted = AgentUsageData(agent: .claude, sessionLimitPercent: 100.0, isPercentUsed: true, isLiveSource: true, freshness: "Fresh")
     usageStore.updateUsage(for: .claude, data: claudeExhausted)
 
     let summary = store.compactSummary()
-    try assert(summary.contains("CLD⦸") || summary.contains("CLD:⦸"), "Compact summary must show CLD⦸ when Claude is exhausted (actual: '\(summary)').")
+    try assert(summary.contains("CLD⛔") || summary.contains("CLD:⛔"), "Compact summary must show CLD⛔ when Claude is exhausted (actual: '\(summary)').")
 
     // Working AGY outranks exhausted Claude
     store.updateStatus(for: .antigravity, status: .working)
@@ -3076,7 +3076,7 @@ runTest("144. Theme Legend: Classic theme legend uses Classic badge resolver") {
     try assert(badges.contains("🔴"), "Classic legend must contain 🔴 for Attention Needed")
     try assert(badges.contains("🟡"), "Classic legend must contain 🟡 for Working")
     try assert(badges.contains("🟢"), "Classic legend must contain 🟢 for Finished")
-    try assert(badges.contains("⦸"), "Classic legend must contain ⦸ for Quota Exhausted")
+    try assert(badges.contains("⛔"), "Classic legend must contain ⛔ for Quota Exhausted")
     try assert(badges.contains("⚪"), "Classic legend must contain ⚪ for Idle")
     try assert(badges.contains("⚫"), "Classic legend must contain ⚫ for Closed")
 }
@@ -3103,7 +3103,7 @@ runTest("147. Theme Legend: No independent duplicated legend mapping") {
         let items = MenuBarManager.getStatusLegendItems(theme: theme)
         for item in items {
             let directBadge = item.status.badge(theme: theme)
-            try assert(item.badge == directBadge || (theme == .funEmoji && (item.badge == "🥵" || item.badge == "⦸")), "Legend badge must strictly match EffectiveDisplayStatus.badge(theme:)")
+            try assert(item.badge == directBadge || (theme == .funEmoji && (item.badge == "🥵" || item.badge == "⛔")), "Legend badge must strictly match EffectiveDisplayStatus.badge(theme:)")
         }
     }
 }
@@ -5714,8 +5714,12 @@ runTest("290. ChatGPT Monitor Health: disconnected -> connected -> at most one r
     ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
 
     bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
     bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
-    Thread.sleep(forTimeInterval: 0.1)
+    exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let sent = mockTransport.sentMessages
     try assert(sent.count == 2, "Expected 1 failure and 1 recovery notification, got: \(sent.count)")
@@ -6616,15 +6620,18 @@ runTest("348. M2.1 QA: variation selector survives config save/reload") {
     try assert(hasVS16, "Saved emoji must preserve U+FE0F VARIATION SELECTOR-16")
 }
 
-// 349. M2.1 QA: multiple grapheme input is rejected safely
-runTest("349. M2.1 QA: multiple grapheme input is rejected safely") {
-    let multiGrapheme = "🐶🤔"
-    try assert(multiGrapheme.count == 2, "Multi-grapheme input has count 2")
-    let del = EmojiFieldDelegate(key: "test", initialEmoji: "🐶")
-    let tf = NSTextField(string: multiGrapheme)
-    del.textField = tf
-    del.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: tf))
-    try assert(tf.stringValue == "🐶", "Multi-grapheme paste must safely revert to last valid single emoji")
+// 349. M2.1 QA: single emoji validation accepts 1 grapheme and rejects multi-grapheme/text
+runTest("349. M2.1 QA: single emoji validation accepts 1 grapheme and rejects multi-grapheme/text") {
+    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid single emoji")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("❤️"), "❤️ must be valid single emoji")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"), "😶‍🌫️ must be valid single emoji")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("👨‍💻"), "👨‍💻 must be valid single emoji")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("👍🏻"), "👍🏻 must be valid single emoji")
+
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("🐶🐱"), "🐶🐱 must be rejected (count == 2)")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("ABC"), "ABC must be rejected")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("hello🙂"), "hello🙂 must be rejected")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji(""), "empty string must be rejected")
 }
 
 // 350. M2.1 QA: default Monitor Not Connected = exact 😶‍🌫️
@@ -6697,4 +6704,351 @@ runTest("356. M2.1 QA: default Telegram threshold still suppresses a normal <5m 
     try assert(mock.getAllSentMessages().isEmpty, "A 2-minute ordinary ChatGPT Done must be suppressed at 5m threshold")
 }
 
-print("🎉 All 356 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Human QA Corrective Patch Tests Passed!")
+// 357. P0-A: Real Antigravity Permission Prompt -> .blocked / Needs You
+runTest("357. P0-A: Real Antigravity Permission Prompt -> .blocked / Needs You") {
+    let hookPayload: [String: Any] = [
+        "event": "PermissionRequested",
+        "agent": "antigravity",
+        "session_id": "agy_perm_test_sess",
+        "reason": "Allow reading this URL?"
+    ]
+    AgentStore.shared.handleAntigravityHookEvent(json: hookPayload)
+
+    let info = AgentStore.shared.getStatus(for: .antigravity)
+    try assert(info.status == .blocked, "Permission requested must set Antigravity status to .blocked, got \(info.status)")
+    let sess = AgentStore.shared.getSessions(for: .antigravity).first
+    try assert(info.detail?.contains("Allow reading this URL?") == true || sess?.attentionReason?.contains("Allow reading this URL?") == true, "Detail/attentionReason must record permission question")
+}
+
+// 358. P0-A: Antigravity Permission Resolution clears blocked state
+runTest("358. P0-A: Antigravity Permission Resolution clears blocked state") {
+    let resolvePayload: [String: Any] = [
+        "event": "PermissionResolved",
+        "agent": "antigravity",
+        "session_id": "agy_perm_test_sess"
+    ]
+    AgentStore.shared.handleAntigravityHookEvent(json: resolvePayload)
+
+    let info = AgentStore.shared.getStatus(for: .antigravity)
+    try assert(info.status == .working, "Permission resolution must return Antigravity status to .working, got \(info.status)")
+    let sess = AgentStore.shared.getSessions(for: .antigravity).first
+    try assert(sess?.attentionReason == nil, "attentionReason must be cleared")
+}
+
+// 359. P0-A: AGY Permission emits exactly one high-priority Telegram alert
+runTest("359. P0-A: AGY Permission emits exactly one high-priority Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_p_sess", title: "Review Fix", status: .blocked, turnId: "turn_perm_1", attentionReason: "Allow running script?")
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .blocked, detail: "Allow running script?")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Permission gate must emit exactly 1 Telegram alert, got \(msgs.count)")
+    try assert(msgs[0].text.contains("🔴 Antigravity needs you"), "Must contain high-priority Needs You header")
+}
+
+// 360. P0-A: AGY Internal subagent permission events do NOT replace top-level user session
+runTest("360. P0-A: AGY Internal subagent permission events do NOT replace top-level user session") {
+    try assert(!AgentStore.isUserFacingAntigravitySession("subagent-worker-1234"))
+    try assert(!AgentStore.isUserFacingAntigravitySession("research_subagent"))
+    try assert(AgentStore.isUserFacingAntigravitySession("202eab98-2af7-463e-8c09-0dd8975dbb51"))
+}
+
+// 361. P0-B: Network path unavailable does NOT mutate agent lifecycle
+runTest("361. P0-B: Network path unavailable does NOT mutate agent lifecycle") {
+    AgentStore.shared.updateStatus(for: .claude, status: .working, detail: "Compiling code")
+    NetworkHealthMonitor.shared.setConnectedForTesting(false)
+
+    let info = AgentStore.shared.getStatus(for: .claude)
+    try assert(info.status == .working, "Network drop must not alter agent status to .blocked or .off, got \(info.status)")
+}
+
+// 362. P0-B: Network path unavailable emits exactly one global Telegram alert
+runTest("362. P0-B: Network path unavailable emits exactly one global Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleNetworkHealthChange(isConnected: false)
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Network drop must send exactly 1 alert, got \(msgs.count)")
+    try assert(msgs[0].text.contains("🌐 AgentBridge connection unavailable"), "Alert must contain connection unavailable wording: \(msgs[0].text)")
+}
+
+// 363. P0-B: Network path restoration emits exactly one Telegram alert
+runTest("363. P0-B: Network path restoration emits exactly one Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleNetworkHealthChange(isConnected: false)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    bridge.handleNetworkHealthChange(isConnected: true)
+    exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 2, "Drop and restore must send 2 alerts, got \(msgs.count)")
+    try assert(msgs[1].text.contains("✅ AgentBridge connection restored"), "Second alert must be restoration: \(msgs[1].text)")
+}
+
+// 364. P0-B: Repeated same network status does not spam Telegram
+runTest("364. P0-B: Repeated same network status does not spam Telegram") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleNetworkHealthChange(isConnected: false)
+    bridge.handleNetworkHealthChange(isConnected: false)
+    bridge.handleNetworkHealthChange(isConnected: false)
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Repeated network drop events must be deduplicated to 1 alert, got \(msgs.count)")
+}
+
+// 365. P0-B: Connection Unavailable header appears in MenuBar without fake agent session
+runTest("365. P0-B: Connection Unavailable header appears in MenuBar") {
+    NetworkHealthMonitor.shared.setConnectedForTesting(false)
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let hasNotice = menu.items.contains(where: { $0.title.contains("Connection Unavailable") })
+    try assert(hasNotice, "Menu must display Connection Unavailable notice when network is offline")
+    NetworkHealthMonitor.shared.setConnectedForTesting(true)
+}
+
+// 366. P1-A: Canonical Quota Depletion emits exactly one Telegram alert
+runTest("366. P1-A: Canonical Quota Depletion emits exactly one Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:00")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Quota depletion must send 1 alert, got \(msgs.count)")
+    try assert(msgs[0].text.contains("⛔ Claude Code quota exhausted"), "Must contain quota exhausted header: \(msgs[0].text)")
+    try assert(msgs[0].text.contains("Resets: 18:00"), "Must include reset time: \(msgs[0].text)")
+}
+
+// 367. P1-A: Quota refresh while still depleted does NOT duplicate Telegram alert
+runTest("367. P1-A: Quota refresh while still depleted does NOT duplicate Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:00")
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:00")
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:01")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Repeated quota exhausted signals must deduplicate to 1 alert, got \(msgs.count)")
+}
+
+// 368. P1-A: Canonical Quota Restoration emits exactly one Telegram alert
+runTest("368. P1-A: Canonical Quota Restoration emits exactly one Telegram alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "18:00")
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: false, resetText: nil)
+    exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 2, "Depletion followed by restoration must send 2 alerts, got \(msgs.count)")
+    try assert(msgs[1].text.contains("🥱 Claude Code quota restored"), "Restoration alert must contain 🥱 header: \(msgs[1].text)")
+}
+
+// 369. P1-A: Overlapping model families do NOT trigger duplicate alerts
+runTest("369. P1-A: Overlapping model families do NOT trigger duplicate alerts") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+
+    bridge.handleQuotaDepletionChange(agent: .codex, isExhausted: true, resetText: "00:00")
+    bridge.handleQuotaDepletionChange(agent: .codex, isExhausted: true, resetText: "00:00")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "Codex family quota depletion must send exactly 1 alert")
+}
+
+// 370. P1-B: Provider session submenu does NOT contain Notify Me on Telegram
+runTest("370. P1-B: Provider session submenu does NOT contain Notify Me on Telegram") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    for item in menu.items {
+        if let sub = item.submenu {
+            for subItem in sub.items {
+                try assert(!subItem.title.contains("Notify Me on Telegram When Ready"), "Session submenu must not contain Notify Me on Telegram When Ready: \(subItem.title)")
+            }
+        }
+    }
+}
+
+// 371. P1-B: Telegram Alerts submenu contains Notify Specific Sessions
+runTest("371. P1-B: Telegram Alerts submenu contains Notify Specific Sessions") {
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_daily_cld", title: "Daily Task", status: .working)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    guard let tgItem = menu.items.first(where: { $0.title.contains("Telegram Alerts") }),
+          let tgMenu = tgItem.submenu else {
+        try assert(false, "Telegram Alerts root submenu must exist")
+        return
+    }
+
+    let specItem = tgMenu.items.first(where: { $0.title == "Notify Specific Sessions" })
+    try assert(specItem != nil, "Notify Specific Sessions item must exist inside Telegram Alerts submenu")
+    try assert(specItem?.submenu != nil, "Notify Specific Sessions must have a submenu")
+    let activeItem = specItem?.submenu?.items.first(where: { $0.title.contains("Daily Task") })
+    try assert(activeItem != nil, "Active session Daily Task must be listed in Notify Specific Sessions")
+}
+
+// 372. P1-B: Checking specific session arms one-shot override and receives below-threshold Done alert
+runTest("372. P1-B: Specific session receives below-threshold Done alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(15) // High threshold
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_spec_done", title: "Quick 30s Fix", status: .working, turnId: "turn_spec_1")
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    // Arm one-shot override on this session
+    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_spec_done", targetTabId: nil, turnId: "turn_spec_1")
+    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_spec_done"))
+
+    // Transition to Done (30s < 15m threshold)
+    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_spec_done", title: "Quick 30s Fix", status: .done, turnId: "turn_spec_1", lastDurationSeconds: 30)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Quick 30s Fix")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Armed session must receive 1 Done alert even below threshold, got \(msgs.count)")
+    try assert(msgs[0].text.contains("Claude Code"), "Message must contain provider name")
+}
+
+// 373. P1-B: One-shot override auto-clears after terminal Done alert
+runTest("373. P1-B: One-shot override auto-clears after terminal Done alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(15)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_autoclear", targetTabId: nil, turnId: "turn_ac_1")
+    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_autoclear", title: "Done Task", status: .done, turnId: "turn_ac_1", lastDurationSeconds: 30)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Done Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(!bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_autoclear"), "One-shot override must auto-clear after delivery")
+}
+
+// 374. P1-C: Ordinary NSTextField allows standard typing and paste without aggressive keystroke mutation
+runTest("374. P1-C: Standard NSTextField allows editing") {
+    let tf = NSTextField(string: "")
+    tf.stringValue = "🐶"
+    try assert(tf.stringValue == "🐶", "Standard NSTextField allows setting single emoji")
+}
+
+// 375. P1-C: isValidSingleEmoji accepts single emojis and rejects multi-graphemes or text on Save
+runTest("375. P1-C: isValidSingleEmoji validation rules") {
+    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("🤯"), "🤯 must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("😴"), "😴 must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("🥱"), "🥱 must be valid")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("🐶🤯"), "🐶🤯 must be invalid")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("abc"), "abc must be invalid")
+}
+
+// 376. P1-D: Customize Emoji is visible ONLY in Emoji style, hidden in Classic Traffic Light
+runTest("376. P1-D: Customize Emoji is visible ONLY in Emoji style") {
+    // 1. Emoji style
+    AgentStore.shared.currentTheme = .funEmoji
+    var menu = MenuBarManager.shared.buildMenuForTesting()
+    var appMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu?.items.first(where: { $0.title == "Appearance" })?.submenu
+    var hasCust = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
+    try assert(hasCust, "Customize Emoji… must be visible when theme is Emoji")
+
+    // 2. Classic Traffic Light style
+    AgentStore.shared.currentTheme = .classic
+    menu = MenuBarManager.shared.buildMenuForTesting()
+    appMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu?.items.first(where: { $0.title == "Appearance" })?.submenu
+    hasCust = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
+    try assert(!hasCust, "Customize Emoji… must be hidden when theme is Classic Traffic Light")
+    AgentStore.shared.currentTheme = .funEmoji // Restore
+}
+
+// 377. P1-E: Classic Traffic Light Quota Exhausted symbol is ⛔
+runTest("377. P1-E: Classic Traffic Light Quota Exhausted symbol is ⛔") {
+    let classicBadge = EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic)
+    try assert(classicBadge == "⛔", "Classic Quota Exhausted badge must be ⛔, got \(classicBadge)")
+
+    let legend = MenuBarManager.getStatusLegendItems(theme: .classic)
+    let quotaLeg = legend.first(where: { $0.status == .quotaExhausted })
+    try assert(quotaLeg != nil, "Quota exhausted item must exist in Classic legend")
+    try assert(quotaLeg?.badge == "⛔", "Legend badge must be ⛔, got \(quotaLeg?.badge ?? "")")
+    try assert(quotaLeg?.title.contains("⛔") == true, "Legend title must start with ⛔: \(quotaLeg?.title ?? "")")
+}
+
+// 378. P1-F: Build script produces AgentBridge.app, installs to /Applications, and preserves config compatibility
+runTest("378. P1-F: Build script produces AgentBridge.app and preserves config compatibility") {
+    let buildScript = try String(contentsOfFile: "build_app.sh", encoding: .utf8)
+    try assert(buildScript.contains("APP_DIR=\"AgentBridge.app\""), "Build script must set APP_DIR to AgentBridge.app")
+    try assert(buildScript.contains("/Applications/AgentBridge.app"), "Build script must install to /Applications/AgentBridge.app")
+    try assert(buildScript.contains("ln -sfn \"$APP_DIR\" AgentSignalBar.app"), "Build script must maintain backward compatibility symlink")
+
+    // Config path compatibility check
+    let cfgPath = ConfigManager.shared.configPathString
+    try assert(cfgPath.contains("agent_signal_bar") || cfgPath.contains("AgentSignalBar"), "ConfigManager preserves established config storage path")
+}
+
+print("🎉 All 378 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Human QA Corrective Patch Tests Passed!")

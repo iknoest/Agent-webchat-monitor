@@ -124,6 +124,11 @@ public final class TelegramBridge: @unchecked Sendable {
             self?.handleAgentStatusChange(agent: agent, oldStatus: oldStatus, newStatus: newStatus, detail: detail)
         }
 
+        // Register observer on NetworkHealthMonitor for global connectivity alerts
+        NetworkHealthMonitor.shared.onConnectivityChange = { [weak self] connected in
+            self?.handleNetworkHealthChange(isConnected: connected)
+        }
+
         // Start polling if enabled and configured
         startPollingIfEnabled()
     }
@@ -382,6 +387,90 @@ public final class TelegramBridge: @unchecked Sendable {
         }
         lastSentNotificationKeys[dedupeKey] = Date()
         lock.unlock()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let res = try? await self.transport.sendMessage(
+                botToken: config.botToken,
+                chatId: config.chatId,
+                text: text,
+                parseMode: nil
+            )
+            if let res = res {
+                self.lastDeliveryResult = res
+            }
+        }
+    }
+
+    public func handleNetworkHealthChange(isConnected: Bool) {
+        let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        guard isEnabled else { return }
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        guard config.isConfigured else { return }
+
+        let dedupeKey = "global_network_health_\(isConnected ? "connected" : "disconnected")"
+        lock.lock()
+        if lastSentNotificationKeys[dedupeKey] != nil {
+            lock.unlock()
+            return
+        }
+        if isConnected {
+            lastSentNotificationKeys.removeValue(forKey: "global_network_health_disconnected")
+        } else {
+            lastSentNotificationKeys.removeValue(forKey: "global_network_health_connected")
+        }
+        lastSentNotificationKeys[dedupeKey] = Date()
+        lock.unlock()
+
+        let text = isConnected ? "✅ AgentBridge connection restored" : "🌐 AgentBridge connection unavailable"
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let res = try? await self.transport.sendMessage(
+                botToken: config.botToken,
+                chatId: config.chatId,
+                text: text,
+                parseMode: nil
+            )
+            if let res = res {
+                self.lastDeliveryResult = res
+            }
+        }
+    }
+
+    public func handleQuotaDepletionChange(agent: AgentID, isExhausted: Bool, resetText: String?) {
+        guard ConfigManager.shared.isAgentMonitored(agent) else { return }
+        let isEnabled = ConfigManager.shared.config.isTelegramEnabled ?? true
+        guard isEnabled else { return }
+        let isQuotaAlertsEnabled = ConfigManager.shared.config.isTelegramQuotaAlertsEnabled ?? true
+        guard isQuotaAlertsEnabled else { return }
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        guard config.isConfigured else { return }
+
+        let dedupeKey = "quota_\(agent.rawValue)_\(isExhausted ? "exhausted" : "restored")"
+        lock.lock()
+        if lastSentNotificationKeys[dedupeKey] != nil {
+            lock.unlock()
+            return
+        }
+        if isExhausted {
+            lastSentNotificationKeys.removeValue(forKey: "quota_\(agent.rawValue)_restored")
+        } else {
+            lastSentNotificationKeys.removeValue(forKey: "quota_\(agent.rawValue)_exhausted")
+        }
+        lastSentNotificationKeys[dedupeKey] = Date()
+        lock.unlock()
+
+        let text: String
+        if isExhausted {
+            if let r = resetText, !r.isEmpty {
+                text = "⛔ \(agent.displayName) quota exhausted\nResets: \(r)"
+            } else {
+                text = "⛔ \(agent.displayName) quota exhausted"
+            }
+        } else {
+            text = "🥱 \(agent.displayName) quota restored"
+        }
 
         Task { [weak self] in
             guard let self = self else { return }

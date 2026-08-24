@@ -95,7 +95,7 @@ public enum AgentStatus: String, Codable, Sendable {
             case .working: return customBadges.working.classic
             case .done: return customBadges.done.classic
             case .blocked: return customBadges.blocked.classic
-            case .quotaExceeded: return customBadges.quotaDepleted?.classic ?? "⚫"
+            case .quotaExceeded: return customBadges.quotaDepleted?.classic ?? "⛔"
             }
         case .funEmoji:
             switch self {
@@ -192,7 +192,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             case .working: return customBadges.working.classic
             case .done: return customBadges.done.classic
             case .blocked: return customBadges.blocked.classic
-            case .quotaExhausted: return customBadges.quotaDepleted?.classic ?? "⦸"
+            case .quotaExhausted: return customBadges.quotaDepleted?.classic ?? "⛔"
             case .monitorUnavailable: return customBadges.monitorUnavailable?.classic ?? "⚠️"
             }
         case .funEmoji:
@@ -892,6 +892,11 @@ public final class AgentStore: @unchecked Sendable {
     }
 
     public static func isUserFacingAntigravitySession(_ sessionId: String, isTestMode: Bool = false) -> Bool {
+        let lower = sessionId.lowercased()
+        if lower.contains("subagent") || lower.contains("worker") || lower.contains("research") {
+            return false
+        }
+
         if isTestMode || isSyntheticTestSessionId(sessionId) {
             return true
         }
@@ -1279,12 +1284,29 @@ public final class AgentStore: @unchecked Sendable {
             session.sourceEvidence = "Antigravity Hook: PreInvocation"
             session.sensorReason = "Antigravity Hook: PreInvocation"
 
+        case "PermissionRequested", "WaitingForInput", "WaitingForPermission", "UserConfirmation":
+            session.status = .blocked
+            let promptReason = json["reason"] as? String ?? json["prompt"] as? String ?? "Permission approval required"
+            session.attentionReason = promptReason
+            session.sourceEvidence = "Antigravity Hook: \(event) (\(toolName ?? "Permission"))"
+            session.sensorReason = promptReason
+            if session.turnId == nil {
+                session.turnId = "turn_perm_\(Int(now.timeIntervalSince1970 * 1000))"
+            }
+
+        case "PermissionGranted", "PermissionResolved", "UserPromptResponse":
+            session.status = .working
+            session.attentionReason = nil
+            session.sourceEvidence = "Antigravity Hook: \(event)"
+            session.sensorReason = "Antigravity Hook: \(event)"
+
         case "PreToolUse":
-            if let tName = toolName, tName == "ask_question" {
+            let isPermPrompt = (toolName == "ask_question" || json["is_permission_prompt"] as? Bool == true || json["requires_permission"] as? Bool == true || json["permission_required"] as? Bool == true)
+            if isPermPrompt {
                 session.status = .blocked
-                let reasonStr = "Permission / Question gate (\(tName))"
+                let reasonStr = json["reason"] as? String ?? (toolName != nil ? "Permission / Question gate (\(toolName!))" : "User approval required")
                 session.attentionReason = reasonStr
-                session.sourceEvidence = "Antigravity Hook: PreToolUse (\(tName))"
+                session.sourceEvidence = "Antigravity Hook: PreToolUse (\(toolName ?? "Gate"))"
                 session.sensorReason = reasonStr
                 let turnForNotification = session.turnId ?? "turn_perm_\(Int(now.timeIntervalSince1970 * 1000))"
                 session.turnId = turnForNotification

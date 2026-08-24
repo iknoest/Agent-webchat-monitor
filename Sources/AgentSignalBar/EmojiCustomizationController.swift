@@ -6,16 +6,23 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
 
     private var windowInstance: NSWindow?
     private var textFields: [String: NSTextField] = [:]
-    private var fieldDelegates: [String: EmojiFieldDelegate] = [:]
+    private var errorLabel: NSTextField?
 
-    private struct StateItem {
-        let key: String
-        let label: String
-        let defaultEmoji: String
-        let getCurrent: (StatusBadgesConfig) -> String
+    public struct StateItem: Sendable {
+        public let key: String
+        public let label: String
+        public let defaultEmoji: String
+        public let getCurrent: @Sendable (StatusBadgesConfig) -> String
+
+        public init(key: String, label: String, defaultEmoji: String, getCurrent: @escaping @Sendable (StatusBadgesConfig) -> String) {
+            self.key = key
+            self.label = label
+            self.defaultEmoji = defaultEmoji
+            self.getCurrent = getCurrent
+        }
     }
 
-    private let stateItems: [StateItem] = [
+    public let stateItems: [StateItem] = [
         StateItem(key: "done", label: "Done / Complete", defaultEmoji: "🐶", getCurrent: { $0.done.funEmoji }),
         StateItem(key: "working", label: "Working / Thinking", defaultEmoji: "🤔", getCurrent: { $0.working.funEmoji }),
         StateItem(key: "blocked", label: "Needs You / Blocked", defaultEmoji: "🥶", getCurrent: { $0.blocked.funEmoji }),
@@ -35,19 +42,34 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         fatalError("init(coder:) has not been implemented")
     }
 
+    public static func isValidSingleEmoji(_ str: String) -> Bool {
+        let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 1 else { return false }
+        guard let firstChar = trimmed.first else { return false }
+        let hasEmojiScalar = firstChar.unicodeScalars.contains { scalar in
+            scalar.properties.isEmoji || scalar.properties.isEmojiPresentation || scalar.value > 0x2000
+        }
+        if firstChar.isASCII && !firstChar.isSymbol {
+            return false
+        }
+        return hasEmojiScalar
+    }
+
     public func showWindow() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             if let existingWindow = self.windowInstance {
                 self.populateCurrentValues()
+                self.errorLabel?.stringValue = ""
+                self.errorLabel?.isHidden = true
                 existingWindow.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
                 return
             }
 
-            let panelWidth: CGFloat = 420
-            let panelHeight: CGFloat = 460
+            let panelWidth: CGFloat = 430
+            let panelHeight: CGFloat = 480
             let rect = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
 
             let panel = NSPanel(
@@ -67,7 +89,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
             let mainStack = NSStackView(frame: NSRect(x: 20, y: 20, width: panelWidth - 40, height: panelHeight - 40))
             mainStack.orientation = .vertical
             mainStack.alignment = .leading
-            mainStack.spacing = 10
+            mainStack.spacing = 8
             mainStack.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(mainStack)
 
@@ -92,7 +114,6 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
             mainStack.addArrangedSubview(gridStack)
 
             self.textFields.removeAll()
-            self.fieldDelegates.removeAll()
 
             for item in self.stateItems {
                 let rowStack = NSStackView()
@@ -113,16 +134,19 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
                 tf.isEditable = true
                 tf.isSelectable = true
 
-                let del = EmojiFieldDelegate(key: item.key, initialEmoji: item.defaultEmoji)
-                del.textField = tf
-                tf.delegate = del
-
-                self.fieldDelegates[item.key] = del
                 self.textFields[item.key] = tf
                 rowStack.addArrangedSubview(tf)
 
                 gridStack.addArrangedSubview(rowStack)
             }
+
+            // Error label for validation feedback
+            let errLbl = NSTextField(labelWithString: "")
+            errLbl.font = NSFont.systemFont(ofSize: 11)
+            errLbl.textColor = .systemRed
+            errLbl.isHidden = true
+            self.errorLabel = errLbl
+            mainStack.addArrangedSubview(errLbl)
 
             self.populateCurrentValues()
 
@@ -161,41 +185,55 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         }
     }
 
-    private func populateCurrentValues() {
+    public func getTextField(for key: String) -> NSTextField? {
+        return textFields[key]
+    }
+
+    public func populateCurrentValues() {
         let currentBadges = ConfigManager.shared.config.statusBadges
         for item in stateItems {
             let val = item.getCurrent(currentBadges)
             textFields[item.key]?.stringValue = val
-            fieldDelegates[item.key]?.lastValidEmoji = val
         }
     }
 
-    @objc private func resetButtonClicked() {
+    @objc public func resetButtonClicked() {
         for item in stateItems {
             textFields[item.key]?.stringValue = item.defaultEmoji
-            fieldDelegates[item.key]?.lastValidEmoji = item.defaultEmoji
         }
+        errorLabel?.stringValue = ""
+        errorLabel?.isHidden = true
     }
 
-    @objc private func cancelButtonClicked() {
+    @objc public func cancelButtonClicked() {
         windowInstance?.close()
     }
 
-    @objc private func saveButtonClicked() {
+    @objc public func saveButtonClicked() {
         var cfg = ConfigManager.shared.config
         var badges = cfg.statusBadges
 
+        // 1. Validation pass: every field must contain exactly 1 valid emoji
         for item in stateItems {
-            let rawUserVal = textFields[item.key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let finalVal: String
-            if rawUserVal.count == 1 {
-                finalVal = rawUserVal
-            } else if rawUserVal.isEmpty {
-                finalVal = fieldDelegates[item.key]?.lastValidEmoji ?? item.defaultEmoji
-            } else {
-                // Multi-grapheme: use last valid
-                finalVal = fieldDelegates[item.key]?.lastValidEmoji ?? item.defaultEmoji
+            guard let rawUserVal = textFields[item.key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), !rawUserVal.isEmpty else {
+                errorLabel?.stringValue = "Error: '\(item.label)' cannot be empty."
+                errorLabel?.isHidden = false
+                return
             }
+
+            guard Self.isValidSingleEmoji(rawUserVal) else {
+                errorLabel?.stringValue = "Error: '\(item.label)' must be exactly 1 emoji."
+                errorLabel?.isHidden = false
+                return
+            }
+        }
+
+        errorLabel?.stringValue = ""
+        errorLabel?.isHidden = true
+
+        // 2. Application pass: commit verified values
+        for item in stateItems {
+            let finalVal = textFields[item.key]!.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
             switch item.key {
             case "done":
@@ -218,7 +256,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
                 if badges.quotaDepleted != nil {
                     badges.quotaDepleted?.funEmoji = finalVal
                 } else {
-                    badges.quotaDepleted = StatusBadgeItem(classic: "⦸", funEmoji: finalVal)
+                    badges.quotaDepleted = StatusBadgeItem(classic: "⛔", funEmoji: finalVal)
                 }
             case "quotaRestored":
                 if badges.quotaRestored != nil {
@@ -242,41 +280,5 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         print("🎨 Status Emoji configuration saved successfully!")
         MenuBarManager.shared.updateTitleAndMenu()
         windowInstance?.close()
-    }
-}
-
-public final class EmojiFieldDelegate: NSObject, NSTextFieldDelegate {
-    public let key: String
-    public var lastValidEmoji: String
-    public weak var textField: NSTextField?
-
-    public init(key: String, initialEmoji: String) {
-        self.key = key
-        self.lastValidEmoji = initialEmoji
-    }
-
-    public func controlTextDidChange(_ obj: Notification) {
-        guard let tf = textField else { return }
-        let current = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if current.isEmpty {
-            return
-        }
-        if current.count == 1 {
-            // Exactly one extended grapheme cluster (including composite emojis like 🐶, 😶‍🌫️, 👨‍💻, ❤️)
-            lastValidEmoji = current
-        } else {
-            // Multi-grapheme or invalid text: safely revert to last valid emoji
-            tf.stringValue = lastValidEmoji
-        }
-    }
-
-    public func controlTextDidEndEditing(_ obj: Notification) {
-        guard let tf = textField else { return }
-        let current = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if current.count == 1 {
-            lastValidEmoji = current
-        } else {
-            tf.stringValue = lastValidEmoji
-        }
     }
 }

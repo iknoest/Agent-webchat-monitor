@@ -1324,3 +1324,48 @@ Next: Proceed to PART B Read-Only Discovery for M3 Project Bridge.
 Blockers: none
 
 [RELEASE] M2.1 Human QA Corrective Patch — antigravity — 2026-08-24T18:33:00+02:00
+
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: M2.1 Final Human-QA Closeout
+Done:
+1. P0-A: Antigravity Permission Prompt & Input Gate Detection:
+   - Added provider-native transcript inspection and hook lifecycle parsing (`PermissionRequested`, `WaitingForInput`, `WaitingForPermission`, `UserConfirmation`, `PreToolUse` gates) in `AgentState.swift` & `AutoMonitor.swift`.
+   - Guaranteed that active permission questions set `.blocked` (Needs You) and participate in high-priority Telegram alerts.
+   - Guaranteed that resolving permission (`PermissionGranted`, `PermissionResolved`, `PostToolUse`) immediately returns status to `.working` and clears `attentionReason`.
+   - Excluded internal subagent identifiers (`subagent`, `worker`, `research`) to prevent subagent interference with top-level user sessions.
+2. P0-B: Global Network Interruption Health:
+   - Created `NetworkHealthMonitor.swift` leveraging native `NWPathMonitor` for network route reachability.
+   - Guaranteed network loss does NOT mutate agent lifecycle to fake `.blocked`.
+   - Added `🌐 Connection Unavailable` status header in `MenuBarManager.swift`.
+   - Emits exactly 1 global Telegram alert on drop (`🌐 AgentBridge connection unavailable`) and 1 on restoration (`✅ AgentBridge connection restored`).
+3. P1-A: Quota Exhausted / Restored Telegram Alerts:
+   - Added `handleQuotaDepletionChange(agent:isExhausted:resetText:)` in `TelegramBridge.swift` and wired to `AgentUsageStore.swift`.
+   - Dispatches exactly 1 alert on transition to exhausted (`⛔ [Provider] quota exhausted \n Resets: [Time]`) and 1 on restored (`🥱 [Provider] quota restored`).
+   - Deduplicated against percentage refreshes; respects `isTelegramQuotaAlertsEnabled`.
+4. P1-B: Centralized Telegram Controls under Root Telegram Menu:
+   - Converted root Telegram menu into `Telegram Alerts: On >` / `Telegram Alerts: Off >` submenu.
+   - Contains Enabled toggle, Done Notifications threshold, `Notify Specific Sessions >` (listing active sessions with checkable one-shot overrides), Quota Exhausted/Restored toggle, High-Priority status indicators, and Test Notification.
+   - Removed duplicate `Notify Me on Telegram When Ready` from provider/tab session submenus and duplicate Done threshold from `Alerts`.
+5. P1-C: Standard AppKit Emoji Editing with Save-Time Validation:
+   - Replaced live keystroke mutation with standard `NSTextField` enabling native ⌘V paste, IME, and Emoji Picker (`⌃⌘Space`).
+   - Implemented `EmojiCustomizationController.isValidSingleEmoji` validation strictly on `Save & Apply`, presenting inline error message if invalid.
+6. P1-D: Emoji Customization Visibility:
+   - `Customize Emoji…` in `Appearance` submenu is visible only when Status Style is `Emoji` (`badgeTheme == .funEmoji`) and hidden in `Classic Traffic Light`.
+7. P1-E: Classic Traffic Light Quota Exhausted Symbol:
+   - Updated canonical classic Quota Exhausted badge and legend symbol from `⦸` to `⛔` across defaults, config backfill, and UI.
+8. P1-F: Application Packaging & System Update:
+   - Updated `build_app.sh` to package `AgentBridge.app`, maintain repo symlink `AgentSignalBar.app`, install cleanly to `/Applications/AgentBridge.app`, remove obsolete duplicates, and refresh LaunchServices.
+9. Tests & Verification:
+   - Added regression Tests 357 to 378 in `Stage1TestRunner` (378/378 passed).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Verified SPM test suite in `AgentSignalBarTests.swift` passed (`swift test`).
+   - Verified clean release build and installation via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+   - Relaunched `/Applications/AgentBridge.app`.
+Verified: `swift run Stage1TestRunner` (378/378 passed), `node adapters/chrome-extension/background_test.js` (30/30 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), `/Applications/AgentBridge.app` running cleanly.
+Next: Commit and push changes to `feat/identity-notification-ux` and present final M2.1 closeout report with M3.1 handoff.
+Blockers: none
+
+[RELEASE] M2.1 Final Human-QA Closeout — antigravity — 2026-08-24T20:25:00+02:00
+
