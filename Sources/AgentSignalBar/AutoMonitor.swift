@@ -213,9 +213,10 @@ public final class AutoMonitor: @unchecked Sendable {
         task.executableURL = executableURL
         task.arguments = arguments
 
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = Pipe()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        task.standardOutput = stdoutPipe
+        task.standardError = stderrPipe
 
         do {
             try task.run()
@@ -229,6 +230,23 @@ public final class AutoMonitor: @unchecked Sendable {
         lastSubprocessConfirmedReaped = false
         processLock.unlock()
 
+        var stdoutData = Data()
+        var stderrData = Data()
+
+        let ioGroup = DispatchGroup()
+
+        ioGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            ioGroup.leave()
+        }
+
+        ioGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            ioGroup.leave()
+        }
+
         let semaphore = DispatchSemaphore(value: 0)
 
         // SINGLE background exit waiter
@@ -240,6 +258,8 @@ public final class AutoMonitor: @unchecked Sendable {
         // 1. Initial bounded wait
         if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
             task.terminate() // Send SIGTERM
+            try? stdoutPipe.fileHandleForReading.close()
+            try? stderrPipe.fileHandleForReading.close()
 
             let sigtermTimeout = overrideSigtermWaitTimeoutSeconds ?? 0.2
             // 2. Bounded wait on the SAME semaphore
@@ -272,17 +292,21 @@ public final class AutoMonitor: @unchecked Sendable {
                 print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and terminated gracefully upon SIGTERM.")
             }
 
+            _ = ioGroup.wait(timeout: .now() + 0.1)
             return nil
         }
 
+        // Task exited within timeout! Wait for I/O drain to finish
+        _ = ioGroup.wait(timeout: .now() + 0.5)
 
         processLock.lock()
         lastSubprocessConfirmedReaped = true
         unresolvedProcessPID = nil
         processLock.unlock()
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = stderrData // Consumed to avoid unused variable warning
+
+        return String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
 
@@ -866,10 +890,23 @@ public final class AutoMonitor: @unchecked Sendable {
             return []
         }
 
-        // 1. Fetch display titles from local_thread_catalog in codex-dev.db if available
+        // 1. Fetch active candidate threads from state_5.sqlite
+        let query = "SELECT id, COALESCE(NULLIF(name, ''), '') AS name, COALESCE(NULLIF(title, ''), '') AS title, rollout_path, cwd, updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
+        guard let output = runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+            arguments: ["-json", dbPath, query],
+            timeoutSeconds: 1.0
+        ), let data = output.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+
+        // 2. Fetch display titles from local_thread_catalog only for the active candidate thread IDs
         var catalogTitles: [String: String] = [:]
-        if fm.fileExists(atPath: catalogDbPath) {
-            let catQuery = "SELECT thread_id, display_title FROM local_thread_catalog WHERE host_id='local' AND missing_candidate=0;"
+        let candidateIds = array.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }
+        if !candidateIds.isEmpty && fm.fileExists(atPath: catalogDbPath) {
+            let escapedIds = candidateIds.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }.joined(separator: ", ")
+            let catQuery = "SELECT thread_id, display_title FROM local_thread_catalog WHERE host_id='local' AND missing_candidate=0 AND thread_id IN (\(escapedIds));"
             if let catOutput = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
                 arguments: ["-json", catalogDbPath, catQuery],
@@ -885,37 +922,29 @@ public final class AutoMonitor: @unchecked Sendable {
             }
         }
 
-        // 2. Fetch active threads from state_5.sqlite
+        // 3. Build thread info models with title resolution
         var results: [CodexThreadInfo] = []
         var seenIds = Set<String>()
 
-        let query = "SELECT id, COALESCE(NULLIF(name, ''), '') AS name, COALESCE(NULLIF(title, ''), '') AS title, rollout_path, cwd, updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
-        if let output = runProcessWithTimeout(
-            executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-            arguments: ["-json", dbPath, query],
-            timeoutSeconds: 1.0
-        ), let data = output.data(using: .utf8),
-           let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-            for dict in array {
-                guard let tid = dict["id"] as? String, !tid.isEmpty,
-                      let path = dict["rollout_path"] as? String, !path.isEmpty,
-                      fm.fileExists(atPath: path),
-                      !seenIds.contains(tid) else { continue }
-                seenIds.insert(tid)
-                let rawName = dict["name"] as? String ?? ""
-                let rawTitle = dict["title"] as? String ?? ""
-                let cwd = dict["cwd"] as? String ?? ""
-                let updated = (dict["updated_at_ms"] as? NSNumber)?.int64Value ?? 0
+        for dict in array {
+            guard let tid = dict["id"] as? String, !tid.isEmpty,
+                  let path = dict["rollout_path"] as? String, !path.isEmpty,
+                  fm.fileExists(atPath: path),
+                  !seenIds.contains(tid) else { continue }
+            seenIds.insert(tid)
+            let rawName = dict["name"] as? String ?? ""
+            let rawTitle = dict["title"] as? String ?? ""
+            let cwd = dict["cwd"] as? String ?? ""
+            let updated = (dict["updated_at_ms"] as? NSNumber)?.int64Value ?? 0
 
-                let resolvedTitle: String
-                if let catTitle = catalogTitles[tid], !catTitle.isEmpty && AutoMonitor.isSafeSessionTitle(catTitle) {
-                    resolvedTitle = catTitle
-                } else {
-                    resolvedTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
-                }
-
-                results.append(CodexThreadInfo(id: tid, title: resolvedTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
+            let resolvedTitle: String
+            if let catTitle = catalogTitles[tid], !catTitle.isEmpty && AutoMonitor.isSafeSessionTitle(catTitle) {
+                resolvedTitle = catTitle
+            } else {
+                resolvedTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
             }
+
+            results.append(CodexThreadInfo(id: tid, title: resolvedTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
         }
 
         return results
@@ -1140,9 +1169,9 @@ public final class AutoMonitor: @unchecked Sendable {
                 timeoutSeconds: 1.0
             )
             if probeOutput == nil {
-                // SQLite query failed/timeout -> corrupted or inaccessible database
+                // SQLite query failed/timeout -> probe failed or subprocess error
                 AgentStore.shared.setMonitorHealth(for: .codex, health: .disconnected)
-                AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex database unparseable")
+                AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex database query failed")
                 AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
                 return
             }

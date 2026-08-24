@@ -1474,3 +1474,27 @@ Next: Present full report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M2.1.1 P0-B2 Codex Working Lifecycle Continuity & Baseline Offset Repair — antigravity — 2026-08-25T00:37:00+02:00
+
+## 2026-08-25 — antigravity — macos
+Status: DONE
+Phase: M2.1.1 Codex Subprocess Acquisition Deadlock Repair
+Done:
+1. Subprocess I/O Concurrent Draining:
+   - Refactored `runProcessWithTimeout` in `AutoMonitor.swift` to concurrently drain stdout and stderr on background dispatch queues while the child process runs.
+   - Eliminated Darwin 64KB OS pipe buffer saturation deadlock when subprocess emits >64KB output (such as large SQLite queries).
+   - Preserved bounded timeout semantics, SIGTERM/SIGKILL termination, and process reaping without file descriptor or reader leaks.
+2. Narrowed Codex Catalog Title Query:
+   - Scoped `local_thread_catalog` queries in `fetchCodexThreads` to active candidate thread IDs (`WHERE host_id='local' AND missing_candidate=0 AND thread_id IN (...)`), avoiding wholesale table dumps on every 1.5s poll.
+3. Health Semantics Precision:
+   - Updated probe query failure detail to `Codex database query failed` instead of claiming the database is corrupted/unparseable.
+4. Tests & Verification:
+   - Added Tests 407 to 410 in `Stage1TestRunner` verifying >100KB stdout, >100KB stderr, small output, and hung process timeout reaping (410/410 passed).
+   - Added unit test in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app`.
+   - Live verified running app: Codex status transitioned from `monitorUnavailable` to `done` / `idle` cleanly.
+Verified: `swift run Stage1TestRunner` (410/410 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), live `/status` query returning active Codex state with zero unparseable errors.
+Next: Present report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M2.1.1 Codex Subprocess Acquisition Deadlock Repair — antigravity — 2026-08-25T01:43:00+02:00

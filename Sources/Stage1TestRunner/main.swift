@@ -7594,4 +7594,48 @@ runTest("406. P0-B2: Newly discovered live thread rollout events are parsed with
     try assert(sess?.turnId == newTurnId, "Turn ID must match new live turn")
 }
 
-print("🎉 All 406 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")
+// 407. P0-B2: runProcessWithTimeout >100 KB stdout completes successfully without pipe buffer deadlock
+runTest("407. P0-B2: runProcessWithTimeout >100 KB stdout completes successfully without pipe buffer deadlock") {
+    let output = AutoMonitor.shared.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "python3 -c \"import sys; sys.stdout.write('A' * 140977)\""],
+        timeoutSeconds: 1.0
+    )
+    try assert(output != nil, "Output must not be nil on >100KB stdout")
+    try assert(output?.count == 140977, "Output count must match written 140,977 bytes, got \(output?.count ?? 0)")
+}
+
+// 408. P0-B2: runProcessWithTimeout >100 KB stderr completes successfully without pipe buffer deadlock
+runTest("408. P0-B2: runProcessWithTimeout >100 KB stderr completes successfully without pipe buffer deadlock") {
+    let output = AutoMonitor.shared.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "python3 -c \"import sys; sys.stderr.write('E' * 140977); sys.stdout.write('SUCCESS')\""],
+        timeoutSeconds: 1.0
+    )
+    try assert(output == "SUCCESS", "Output must be SUCCESS when stderr exceeds pipe buffer, got \(String(describing: output))")
+}
+
+// 409. P0-B2: runProcessWithTimeout small normal output succeeds immediately
+runTest("409. P0-B2: runProcessWithTimeout small normal output succeeds immediately") {
+    let output = AutoMonitor.shared.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "echo hello_normal"],
+        timeoutSeconds: 1.0
+    )
+    try assert(output == "hello_normal", "Output must match small echo output, got \(String(describing: output))")
+}
+
+// 410. P0-B2: runProcessWithTimeout genuinely hung process times out and reaps cleanly
+runTest("410. P0-B2: runProcessWithTimeout genuinely hung process times out and reaps cleanly") {
+    let t0 = Date()
+    let output = AutoMonitor.shared.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "sleep 5"],
+        timeoutSeconds: 0.3
+    )
+    let elapsed = Date().timeIntervalSince(t0)
+    try assert(output == nil, "Hung process must return nil on timeout")
+    try assert(elapsed >= 0.25 && elapsed < 2.0, "Timeout elapsed must be bounded around 0.3s-1.0s, got \(elapsed)s")
+}
+
+print("🎉 All 410 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout & Subprocess Deadlock Tests Passed!")

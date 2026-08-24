@@ -2196,5 +2196,44 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(sess?.status, .working, "Freshly created thread must be parsed from offset 0 and become Working")
         XCTAssertEqual(sess?.turnId, newTurnId, "Turn ID must match new live turn")
     }
+
+    func testSubprocessDrainBothPipesAndTimeoutIntegrity() throws {
+        // 1. >100 KB stdout completes without deadlock
+        let out1 = AutoMonitor.shared.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "python3 -c \"import sys; sys.stdout.write('A' * 140977)\""],
+            timeoutSeconds: 1.0
+        )
+        XCTAssertNotNil(out1)
+        XCTAssertEqual(out1?.count, 140977)
+
+        // 2. >100 KB stderr completes without deadlock
+        let out2 = AutoMonitor.shared.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "python3 -c \"import sys; sys.stderr.write('E' * 140977); sys.stdout.write('SUCCESS')\""],
+            timeoutSeconds: 1.0
+        )
+        XCTAssertEqual(out2, "SUCCESS")
+
+        // 3. Small normal output succeeds immediately
+        let out3 = AutoMonitor.shared.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "echo hello_xctest"],
+            timeoutSeconds: 1.0
+        )
+        XCTAssertEqual(out3, "hello_xctest")
+
+        // 4. Hung process times out and reaps cleanly
+        let t0 = Date()
+        let out4 = AutoMonitor.shared.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "sleep 5"],
+            timeoutSeconds: 0.3
+        )
+        let elapsed = Date().timeIntervalSince(t0)
+        XCTAssertNil(out4)
+        XCTAssertGreaterThanOrEqual(elapsed, 0.25)
+        XCTAssertLessThan(elapsed, 2.0)
+    }
 }
 #endif
