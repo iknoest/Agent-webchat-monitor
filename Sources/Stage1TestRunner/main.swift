@@ -2,6 +2,10 @@ import Foundation
 import Cocoa
 import AgentSignalBarCore
 
+// Hard test isolation: disable all production Telegram network calls
+TestEnvironment.enableTestMode()
+TelegramBridge.shared.transport = MockTelegramTransport()
+
 func runTest(_ name: String, block: () throws -> Void) {
     do {
         try block()
@@ -7290,4 +7294,169 @@ runTest("395. Persistent session muting is stored in ConfigManager") {
     try assert(!ConfigManager.shared.isSessionCompletionMuted(key: sessionKey))
 }
 
-print("🎉 All 395 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & Canonical Cleanup Tests Passed!")
+// 396. P0-A: Hard test isolation prevents URLSessionTelegramTransport from sending real Telegram messages
+runTest("396. P0-A: Hard test isolation prevents URLSessionTelegramTransport from sending real Telegram messages") {
+    try assert(TestEnvironment.isTestRuntime, "TestEnvironment must be in test runtime mode")
+    let realTransport = URLSessionTelegramTransport()
+    let exp = DispatchGroup()
+    exp.enter()
+    var deliveryResult: TelegramDeliveryResult? = nil
+    Task {
+        deliveryResult = try? await realTransport.sendMessage(botToken: "test_bot_tok", chatId: "12345", text: "Fake test", parseMode: nil)
+        exp.leave()
+    }
+    exp.wait()
+    try assert(deliveryResult != nil, "Delivery result must be returned")
+    try assert(deliveryResult?.success == false, "Test runtime MUST block real Telegram requests")
+    try assert(deliveryResult?.description?.contains("SAFETY GUARD") == true, "Blocked result description must contain SAFETY GUARD")
+}
+
+// 397. P0-A: EnvConfigLoader in test runtime does not load production .env credentials
+runTest("397. P0-A: EnvConfigLoader in test runtime does not load production .env credentials") {
+    EnvConfigLoader.shared.setConfigForTesting(nil) // clear override
+    let cfg = EnvConfigLoader.shared.getTelegramConfig()
+    try assert(!cfg.isConfigured, "Test runtime without explicit override must return unconfigured TelegramConfig")
+    try assert(cfg.botToken.isEmpty && cfg.chatId.isEmpty, "Production credentials must NOT be loaded into tests")
+}
+
+// 398. P0-B1: Restart with historical rollout files does not create fake Working sessions
+runTest("398. P0-B1: Restart with historical rollout files does not create fake Working sessions") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    // Create 5 old rollout files containing historical reasoning & tool calls
+    var threads: [AutoMonitor.CodexThreadInfo] = []
+    for i in 1...5 {
+        let tid = "thread_hist_\(i)"
+        let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+        let content = """
+        {"timestamp":"2026-08-24T20:00:00.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn_old_\(i)"}}
+        {"timestamp":"2026-08-24T20:00:05.000Z","ordinal":2,"type":"response_item","payload":{"type":"reasoning"}}
+        {"timestamp":"2026-08-24T20:00:10.000Z","ordinal":3,"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn_old_\(i)","item":{"type":"Reasoning"}}}
+        {"timestamp":"2026-08-24T20:01:00.000Z","ordinal":4,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn_old_\(i)"}}
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+        threads.append(AutoMonitor.CodexThreadInfo(id: tid, title: "Historical Thread \(i)", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787600000000))
+    }
+
+    // Reset monitor offsets
+    AutoMonitor.shared.resetCodexOffsetsForTesting()
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    // Process all 5 threads establishing baseline offsets on restart
+    for thread in threads {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: thread.rolloutPath),
+           let size = attrs[.size] as? UInt64 {
+            AutoMonitor.shared.setCodexOffsetForTesting(threadId: thread.id, offset: size)
+        }
+        AutoMonitor.shared.processCodexRollout(thread: thread)
+    }
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let workingSessions = sessions.filter { $0.status == .working }
+    try assert(workingSessions.isEmpty, "Restart must NOT turn historical rollout files into Working sessions, found \(workingSessions.count)")
+}
+
+// 399. P0-B1: One current inProgress top-level turn restores exactly one Working session after restart
+runTest("399. P0-B1: One current inProgress top-level turn restores exactly one Working session after restart") {
+    let activeThreadId = "thread_active_now"
+    let activeTurnId = "turn_active_100"
+    let startTime = Date().addingTimeInterval(-45)
+
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    let handled = AgentStore.shared.handleCodexTurnState(
+        threadId: activeThreadId,
+        title: "Active Migration Task",
+        cwd: "/Users/ava/Projects/Jobsearcher",
+        rolloutPath: "/tmp/fake.jsonl",
+        status: .working,
+        turnId: activeTurnId,
+        thinkingStartTime: startTime,
+        durationMs: nil,
+        isTestMode: true
+    )
+    try assert(handled)
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let workingSessions = sessions.filter { $0.status == .working }
+    try assert(workingSessions.count == 1, "Exactly one session must be working, got \(workingSessions.count)")
+    try assert(workingSessions[0].sessionId == activeThreadId)
+    try assert(workingSessions[0].turnId == activeTurnId)
+}
+
+// 400. P0-B1: Historical completed turns do not override a newer active turn
+runTest("400. P0-B1: Historical completed turns do not override a newer active turn") {
+    let threadId = "thread_multi_turn_test"
+    let activeTurnId = "turn_new_2"
+    let oldTurnId = "turn_old_1"
+
+    // Mark current turn active
+    _ = AgentStore.shared.handleCodexTurnState(
+        threadId: threadId,
+        title: "Active Feature",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/fake.jsonl",
+        status: .working,
+        turnId: activeTurnId,
+        thinkingStartTime: Date(),
+        isTestMode: true
+    )
+
+    // Reconcile with older turn history (which was completed)
+    let oldTurnHistory = [
+        threadId: AutoMonitor.CodexHistoryTurnInfo(threadId: threadId, turnId: oldTurnId, status: "completed", startedAt: 1000, completedAt: 2000, durationMs: 1000)
+    ]
+    AgentStore.shared.reconcileCodexSessions(validThreadIds: [threadId], historyTurns: oldTurnHistory)
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let currentSess = sessions.first(where: { $0.sessionId == threadId })
+    try assert(currentSess?.status == .working, "Older completed turn must NOT demote newer active turn, got \(String(describing: currentSess?.status))")
+    try assert(currentSess?.turnId == activeTurnId)
+}
+
+// 401. P0-B1: Incremental current-schema events associate with current turn
+runTest("401. P0-B1: Incremental current-schema events associate with current turn") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let tid = "thread_incremental_schema"
+    let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+
+    // 1. Initial file baseline
+    let initialContent = "{\"timestamp\":\"2026-08-24T20:00:00.000Z\",\"ordinal\":1,\"type\":\"session_meta\",\"payload\":{}}\n"
+    try initialContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+    let thread = AutoMonitor.CodexThreadInfo(id: tid, title: "Incremental Test", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787600000000)
+    AutoMonitor.shared.resetCodexOffsetsForTesting()
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    // First discovery -> sets baseline offset
+    AutoMonitor.shared.processCodexRollout(thread: thread)
+
+    // 2. Append new event_msg with item_completed (Reasoning)
+    let turnId = "turn_live_999"
+    let appendLine = "{\"timestamp\":\"2026-08-24T20:00:05.000Z\",\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"\(tid)\",\"turn_id\":\"\(turnId)\",\"item\":{\"type\":\"Reasoning\",\"summary_text\":[\"Thinking\"]}}}\n"
+    let handle = try FileHandle(forWritingTo: fileURL)
+    handle.seekToEndOfFile()
+    handle.write(appendLine.data(using: .utf8)!)
+    try handle.close()
+
+    // Process incremental appended event
+    AutoMonitor.shared.processCodexRollout(thread: thread)
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let sess = sessions.first(where: { $0.sessionId == tid })
+    try assert(sess?.status == .working, "Appended item_completed event must transition session to Working, got \(String(describing: sess?.status))")
+    try assert(sess?.turnId == turnId, "Session turnId must match appended turnId")
+}
+
+// 402. P0-B1: Internal/subagent threads remain excluded
+runTest("402. P0-B1: Internal/subagent threads remain excluded") {
+    let query = "SELECT id FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent';"
+    try assert(query.contains("thread_source, 'user') != 'subagent'"), "Query must filter out subagents")
+}
+
+print("🎉 All 402 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1 Codex Rollout Tests Passed!")

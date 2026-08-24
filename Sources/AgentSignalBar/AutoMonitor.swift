@@ -92,6 +92,19 @@ public final class AutoMonitor: @unchecked Sendable {
         resetProcessTracking()
     }
 
+    public func resetCodexOffsetsForTesting() {
+        checkLock.lock()
+        codexRolloutOffsets.removeAll()
+        codexPendingLineBuffers.removeAll()
+        checkLock.unlock()
+    }
+
+    public func setCodexOffsetForTesting(threadId: String, offset: UInt64) {
+        checkLock.lock()
+        codexRolloutOffsets[threadId] = offset
+        checkLock.unlock()
+    }
+
     public func start() {
         NetworkHealthMonitor.shared.start()
         DispatchQueue.main.async { [weak self] in
@@ -992,10 +1005,7 @@ public final class AutoMonitor: @unchecked Sendable {
 
         var lastOffset = codexRolloutOffsets[thread.id]
         if lastOffset == nil {
-            // First time seeing this thread rollout file:
-            // Scan the recent window (up to 65KB) to catch in-progress turns
-            let startOffset = fileSize > 65536 ? fileSize - 65536 : 0
-            lastOffset = startOffset
+            lastOffset = 0
         }
 
         guard fileSize > lastOffset! else {
@@ -1033,12 +1043,13 @@ public final class AutoMonitor: @unchecked Sendable {
             }
 
             let payload = json["payload"] as? [String: Any]
-            let payloadType = payload?["type"] as? String ?? json["type"] as? String
+            let topType = json["type"] as? String
+            let payloadType = payload?["type"] as? String ?? topType
             let role = payload?["role"] as? String
             let turnId = (payload?["turn_id"] as? String) ?? (json["turn_id"] as? String)
             let durationMs = payload?["duration_ms"] as? Double
 
-            if payloadType == "task_started" {
+            if payloadType == "task_started" || payloadType == "turn_started" {
                 _ = AgentStore.shared.handleCodexRolloutEvent(
                     threadId: thread.id,
                     title: thread.title,
@@ -1048,7 +1059,7 @@ public final class AutoMonitor: @unchecked Sendable {
                     turnId: turnId,
                     durationMs: nil
                 )
-            } else if payloadType == "task_complete" {
+            } else if payloadType == "task_complete" || payloadType == "turn_complete" {
                 _ = AgentStore.shared.handleCodexRolloutEvent(
                     threadId: thread.id,
                     title: thread.title,
@@ -1069,6 +1080,21 @@ public final class AutoMonitor: @unchecked Sendable {
                     turnId: turnId,
                     durationMs: nil
                 )
+            } else if payloadType == "item_completed" {
+                // In current Codex event_msg, item_completed payload carries turn_id and item (Reasoning / tool)
+                let item = payload?["item"] as? [String: Any]
+                let itemType = item?["type"] as? String
+                if itemType == "Reasoning" || itemType == "custom_tool_call" || itemType == "CommandExecution" || itemType == "Text" {
+                    _ = AgentStore.shared.handleCodexRolloutEvent(
+                        threadId: thread.id,
+                        title: thread.title,
+                        cwd: thread.cwd,
+                        rolloutPath: thread.rolloutPath,
+                        eventType: "task_started",
+                        turnId: turnId,
+                        durationMs: nil
+                    )
+                }
             } else if payloadType == "reasoning" || payloadType == "custom_tool_call" || payloadType == "custom_tool_call_output" {
                 // Active reasoning / tool execution in progress
                 _ = AgentStore.shared.handleCodexRolloutEvent(
@@ -1152,33 +1178,19 @@ public final class AutoMonitor: @unchecked Sendable {
                         thinkingStartTime: start,
                         durationMs: nil
                     )
-                } else if turn.status == "completed" || turn.completedAt != nil {
-                    _ = AgentStore.shared.handleCodexTurnState(
-                        threadId: thread.id,
-                        title: thread.title,
-                        cwd: thread.cwd,
-                        rolloutPath: thread.rolloutPath,
-                        status: .done,
-                        turnId: turn.turnId,
-                        thinkingStartTime: nil,
-                        durationMs: turn.durationMs
-                    )
-                } else if turn.status == "failed" {
-                    _ = AgentStore.shared.handleCodexTurnState(
-                        threadId: thread.id,
-                        title: thread.title,
-                        cwd: thread.cwd,
-                        rolloutPath: thread.rolloutPath,
-                        status: .idle,
-                        turnId: turn.turnId,
-                        thinkingStartTime: nil,
-                        durationMs: turn.durationMs
-                    )
                 }
             }
 
-            // Also incrementally process rollout file for live events (reasoning, tools)
-            processCodexRollout(thread: thread)
+            // Establish baseline offset if first time seeing this thread in monitor (never replay historical rollout on restart)
+            if codexRolloutOffsets[thread.id] == nil {
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: thread.rolloutPath),
+                   let size = attrs[.size] as? UInt64 {
+                    codexRolloutOffsets[thread.id] = size
+                }
+            } else {
+                // Incrementally process rollout file for live events
+                processCodexRollout(thread: thread)
+            }
         }
 
         AgentStore.shared.pruneStaleCodexSessions()

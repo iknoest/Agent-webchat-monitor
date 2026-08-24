@@ -1,5 +1,43 @@
 import Foundation
 
+public struct TestEnvironment: Sendable {
+    private static let lock = NSLock()
+    private static var _isTestMode: Bool = false
+
+    public static var isTestRuntime: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if _isTestMode { return true }
+        let env = ProcessInfo.processInfo.environment
+        if env["AGENT_BRIDGE_TEST_MODE"] != nil ||
+           env["XCTestConfigurationFilePath"] != nil ||
+           env["SWIFT_DETERMINISTIC_TEST_MODE"] != nil {
+            return true
+        }
+        let procName = ProcessInfo.processInfo.processName
+        if procName == "Stage1TestRunner" || procName == "xctest" {
+            return true
+        }
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--test-runner") || args.contains("Stage1TestRunner") {
+            return true
+        }
+        return false
+    }
+
+    public static func enableTestMode() {
+        lock.lock()
+        defer { lock.unlock() }
+        _isTestMode = true
+    }
+
+    public static func disableTestModeForTesting() {
+        lock.lock()
+        defer { lock.unlock() }
+        _isTestMode = false
+    }
+}
+
 public struct TelegramConfig: Sendable, Equatable {
     public let botToken: String
     public let chatId: String
@@ -26,6 +64,7 @@ public final class EnvConfigLoader: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cachedConfig: TelegramConfig?
+    private var isExplicitTestConfig: Bool = false
 
     private init() {
         reload()
@@ -42,6 +81,14 @@ public final class EnvConfigLoader: @unchecked Sendable {
     public func reload() {
         lock.lock()
         defer { lock.unlock() }
+
+        if TestEnvironment.isTestRuntime {
+            // Test Mode Isolation: Never load production environment or .env files from disk during tests
+            if !isExplicitTestConfig {
+                cachedConfig = TelegramConfig(botToken: "", chatId: "")
+            }
+            return
+        }
 
         var token: String = ""
         var chatId: String = ""
@@ -150,6 +197,11 @@ public final class EnvConfigLoader: @unchecked Sendable {
         if let config = cachedConfig {
             return config
         }
+        if TestEnvironment.isTestRuntime {
+            let emptyConfig = TelegramConfig(botToken: "", chatId: "")
+            cachedConfig = emptyConfig
+            return emptyConfig
+        }
         let config = TelegramConfig(botToken: "", chatId: "")
         cachedConfig = config
         return config
@@ -160,6 +212,7 @@ public final class EnvConfigLoader: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         cachedConfig = config
+        isExplicitTestConfig = (config != nil)
     }
 
     public func parseDotEnvFile(atPath path: String) -> [String: String] {

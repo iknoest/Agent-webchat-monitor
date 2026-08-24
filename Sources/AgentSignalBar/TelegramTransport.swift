@@ -94,6 +94,10 @@ public final class URLSessionTelegramTransport: TelegramTransportProtocol {
     }
 
     public func sendMessage(botToken: String, chatId: String, text: String, parseMode: String? = nil) async throws -> TelegramDeliveryResult {
+        if TestEnvironment.isTestRuntime {
+            // Hard physical isolation guard: NEVER contact real Telegram API in test runtime mode
+            return TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: 999, description: "SAFETY GUARD: Telegram network requests are blocked in test runtime mode")
+        }
         guard !botToken.isEmpty, !chatId.isEmpty else {
             return TelegramDeliveryResult(success: false, httpStatus: 0, errorCode: nil, description: "Missing bot token or chat ID")
         }
@@ -150,6 +154,9 @@ public final class URLSessionTelegramTransport: TelegramTransportProtocol {
     }
 
     public func getUpdates(botToken: String, offset: Int?, timeout: Int = 20) async throws -> [TelegramUpdate] {
+        if TestEnvironment.isTestRuntime {
+            return []
+        }
         guard !botToken.isEmpty else { return [] }
         var urlStr = "https://api.telegram.org/bot\(botToken)/getUpdates?timeout=\(timeout)"
         if let off = offset {

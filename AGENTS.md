@@ -1428,5 +1428,27 @@ Blockers: none
 
 [RELEASE] Final M2.1 Closeout — Remove Emoji Customization & Canonical App Cleanup — antigravity — 2026-08-24T21:48:00+02:00
 
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: M2.1.1 Runtime Integrity & Test Isolation (P0-A & P0-B1)
+Done:
+1. P0-A Hard Telegram Test Isolation:
+   - Implemented `TestEnvironment.isTestRuntime` active in both `Stage1TestRunner` and `swift test`.
+   - Updated `EnvConfigLoader.swift` to never load production `.env` files from `~/.config/AgentSignalBar/.env` during test runtime.
+   - Updated `TelegramBridge.swift` and `TelegramTransport.swift` to default to `MockTelegramTransport` and enforce a hard physical safety block in `URLSessionTelegramTransport.sendMessage` and `getUpdates` when in test runtime mode.
+2. P0-B1 Codex Restart & Rollout Baseline Repair:
+   - Established tail baseline initialization (`codexRolloutOffsets[thread.id] = fileSize`) for existing rollout files on restart, eliminating historical replay of reasoning/tool events.
+   - Restored active `inProgress` session from native `thread_turns` state.
+   - Added full schema parsing for incremental Codex rollout events (`event_msg` with `item_completed`, `task_started`, `turn_started`, `response_item`).
+   - Reinforced `reconcileCodexSessions` to require matching `turnId` before completing an active working session.
+3. Tests & Verification:
+   - Added Tests 396 to 402 in `Stage1TestRunner` (402/402 passed).
+   - Added unit tests in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Verified `./build_app.sh` built release binary and installed to `/Applications/AgentBridge.app`.
+   - Verified `git diff --check` clean.
+Verified: `swift run Stage1TestRunner` (402/402 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Report review and status to Ava in Traditional Chinese.
+Blockers: none
 
-
+[RELEASE] M2.1.1 Runtime Integrity & Test Isolation — antigravity — 2026-08-24T23:31:00+02:00

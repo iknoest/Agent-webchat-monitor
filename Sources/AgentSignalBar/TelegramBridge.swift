@@ -28,8 +28,14 @@ public final class TelegramBridge: @unchecked Sendable {
         }
     }
 
-    public init(transport: TelegramTransportProtocol = URLSessionTelegramTransport()) {
-        self.transport = transport
+    public init(transport: TelegramTransportProtocol? = nil) {
+        if let t = transport {
+            self.transport = t
+        } else if TestEnvironment.isTestRuntime {
+            self.transport = MockTelegramTransport()
+        } else {
+            self.transport = URLSessionTelegramTransport()
+        }
     }
 
     public func makeSessionKey(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, webLink: String? = nil) -> String {

@@ -65,6 +65,13 @@
 
 ---
 
+### Milestone 2.1.1 (M2.1.1) — Runtime Integrity & Test Isolation (IN PROGRESS)
+- [x] **P0-A: Telegram Test Runtime Isolation**: Hard defense-in-depth isolation in `TestEnvironment`, blocking real Telegram network requests in `URLSessionTelegramTransport` and preventing production `.env` loading during test executions (`Stage1TestRunner` & `swift test`).
+- [x] **P0-B1: Codex Restart / Rollout Baseline Repair**: Tail baseline initialization for newly discovered rollout files on restart; full support for current observed event schema (`event_msg` with `item_completed`, `task_started`, `turn_started`, `response_item`); exclusion of historical replay from mutating lifecycle.
+- [ ] **P0-B2: Codex Working → Idle Downgrade Demonstration**: Await exact state-writing path demonstration before speculative repair.
+
+---
+
 ## Next Roadmap Milestones
 
 ### Milestone 3 (M3) — Project Bridge (M3.1 NEXT)

@@ -5,6 +5,11 @@ import AgentSignalBarCore
 import XCTest
 
 final class AgentSignalBarTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        TestEnvironment.enableTestMode()
+        TelegramBridge.shared.transport = MockTelegramTransport()
+    }
 
     func testUsageStoreLivePriorityAndDiskWriteSuppression() throws {
         let store = AgentUsageStore.shared
@@ -2058,6 +2063,59 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertFalse(bridge.isSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute"))
         bridge.setSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute", enabled: true)
         XCTAssertTrue(bridge.isSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute"))
+    }
+
+    func testTestEnvironmentIsolationGuards() async throws {
+        XCTAssertTrue(TestEnvironment.isTestRuntime, "TestEnvironment must detect test runtime")
+
+        // Real transport must block network calls
+        let realTransport = URLSessionTelegramTransport()
+        let result = try await realTransport.sendMessage(botToken: "fake_token", chatId: "fake_chat", text: "Test", parseMode: nil)
+        XCTAssertFalse(result.success)
+        XCTAssertEqual(result.httpStatus, 0)
+        XCTAssertTrue(result.description?.contains("SAFETY GUARD") == true)
+
+        // EnvConfigLoader must not load production credentials
+        EnvConfigLoader.shared.setConfigForTesting(nil)
+        let config = EnvConfigLoader.shared.getTelegramConfig()
+        XCTAssertFalse(config.isConfigured)
+        XCTAssertTrue(config.botToken.isEmpty)
+        XCTAssertTrue(config.chatId.isEmpty)
+    }
+
+    func testCodexRestartHistoricalRolloutSuppressionAndIncrementalSchema() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Create 3 historical rollout files
+        var threads: [AutoMonitor.CodexThreadInfo] = []
+        for i in 1...3 {
+            let tid = "thread_xctest_hist_\(i)"
+            let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+            let content = """
+            {"timestamp":"2026-08-24T20:00:00.000Z","ordinal":1,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn_old_\(i)"}}
+            {"timestamp":"2026-08-24T20:00:05.000Z","ordinal":2,"type":"response_item","payload":{"type":"reasoning"}}
+            {"timestamp":"2026-08-24T20:00:10.000Z","ordinal":3,"type":"event_msg","payload":{"type":"item_completed","turn_id":"turn_old_\(i)","item":{"type":"Reasoning"}}}
+            """
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
+            threads.append(AutoMonitor.CodexThreadInfo(id: tid, title: "Historical Thread \(i)", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787600000000))
+        }
+
+        AutoMonitor.shared.resetCodexOffsetsForTesting()
+        AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+        for thread in threads {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: thread.rolloutPath),
+               let size = attrs[.size] as? UInt64 {
+                AutoMonitor.shared.setCodexOffsetForTesting(threadId: thread.id, offset: size)
+            }
+            AutoMonitor.shared.processCodexRollout(thread: thread)
+        }
+
+        let sessions = AgentStore.shared.getSessions(for: .codex)
+        let workingSessions = sessions.filter { $0.status == .working }
+        XCTAssertTrue(workingSessions.isEmpty, "Historical rollout content on restart must NOT create Working sessions")
     }
 }
 #endif

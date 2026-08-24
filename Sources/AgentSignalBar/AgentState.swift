@@ -1655,7 +1655,7 @@ public final class AgentStore: @unchecked Sendable {
 
             // 3. If session is currently marked .working, verify with authoritative history turns
             if session.status == .working, let turns = historyTurns, let turnInfo = turns[sessionId] {
-                if turnInfo.status == "completed" || turnInfo.completedAt != nil {
+                if (turnInfo.status == "completed" || turnInfo.completedAt != nil) && (session.turnId == nil || session.turnId == turnInfo.turnId) {
                     var updated = session
                     updated.status = .done
                     updated.turnId = turnInfo.turnId
@@ -1671,7 +1671,7 @@ public final class AgentStore: @unchecked Sendable {
                     updated.lastUpdated = now
                     currentSessions[sessionId] = updated
                     changed = true
-                } else if turnInfo.status == "failed" {
+                } else if turnInfo.status == "failed" && (session.turnId == nil || session.turnId == turnInfo.turnId) {
                     var updated = session
                     updated.status = .idle
                     updated.turnId = turnInfo.turnId
