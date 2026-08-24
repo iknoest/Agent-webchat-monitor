@@ -784,7 +784,9 @@ public final class AgentStore: @unchecked Sendable {
                 currentParent.targetTabId = sel.targetTabId
                 currentParent.webLink = sel.webLink
                 currentParent.turnId = sel.turnId
-                if !sel.sourceEvidence.isEmpty {
+                if let reason = sel.attentionReason, !reason.isEmpty {
+                    currentParent.detail = reason
+                } else if !sel.sourceEvidence.isEmpty && sel.sourceEvidence != "Antigravity Hook: Registered" && sel.sourceEvidence != "Direct status update" {
                     currentParent.detail = sel.sourceEvidence
                 }
             }

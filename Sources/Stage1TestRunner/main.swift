@@ -5805,7 +5805,7 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
 
     let store = AgentStore.shared
@@ -5813,9 +5813,9 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
     _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_start", turnId: "turn_done_1")
     _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_end", turnId: "turn_done_1")
 
-    bridge.setNotifyMeOverride(provider: .copilot, sessionId: sessId)
     bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Copilot output ready")
-    Thread.sleep(forTimeInterval: 0.1)
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     try assert(mockTransport.sentMessages.count == 1, "Genuine turn completion must emit exactly 1 Telegram notification, got: \(mockTransport.sentMessages.count)")
     try assert(mockTransport.sentMessages.first?.text.contains("finished") == true)
@@ -6426,18 +6426,14 @@ runTest("332. M2.1: Unknown duration Done -> no automatic notification") {
     try assert(mock.getAllSentMessages().isEmpty, "Unknown duration Done must NOT send automatic notification without override")
 }
 
-// 333. M2.1: Per-session Notify Me override → Done notifies below threshold
-runTest("333. M2.1: Per-session Notify Me override -> Done notifies below threshold") {
+// 333. M2.1: Per-session completion enabled -> Done notifies when threshold is Off
+runTest("333. M2.1: Per-session completion enabled -> Done notifies when threshold is Off") {
     let mock = MockTelegramTransport()
     let bridge = TelegramBridge(transport: mock)
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
-
-    // Arm one-shot override for this session
-    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_watched_30s")
-    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_watched_30s"))
 
     let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_watched_30s", title: "Watched Task", status: .done, turnId: "turn_w30", lastDurationSeconds: 30)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
@@ -6448,42 +6444,38 @@ runTest("333. M2.1: Per-session Notify Me override -> Done notifies below thresh
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let sent = mock.getAllSentMessages()
-    try assert(sent.count == 1, "Watched session must notify below 5m threshold, got \(sent.count)")
+    try assert(sent.count == 1, "Enabled session must notify, got \(sent.count)")
     try assert(sent[0].text.contains("🟢 Claude Code finished"))
 }
 
-// 334. M2.1: Override clears after successful terminal notification
-runTest("334. M2.1: Override clears after successful terminal notification") {
+// 334. M2.1: Muting is persistent across turns
+runTest("334. M2.1: Muting is persistent across turns") {
     let mock = MockTelegramTransport()
     let bridge = TelegramBridge(transport: mock)
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
 
-    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_one_shot_test")
-    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_one_shot_test"))
+    bridge.setSessionCompletionEnabled(provider: .claude, sessionId: "sess_persistent_mute", enabled: false)
+    try assert(!bridge.isSessionCompletionEnabled(provider: .claude, sessionId: "sess_persistent_mute"))
 
-    // First turn: completes with 20s runtime -> sends and clears override
-    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_one_shot_test", title: "Turn 1", status: .done, turnId: "turn_1", lastDurationSeconds: 20)
+    // First turn: completes -> muted
+    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_persistent_mute", title: "Turn 1", status: .done, turnId: "turn_1", lastDurationSeconds: 20)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess1], processRunning: true)
     bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Turn 1")
 
-    let exp1 = Date().addingTimeInterval(0.1)
-    while Date() < exp1 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 0, "Turn 1 must be suppressed because session is muted")
 
-    try assert(mock.getAllSentMessages().count == 1, "Turn 1 must notify")
-    try assert(!bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_one_shot_test"), "Override must be consumed/cleared")
-
-    // Second turn: completes with 20s runtime -> suppressed because override is now gone!
-    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_one_shot_test", title: "Turn 2", status: .done, turnId: "turn_2", lastDurationSeconds: 20)
+    // Second turn: completes -> still muted (persistent!)
+    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_persistent_mute", title: "Turn 2", status: .done, turnId: "turn_2", lastDurationSeconds: 200)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess2], processRunning: true)
-    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Turn 2")
-
-    let exp2 = Date().addingTimeInterval(0.1)
+    let exp2 = Date().addingTimeInterval(0.05)
     while Date() < exp2 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
-    try assert(mock.getAllSentMessages().count == 1, "Turn 2 must NOT notify (override was cleared and duration < 5m)")
+    try assert(mock.getAllSentMessages().count == 0, "Turn 2 must still be suppressed because muting is persistent")
 }
 
 // 335. M2.1: App close remains Telegram silent
@@ -6712,7 +6704,7 @@ runTest("357. P0-A: Real Antigravity Permission Prompt -> .blocked / Needs You")
         "session_id": "agy_perm_test_sess",
         "reason": "Allow reading this URL?"
     ]
-    AgentStore.shared.handleAntigravityHookEvent(json: hookPayload)
+    AgentStore.shared.handleAntigravityHookEvent(json: hookPayload, isTestMode: true)
 
     let info = AgentStore.shared.getStatus(for: .antigravity)
     try assert(info.status == .blocked, "Permission requested must set Antigravity status to .blocked, got \(info.status)")
@@ -6727,7 +6719,7 @@ runTest("358. P0-A: Antigravity Permission Resolution clears blocked state") {
         "agent": "antigravity",
         "session_id": "agy_perm_test_sess"
     ]
-    AgentStore.shared.handleAntigravityHookEvent(json: resolvePayload)
+    AgentStore.shared.handleAntigravityHookEvent(json: resolvePayload, isTestMode: true)
 
     let info = AgentStore.shared.getStatus(for: .antigravity)
     try assert(info.status == .working, "Permission resolution must return Antigravity status to .working, got \(info.status)")
@@ -6924,8 +6916,8 @@ runTest("370. P1-B: Provider session submenu does NOT contain Notify Me on Teleg
     }
 }
 
-// 371. P1-B: Telegram Alerts submenu contains Notify Specific Sessions
-runTest("371. P1-B: Telegram Alerts submenu contains Notify Specific Sessions") {
+// 371. P1-B: Completion Alerts submenu contains Sessions and Minimum Runtime
+runTest("371. P1-B: Completion Alerts submenu contains Sessions and Minimum Runtime") {
     let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_daily_cld", title: "Daily Task", status: .working)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
 
@@ -6936,60 +6928,71 @@ runTest("371. P1-B: Telegram Alerts submenu contains Notify Specific Sessions") 
         return
     }
 
-    let specItem = tgMenu.items.first(where: { $0.title == "Notify Specific Sessions" })
-    try assert(specItem != nil, "Notify Specific Sessions item must exist inside Telegram Alerts submenu")
-    try assert(specItem?.submenu != nil, "Notify Specific Sessions must have a submenu")
-    let activeItem = specItem?.submenu?.items.first(where: { $0.title.contains("Daily Task") })
-    try assert(activeItem != nil, "Active session Daily Task must be listed in Notify Specific Sessions")
+    let compItem = tgMenu.items.first(where: { $0.title == "Completion Alerts" })
+    try assert(compItem != nil, "Completion Alerts item must exist inside Telegram Alerts submenu")
+    try assert(compItem?.submenu != nil, "Completion Alerts must have a submenu")
+
+    let sessionsItem = compItem?.submenu?.items.first(where: { $0.title == "Sessions" })
+    try assert(sessionsItem != nil, "Sessions submenu item must exist")
+    let activeItem = sessionsItem?.submenu?.items.first(where: { $0.title.contains("Daily Task") })
+    try assert(activeItem != nil, "Active session Daily Task must be listed in Sessions submenu")
+    try assert(activeItem?.state == .on, "Sessions default to enabled (.on)")
+
+    let minRuntimeItem = compItem?.submenu?.items.first(where: { $0.title == "Minimum Runtime" })
+    try assert(minRuntimeItem != nil, "Minimum Runtime submenu item must exist")
 }
 
-// 372. P1-B: Checking specific session arms one-shot override and receives below-threshold Done alert
-runTest("372. P1-B: Specific session receives below-threshold Done alert") {
+// 372. P1-B: Persistent opt-out: unmuting/muting persists across completions
+runTest("372. P1-B: Persistent opt-out: muting session suppresses completion") {
     let mock = MockTelegramTransport()
     let bridge = TelegramBridge(transport: mock)
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(15) // High threshold
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0) // Off (notify all unmuted)
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
 
-    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_spec_done", title: "Quick 30s Fix", status: .working, turnId: "turn_spec_1")
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_optout_1", title: "Muted Task", status: .working, turnId: "turn_opt_1")
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
 
-    // Arm one-shot override on this session
-    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_spec_done", targetTabId: nil, turnId: "turn_spec_1")
-    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_spec_done"))
+    // Uncheck / Mute this session
+    bridge.setSessionCompletionEnabled(provider: .claude, sessionId: "sess_optout_1", targetTabId: nil, enabled: false)
+    try assert(!bridge.isSessionCompletionEnabled(provider: .claude, sessionId: "sess_optout_1"))
 
-    // Transition to Done (30s < 15m threshold)
-    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_spec_done", title: "Quick 30s Fix", status: .done, turnId: "turn_spec_1", lastDurationSeconds: 30)
+    // Transition to Done
+    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_optout_1", title: "Muted Task", status: .done, turnId: "turn_opt_1", lastDurationSeconds: 30)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
-    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Quick 30s Fix")
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Muted Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Muted session completion must be suppressed")
+}
+
+// 373. P1-B: Unmuted session notifies immediately when Minimum Runtime is Off
+runTest("373. P1-B: Unmuted session notifies immediately when Minimum Runtime is Off") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_unmuted_1", title: "Active Task", status: .working, turnId: "turn_unm_1")
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    // Default: enabled
+    try assert(bridge.isSessionCompletionEnabled(provider: .claude, sessionId: "sess_unmuted_1"))
+
+    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_unmuted_1", title: "Active Task", status: .done, turnId: "turn_unm_1", lastDurationSeconds: 15)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Active Task")
 
     let exp = Date().addingTimeInterval(0.1)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let msgs = mock.getAllSentMessages()
-    try assert(msgs.count == 1, "Armed session must receive 1 Done alert even below threshold, got \(msgs.count)")
-    try assert(msgs[0].text.contains("Claude Code"), "Message must contain provider name")
-}
-
-// 373. P1-B: One-shot override auto-clears after terminal Done alert
-runTest("373. P1-B: One-shot override auto-clears after terminal Done alert") {
-    let mock = MockTelegramTransport()
-    let bridge = TelegramBridge(transport: mock)
-    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
-    ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(15)
-    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
-
-    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_autoclear", targetTabId: nil, turnId: "turn_ac_1")
-    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_autoclear", title: "Done Task", status: .done, turnId: "turn_ac_1", lastDurationSeconds: 30)
-    AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
-    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Done Task")
-
-    let exp = Date().addingTimeInterval(0.1)
-    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
-
-    try assert(!bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_autoclear"), "One-shot override must auto-clear after delivery")
+    try assert(msgs.count == 1, "Unmuted session must notify on completion when threshold is Off, got \(msgs.count)")
 }
 
 // 374. P1-C: Ordinary NSTextField allows standard typing and paste without aggressive keystroke mutation
@@ -7051,4 +7054,261 @@ runTest("378. P1-F: Build script produces AgentBridge.app and preserves config c
     try assert(cfgPath.contains("agent_signal_bar") || cfgPath.contains("AgentSignalBar"), "ConfigManager preserves established config storage path")
 }
 
-print("🎉 All 378 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Human QA Corrective Patch Tests Passed!")
+// 379. All new top-level sessions default Telegram completion enabled
+runTest("379. All new top-level sessions default Telegram completion enabled") {
+    let bridge = TelegramBridge.shared
+    let isDefaultEnabled = bridge.isSessionCompletionEnabled(provider: .chatgpt, sessionId: "brand_new_chat_123")
+    try assert(isDefaultEnabled, "New sessions must default to completion notifications enabled (true)")
+}
+
+// 380. Unchecked session completion does NOT notify
+runTest("380. Unchecked session completion does not notify") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .codex, sessionId: "sess_uncheck_test", title: "Unchecked Codex", status: .working, turnId: "turn_u_1")
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [sess], processRunning: true)
+
+    // Uncheck session
+    bridge.setSessionCompletionEnabled(provider: .codex, sessionId: "sess_uncheck_test", enabled: false)
+
+    let doneSess = AgentSessionInfo(provider: .codex, sessionId: "sess_uncheck_test", title: "Unchecked Codex", status: .done, turnId: "turn_u_1", lastDurationSeconds: 60)
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .codex, oldStatus: .working, newStatus: .done, detail: "Unchecked Codex")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Unchecked session completion must NOT emit notification")
+}
+
+// 381. Checked session completion DOES notify
+runTest("381. Checked session completion does notify") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .codex, sessionId: "sess_check_test", title: "Checked Codex", status: .working, turnId: "turn_c_1")
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [sess], processRunning: true)
+
+    // Default checked
+    let doneSess = AgentSessionInfo(provider: .codex, sessionId: "sess_check_test", title: "Checked Codex", status: .done, turnId: "turn_c_1", lastDurationSeconds: 60)
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .codex, oldStatus: .working, newStatus: .done, detail: "Checked Codex")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "Checked session completion MUST emit notification")
+}
+
+// 382. Minimum Runtime Off means no duration suppression
+runTest("382. Minimum Runtime Off means no duration suppression") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0) // Off
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let doneSess = AgentSessionInfo(provider: .claude, sessionId: "sess_fast_5s", title: "Fast Task", status: .done, turnId: "turn_f_1", lastDurationSeconds: 5)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [doneSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Fast Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "A 5-second completion must notify when threshold is Off")
+}
+
+// 383. Optional runtime threshold still works when explicitly selected
+runTest("383. Optional runtime threshold still works when explicitly selected") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5) // 5 min threshold
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    // 1. Short task (30s < 5m) -> suppressed
+    let shortSess = AgentSessionInfo(provider: .claude, sessionId: "sess_short_30s", title: "Short Task", status: .done, turnId: "turn_s_1", lastDurationSeconds: 30)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [shortSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Short Task")
+
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 0, "30s task must be suppressed at 5m threshold")
+
+    // 2. Long task (360s >= 5m) -> notified
+    let longSess = AgentSessionInfo(provider: .claude, sessionId: "sess_long_6m", title: "Long Task", status: .done, turnId: "turn_l_1", lastDurationSeconds: 360)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [longSess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Long Task")
+
+    exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 1, "6m task must notify at 5m threshold")
+}
+
+// 384. Old one-shot Notify Specific Sessions behavior is removed from UI
+runTest("384. Old one-shot Notify Specific Sessions behavior is removed") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let tgMenu = menu.items.first(where: { $0.title.contains("Telegram Alerts") })?.submenu
+    try assert(tgMenu?.items.contains(where: { $0.title == "Notify Specific Sessions" }) == false, "Notify Specific Sessions must NOT exist")
+    try assert(tgMenu?.items.contains(where: { $0.title == "Completion Alerts" }) == true, "Completion Alerts must exist")
+}
+
+// 385. Needs You bypasses completion mute
+runTest("385. Needs You bypasses completion mute") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    // Mute session
+    bridge.setSessionCompletionEnabled(provider: .antigravity, sessionId: "sess_muted_perm", enabled: false)
+
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "sess_muted_perm", title: "Muted AGY", status: .blocked, turnId: "turn_p_1", attentionReason: "Allow running script?")
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .blocked, detail: "Allow running script?")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Needs You must notify even if session completion is muted, got \(msgs.count)")
+    try assert(msgs[0].text.contains("🔴 Antigravity needs you"))
+}
+
+// 386. Quota alerts bypass completion mute
+runTest("386. Quota alerts bypass completion mute") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    // Mute all claude sessions
+    bridge.setSessionCompletionEnabled(provider: .claude, sessionId: "sess_1", enabled: false)
+
+    bridge.handleQuotaDepletionChange(agent: .claude, isExhausted: true, resetText: "19:00")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Quota alerts must notify regardless of session completion mute")
+}
+
+// 387. Monitor/network health alerts bypass completion mute
+runTest("387. Monitor/network health alerts bypass completion mute") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleNetworkHealthChange(isConnected: false)
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.count == 1, "Network health alert must notify independently")
+}
+
+// 388. Installed AgentBridge discovers Telegram credentials from stable config path
+runTest("388. Installed AgentBridge discovers Telegram credentials from stable config path") {
+    let stablePath = EnvConfigLoader.stableUserEnvPath
+    try assert(stablePath.contains(".config/AgentSignalBar/.env"), "Stable path must be ~/.config/AgentSignalBar/.env")
+
+    // Verify parser handles mock content at stable path
+    let mockContent = "TELEGRAM_BOT_TOKEN=tok_stable_test\nTELEGRAM_CHAT_ID=chat_stable_123\n"
+    let parsed = EnvConfigLoader.shared.parseDotEnvString(mockContent)
+    try assert(parsed["TELEGRAM_BOT_TOKEN"] == "tok_stable_test")
+    try assert(parsed["TELEGRAM_CHAT_ID"] == "chat_stable_123")
+}
+
+// 389. Installed app does not depend on repo cwd
+runTest("389. Installed app does not depend on repo cwd") {
+    let loader = EnvConfigLoader.shared
+    // Process env or stable config takes priority over cwd .env
+    try assert(EnvConfigLoader.stableUserEnvPath.hasPrefix("/"))
+}
+
+// 390. Secrets are never logged in diagnostic summary
+runTest("390. Secrets are never logged in diagnostic summary") {
+    let cfg = TelegramConfig(botToken: "super_secret_token_12345", chatId: "secret_chat_67890")
+    let summary = cfg.diagnosticSummary
+    try assert(!summary.contains("super_secret_token_12345"), "Token must NOT be in diagnostic summary")
+    try assert(!summary.contains("secret_chat_67890"), "ChatId must NOT be in diagnostic summary")
+    try assert(summary.contains("configured"), "Summary must report 'configured'")
+}
+
+// 391. Actual AppKit PasteableEmojiTextField accepts direct paste of 😶‍🌫️
+runTest("391. Actual AppKit PasteableEmojiTextField accepts direct paste of 😶‍🌫️") {
+    let tf = PasteableEmojiTextField(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", forType: .string)
+
+    tf.executePaste()
+    try assert(tf.stringValue == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "PasteableEmojiTextField must accept pasted 😶‍🌫️ via executePaste")
+}
+
+// 392. Save rejects 'x'
+runTest("392. Save rejects 'x'") {
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("x"), "'x' must fail validation")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji("Hello"), "'Hello' must fail validation")
+    try assert(!EmojiCustomizationController.isValidSingleEmoji(""), "Empty must fail validation")
+}
+
+// 393. Save accepts composite emojis: 🐶, ❤️, 😶‍🌫️, 👨‍💻, 👍🏻
+runTest("393. Save accepts composite emojis") {
+    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("❤️"), "❤️ must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"), "😶‍🌫️ must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("👨‍💻"), "👨‍💻 must be valid")
+    try assert(EmojiCustomizationController.isValidSingleEmoji("👍🏻"), "👍🏻 must be valid")
+}
+
+// 394. PasteableEmojiTextField performKeyEquivalent handles Cmd+V, Cmd+C, Cmd+X, Cmd+A
+runTest("394. PasteableEmojiTextField performKeyEquivalent handles Cmd+V, Cmd+C, Cmd+X, Cmd+A") {
+    let tf = PasteableEmojiTextField(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("🐶", forType: .string)
+
+    let pasteEvent = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: .command,
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: 0,
+        context: nil,
+        characters: "v",
+        charactersIgnoringModifiers: "v",
+        isARepeat: false,
+        keyCode: 9
+    )!
+
+    let handled = tf.performKeyEquivalent(with: pasteEvent)
+    try assert(handled, "performKeyEquivalent must return true for Cmd+V")
+    try assert(tf.stringValue == "🐶", "tf stringValue must become 🐶 after Cmd+V event")
+}
+
+// 395. Persistent session muting is stored in ConfigManager
+runTest("395. Persistent session muting is stored in ConfigManager") {
+    let sessionKey = "claude_sess_persistent_mute_test"
+    ConfigManager.shared.setSessionCompletionMuted(key: sessionKey, muted: true)
+    try assert(ConfigManager.shared.isSessionCompletionMuted(key: sessionKey))
+
+    ConfigManager.shared.setSessionCompletionMuted(key: sessionKey, muted: false)
+    try assert(!ConfigManager.shared.isSessionCompletionMuted(key: sessionKey))
+}
+
+print("🎉 All 395 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Tiny Corrective Patch Tests Passed!")

@@ -322,12 +322,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let tgEnabled = cfg.isTelegramEnabled ?? true
         let tgConfigured = EnvConfigLoader.shared.getTelegramConfig().isConfigured
         let tgLastTest = TelegramBridge.shared.lastDeliveryResult?.safeSummary ?? "none"
-        let tgThreshold = cfg.telegramDoneThresholdMinutes ?? 5
+        let tgThreshold = cfg.telegramDoneThresholdMinutes ?? 0
         let tgQuotaAlerts = cfg.isTelegramQuotaAlertsEnabled ?? true
+        let tgMutedSessions = (cfg.mutedCompletionSessions ?? []).sorted().joined(separator: ",")
         let netConnected = NetworkHealthMonitor.shared.isConnected
         let badgesSig = "\(cfg.statusBadges.done.funEmoji):\(cfg.statusBadges.working.funEmoji):\(cfg.statusBadges.blocked.funEmoji):\(cfg.statusBadges.overworking?.funEmoji ?? ""):\(cfg.statusBadges.idle.funEmoji):\(cfg.statusBadges.off.funEmoji):\(cfg.statusBadges.quotaDepleted?.funEmoji ?? ""):\(cfg.statusBadges.quotaRestored?.funEmoji ?? ""):\(cfg.statusBadges.monitorUnavailable?.funEmoji ?? "")"
 
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts)|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -830,34 +831,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         telegramSubmenu.addItem(enableItem)
         telegramSubmenu.addItem(NSMenuItem.separator())
 
-        // 2. Done Notifications Threshold Submenu
-        let currentDoneThreshold = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 5
-        let doneThresholdTitle = currentDoneThreshold == 0 ? "Done Notifications: Off" : "Done Notifications: \(currentDoneThreshold) min+"
-        let doneThresholdItem = NSMenuItem(title: doneThresholdTitle, action: nil, keyEquivalent: "")
-        let doneThresholdSubmenu = NSMenu()
-        let availableThresholdOptions: [(Int, String)] = [
-            (0, "Off (Per-Session Override Only)"),
-            (1, "1 min+"),
-            (3, "3 min+"),
-            (5, "5 min+ (Default)"),
-            (10, "10 min+"),
-            (15, "15 min+")
-        ]
-        for (mins, label) in availableThresholdOptions {
-            let item = NSMenuItem(title: label, action: #selector(selectTelegramDoneThresholdClicked(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mins
-            if mins == currentDoneThreshold {
-                item.state = .on
-            }
-            doneThresholdSubmenu.addItem(item)
-        }
-        doneThresholdItem.submenu = doneThresholdSubmenu
-        telegramSubmenu.addItem(doneThresholdItem)
+        // 2. Completion Alerts Submenu
+        let completionAlertsItem = NSMenuItem(title: "Completion Alerts", action: nil, keyEquivalent: "")
+        let completionAlertsSubmenu = NSMenu()
 
-        // 3. Notify Specific Sessions Submenu
-        let specificSessionsItem = NSMenuItem(title: "Notify Specific Sessions", action: nil, keyEquivalent: "")
-        let specificSessionsMenu = NSMenu()
+        // 2A. Sessions Submenu (Persistent Opt-Out)
+        let sessionsItem = NSMenuItem(title: "Sessions", action: nil, keyEquivalent: "")
+        let sessionsSubmenu = NSMenu()
         var allActiveTopSessions: [AgentSessionInfo] = []
         for agent in AgentID.allCases {
             guard ConfigManager.shared.isAgentMonitored(agent) else { continue }
@@ -868,20 +848,48 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         if allActiveTopSessions.isEmpty {
             let noSessItem = NSMenuItem(title: "No Active Sessions", action: nil, keyEquivalent: "")
             noSessItem.isEnabled = false
-            specificSessionsMenu.addItem(noSessItem)
+            sessionsSubmenu.addItem(noSessItem)
         } else {
             for session in allActiveTopSessions {
-                let isArmed = TelegramBridge.shared.isNotifyMeOverrideActive(provider: session.provider, sessionId: session.sessionId)
+                let isEnabled = TelegramBridge.shared.isSessionCompletionEnabled(provider: session.provider, sessionId: session.sessionId, targetTabId: session.targetTabId, webLink: session.webLink)
                 let itemTitle = "\(session.provider.displayName) — \(session.title)"
-                let sItem = NSMenuItem(title: itemTitle, action: #selector(toggleOneShotTelegramNotifyClicked(_:)), keyEquivalent: "")
+                let sItem = NSMenuItem(title: itemTitle, action: #selector(toggleTelegramSessionCompletionClicked(_:)), keyEquivalent: "")
                 sItem.target = self
-                sItem.representedObject = ["agent": session.provider, "sessionId": session.sessionId, "turnId": session.turnId as Any]
-                sItem.state = isArmed ? .on : .off
-                specificSessionsMenu.addItem(sItem)
+                sItem.representedObject = ["agent": session.provider, "sessionId": session.sessionId as Any, "tabId": session.targetTabId as Any, "webLink": session.webLink as Any]
+                sItem.state = isEnabled ? .on : .off
+                sessionsSubmenu.addItem(sItem)
             }
         }
-        specificSessionsItem.submenu = specificSessionsMenu
-        telegramSubmenu.addItem(specificSessionsItem)
+        sessionsItem.submenu = sessionsSubmenu
+        completionAlertsSubmenu.addItem(sessionsItem)
+
+        // 2B. Minimum Runtime Submenu
+        let currentDoneThreshold = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 0
+        let minRuntimeTitle = "Minimum Runtime"
+        let minRuntimeItem = NSMenuItem(title: minRuntimeTitle, action: nil, keyEquivalent: "")
+        let minRuntimeSubmenu = NSMenu()
+        let availableThresholdOptions: [(Int, String)] = [
+            (0, "Off"),
+            (1, "1 min"),
+            (3, "3 min"),
+            (5, "5 min"),
+            (10, "10 min"),
+            (15, "15 min")
+        ]
+        for (mins, label) in availableThresholdOptions {
+            let item = NSMenuItem(title: label, action: #selector(selectTelegramDoneThresholdClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mins
+            if mins == currentDoneThreshold {
+                item.state = .on
+            }
+            minRuntimeSubmenu.addItem(item)
+        }
+        minRuntimeItem.submenu = minRuntimeSubmenu
+        completionAlertsSubmenu.addItem(minRuntimeItem)
+
+        completionAlertsItem.submenu = completionAlertsSubmenu
+        telegramSubmenu.addItem(completionAlertsItem)
 
         telegramSubmenu.addItem(NSMenuItem.separator())
 
@@ -1298,26 +1306,30 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         )
     }
 
-    @objc private func toggleOneShotTelegramNotifyClicked(_ sender: NSMenuItem) {
+    @objc private func toggleTelegramSessionCompletionClicked(_ sender: NSMenuItem) {
         if let dict = sender.representedObject as? [String: Any], let agent = dict["agent"] as? AgentID {
             let sessionId = dict["sessionId"] as? String
             let tabId = dict["tabId"] as? Int
             let url = dict["url"] as? String ?? dict["webLink"] as? String
-            TelegramBridge.shared.toggleNotifyMeOverride(provider: agent, sessionId: sessionId ?? url, targetTabId: tabId)
+            TelegramBridge.shared.toggleSessionCompletionEnabled(provider: agent, sessionId: sessionId ?? url, targetTabId: tabId, webLink: url)
             updateTitleAndMenu()
         } else if let agent = sender.representedObject as? AgentID {
             let info = AgentStore.shared.getStatus(for: agent)
             let sessions = AgentStore.shared.getSessions(for: agent)
             let currentSessionId = sessions.first?.sessionId
-            TelegramBridge.shared.toggleNotifyMeOverride(provider: agent, sessionId: currentSessionId ?? info.webLink, targetTabId: info.targetTabId)
+            TelegramBridge.shared.toggleSessionCompletionEnabled(provider: agent, sessionId: currentSessionId ?? info.webLink, targetTabId: info.targetTabId, webLink: info.webLink)
             updateTitleAndMenu()
         }
+    }
+
+    @objc private func toggleOneShotTelegramNotifyClicked(_ sender: NSMenuItem) {
+        toggleTelegramSessionCompletionClicked(sender)
     }
 
     @objc private func selectTelegramDoneThresholdClicked(_ sender: NSMenuItem) {
         if let mins = sender.representedObject as? Int {
             ConfigManager.shared.setTelegramDoneThresholdMinutes(mins)
-            print("⏱️ Telegram Done Threshold updated to \(mins == 0 ? "Off" : "\(mins) min") and saved to config.json")
+            print("⏱️ Telegram Completion Minimum Runtime updated to \(mins == 0 ? "Off" : "\(mins) min") and saved to config.json")
             updateTitleAndMenu()
         }
     }

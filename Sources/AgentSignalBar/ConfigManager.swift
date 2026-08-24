@@ -128,7 +128,8 @@ public struct AppConfig: Codable {
     public var minBatteryPercentForClosedLid: Int? // default 20
     public var isTelegramEnabled: Bool? // default true
     public var isTelegramQuotaAlertsEnabled: Bool? // default true
-    public var telegramDoneThresholdMinutes: Int? // default 5 (0 means Off / per-session override only)
+    public var telegramDoneThresholdMinutes: Int? // default 0 (0 means Off / no duration threshold)
+    public var mutedCompletionSessions: [String]? // explicit list of user-muted session keys
     public var customMainIconPath: String?
     public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
     public var agents: [String: AgentCustomConfig]
@@ -149,7 +150,8 @@ public struct AppConfig: Codable {
             minBatteryPercentForClosedLid: 20,
             isTelegramEnabled: true,
             isTelegramQuotaAlertsEnabled: true,
-            telegramDoneThresholdMinutes: 5,
+            telegramDoneThresholdMinutes: 0,
+            mutedCompletionSessions: [],
             customMainIconPath: nil,
             disabledAgents: [],
             agents: [
@@ -320,6 +322,28 @@ public final class ConfigManager: @unchecked Sendable {
         var cfg = config
         cfg.telegramDoneThresholdMinutes = mins
         saveConfig(cfg)
+    }
+
+    public func isSessionCompletionMuted(key: String) -> Bool {
+        let muted = config.mutedCompletionSessions ?? []
+        return muted.contains(key)
+    }
+
+    public func setSessionCompletionMuted(key: String, muted: Bool) {
+        var cfg = config
+        var current = Set(cfg.mutedCompletionSessions ?? [])
+        if muted {
+            current.insert(key)
+        } else {
+            current.remove(key)
+        }
+        cfg.mutedCompletionSessions = Array(current).sorted()
+        saveConfig(cfg)
+    }
+
+    public func toggleSessionCompletionMuted(key: String) {
+        let currentMuted = isSessionCompletionMuted(key: key)
+        setSessionCompletionMuted(key: key, muted: !currentMuted)
     }
 
     public func resetStatusBadgesToDefaults() {

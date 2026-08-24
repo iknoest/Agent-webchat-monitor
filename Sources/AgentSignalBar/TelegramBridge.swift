@@ -32,90 +32,51 @@ public final class TelegramBridge: @unchecked Sendable {
         self.transport = transport
     }
 
-    private func makeOverrideKey(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) -> String {
+    public func makeSessionKey(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, webLink: String? = nil) -> String {
         if let tabId = targetTabId {
             return "\(provider.rawValue)_tab_\(tabId)"
         }
         if let sId = sessionId, !sId.isEmpty {
             return "\(provider.rawValue)_sess_\(sId)"
         }
+        if let link = webLink, !link.isEmpty {
+            return "\(provider.rawValue)_sess_\(link)"
+        }
         return "\(provider.rawValue)_sess_root"
     }
 
+    /// Persistent opt-out model: all top-level user sessions default to completion notifications enabled (true)
+    public func isSessionCompletionEnabled(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, webLink: String? = nil) -> Bool {
+        let key = makeSessionKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId, webLink: webLink)
+        return !ConfigManager.shared.isSessionCompletionMuted(key: key)
+    }
+
+    public func setSessionCompletionEnabled(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, webLink: String? = nil, enabled: Bool) {
+        let key = makeSessionKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId, webLink: webLink)
+        ConfigManager.shared.setSessionCompletionMuted(key: key, muted: !enabled)
+        print("🔔 Telegram completion alert \(enabled ? "enabled" : "muted") for \(provider.displayName) [\(key)]")
+    }
+
+    public func toggleSessionCompletionEnabled(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, webLink: String? = nil) {
+        let current = isSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId, webLink: webLink)
+        setSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId, webLink: webLink, enabled: !current)
+    }
+
+    // Compatibility methods
     public func isNotifyMeOverrideActive(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
-        if activeOverrides[key] != nil { return true }
-        if sessionId != nil && activeOverrides["\(provider.rawValue)_sess_root"] != nil { return true }
-        return false
+        return isSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
     }
 
     public func setNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, turnId: String? = nil) {
-        lock.lock()
-        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
-        activeOverrides[key] = TelegramNotifyOverride(
-            provider: provider,
-            sessionId: sessionId,
-            targetTabId: targetTabId,
-            turnId: turnId,
-            armedAt: Date()
-        )
-        lock.unlock()
-        print("🔔 Armed Telegram 'Notify Me When Ready' override for \(provider.displayName) [\(key)]")
+        setSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId, enabled: true)
     }
 
     public func clearNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) {
-        lock.lock()
-        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
-        activeOverrides.removeValue(forKey: key)
-        if sessionId != nil {
-            activeOverrides.removeValue(forKey: "\(provider.rawValue)_sess_root")
-        }
-        lock.unlock()
-        print("🔕 Disarmed Telegram 'Notify Me When Ready' override for \(provider.displayName) [\(key)]")
+        setSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId, enabled: false)
     }
 
     public func toggleNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, turnId: String? = nil) {
-        if isNotifyMeOverrideActive(provider: provider, sessionId: sessionId, targetTabId: targetTabId) {
-            clearNotifyMeOverride(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
-        } else {
-            setNotifyMeOverride(provider: provider, sessionId: sessionId, targetTabId: targetTabId, turnId: turnId)
-        }
-    }
-
-    private func consumeNotifyMeOverride(agent: AgentID, sessionId: String?, targetTabId: Int?, webLink: String?) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-
-        var found = false
-        if let tabId = targetTabId {
-            let key = "\(agent.rawValue)_tab_\(tabId)"
-            if activeOverrides.removeValue(forKey: key) != nil {
-                found = true
-            }
-        }
-        if let sId = sessionId, !sId.isEmpty {
-            let key = "\(agent.rawValue)_sess_\(sId)"
-            if activeOverrides.removeValue(forKey: key) != nil {
-                found = true
-            }
-        }
-        if let link = webLink, !link.isEmpty {
-            let key = "\(agent.rawValue)_sess_\(link)"
-            if activeOverrides.removeValue(forKey: key) != nil {
-                found = true
-            }
-        }
-        let rootKey = "\(agent.rawValue)_sess_root"
-        if activeOverrides.removeValue(forKey: rootKey) != nil {
-            found = true
-        }
-
-        if found {
-            print("🔔 Consumed one-shot Telegram Notify Me override for \(agent.displayName)")
-        }
-        return found
+        toggleSessionCompletionEnabled(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
     }
 
     public func setup() {
@@ -264,36 +225,35 @@ public final class TelegramBridge: @unchecked Sendable {
         let sessionId = relevantSession?.sessionId ?? "parent"
         let turnId = relevantSession?.turnId ?? info.turnId ?? "turn"
 
-        // 5. Telegram Notification Policy v2 Duration Threshold & Per-Session Override Gate for Done events
+        // 5. Completion Alerts Policy: Persistent Opt-Out and Optional Minimum Runtime
         if newStatus == .done {
-            let hasOverride = consumeNotifyMeOverride(
-                agent: agent,
+            let isEnabledForSession = isSessionCompletionEnabled(
+                provider: agent,
                 sessionId: relevantSession?.sessionId,
                 targetTabId: relevantSession?.targetTabId ?? info.targetTabId,
                 webLink: relevantSession?.webLink ?? info.webLink
             )
 
-            if !hasOverride {
-                let thresholdMinutes = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 5
-                // Threshold 0 means Off (suppress automatic Done notifications)
-                guard thresholdMinutes > 0 else {
-                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): threshold is Off (per-session override only)")
-                    return
-                }
+            guard isEnabledForSession else {
+                print("🔕 Suppressed Telegram Completion alert for \(agent.displayName): session completion alert is muted")
+                return
+            }
 
-                // If duration is unknown or <= 0, suppress notification unless watched
+            let thresholdMinutes = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 0
+            if thresholdMinutes > 0 {
+                // Minimum runtime noise filter configured (e.g. 1m, 3m, 5m, 10m, 15m)
                 guard let dur = relevantSession?.lastDurationSeconds ?? info.lastDurationSeconds, dur > 0 else {
-                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): duration is unknown")
+                    print("🔕 Suppressed Telegram Completion alert for \(agent.displayName): duration is unknown with minimum runtime \(thresholdMinutes)m")
                     return
                 }
 
-                // Check duration against threshold
                 let thresholdSeconds = Double(thresholdMinutes * 60)
                 guard dur >= thresholdSeconds else {
-                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): runtime (\(Int(dur))s) < threshold (\(Int(thresholdSeconds))s)")
+                    print("🔕 Suppressed Telegram Completion alert for \(agent.displayName): runtime (\(Int(dur))s) < threshold (\(Int(thresholdSeconds))s)")
                     return
                 }
             }
+            // If thresholdMinutes == 0 (Off), no duration filter is applied; all unmuted sessions notify immediately!
         }
 
         // 6. Deduplication Gate

@@ -2048,11 +2048,26 @@ final class AgentSignalBarTests: XCTestCase {
         // 4. Classic Quota Exhausted symbol is ⛔
         XCTAssertEqual(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic), "⛔")
 
-        // 5. Emoji validation
+        // 5. Emoji validation & AppKit paste
         XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🐶"))
         XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🤯"))
+        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"))
+        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("x"))
         XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("🐶🤯"))
         XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("text"))
+
+        let pasteTf = PasteableEmojiTextField(frame: .zero)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", forType: .string)
+        pasteTf.executePaste()
+        XCTAssertEqual(pasteTf.stringValue, "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
+
+        // 6. Persistent session completion mute
+        let testSessKey = "chatgpt_sess_test_persistent_mute"
+        bridge.setSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute", enabled: false)
+        XCTAssertFalse(bridge.isSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute"))
+        bridge.setSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute", enabled: true)
+        XCTAssertTrue(bridge.isSessionCompletionEnabled(provider: .chatgpt, sessionId: "test_persistent_mute"))
     }
 }
 #endif

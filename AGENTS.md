@@ -1369,3 +1369,34 @@ Blockers: none
 
 [RELEASE] M2.1 Final Human-QA Closeout — antigravity — 2026-08-24T20:25:00+02:00
 
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: M2.1 Tiny Corrective Patch — Do Not Block M3
+Done:
+1. Simplified Telegram Completion Notification Semantics (Persistent Opt-Out Model):
+   - Removed old one-shot override consumption and replaced with persistent session completion preferences (`isSessionCompletionMuted`, `setSessionCompletionMuted`, `toggleSessionCompletionMuted`).
+   - ALL top-level user sessions default to completion notifications enabled (`true`). Ava can explicitly uncheck sessions to mute them persistently.
+   - Renamed menu from `Done Notifications` to `Completion Alerts`.
+   - Submenu structure: `Completion Alerts > Sessions >` (listing all active top-level user sessions, checkmarked by default) and `Minimum Runtime >` (Off [default 0m], 1m, 3m, 5m, 10m, 15m).
+   - High-priority alerts (`Needs You`, monitor/connection failure, quota alerts) remain independent and bypass completion muting.
+2. Fixed Telegram `Not Configured` in Installed App:
+   - Configured stable user credentials lookup path: `~/.config/AgentSignalBar/.env` with fallback to `ProcessInfo.processInfo.environment`, legacy config, and development sibling `.env`.
+   - Added automatic migration helper in `EnvConfigLoader.swift` to copy Telegram credentials into `~/.config/AgentSignalBar/.env` with `0o600` permissions without logging secrets.
+3. Fixed Emoji Paste in Real AppKit UI:
+   - Subclassed `PasteableEmojiTextField` and `EmojiCustomizationPanel` to intercept `⌘V`, `⌘C`, `⌘X`, `⌘A`, and context-menu actions directly via `performKeyEquivalent`, solving `LSUIElement = 1` missing menu bar edit actions.
+   - Direct paste from `NSPasteboard.general` into `NSTextField` without live character mutation.
+   - Save validation strictly enforced on `Save & Apply` via `isValidSingleEmoji`.
+4. Tests & Verification:
+   - Added regression Tests 379 to 395 in `Stage1TestRunner` covering all 15 required checks (395/395 passed).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Verified SPM test suite in `AgentSignalBarTests.swift` passed (`swift test`).
+   - Verified release build and installation via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+   - Relaunched `/Applications/AgentBridge.app`.
+Verified: `swift run Stage1TestRunner` (395/395 passed), `node adapters/chrome-extension/background_test.js` (30/30 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), `/Applications/AgentBridge.app` running cleanly.
+Next: Commit and push changes to `feat/identity-notification-ux` and prepare fresh-session M3.1 handoff.
+Blockers: none
+
+[RELEASE] M2.1 Tiny Corrective Patch — Do Not Block M3 — antigravity — 2026-08-24T21:26:00+02:00
+
+

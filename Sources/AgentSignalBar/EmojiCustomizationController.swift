@@ -1,6 +1,139 @@
 import Foundation
 import AppKit
 
+open class PasteableEmojiTextField: NSTextField {
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupContextMenu()
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupContextMenu()
+    }
+
+    private func setupContextMenu() {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        menu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        menu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        self.menu = menu
+    }
+
+    open override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command {
+            guard let chars = event.charactersIgnoringModifiers?.lowercased() else {
+                return super.performKeyEquivalent(with: event)
+            }
+            switch chars {
+            case "v":
+                executePaste()
+                return true
+            case "c":
+                executeCopy()
+                return true
+            case "x":
+                executeCut()
+                return true
+            case "a":
+                executeSelectAll()
+                return true
+            case "z":
+                if flags.contains(.shift) {
+                    _ = NSApp.sendAction(Selector(("redo:")), to: nil, from: self)
+                } else {
+                    _ = NSApp.sendAction(Selector(("undo:")), to: nil, from: self)
+                }
+                return true
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    public func executePaste() {
+        if let str = NSPasteboard.general.string(forType: .string) {
+            if let editor = currentEditor() as? NSTextView {
+                editor.insertText(str, replacementRange: editor.selectedRange())
+            } else {
+                self.stringValue = str
+            }
+        } else {
+            _ = NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self)
+        }
+    }
+
+    public func executeCopy() {
+        if let editor = currentEditor() as? NSTextView {
+            let selectedText = (editor.string as NSString).substring(with: editor.selectedRange())
+            if !selectedText.isEmpty {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(selectedText, forType: .string)
+                return
+            }
+        }
+        if !self.stringValue.isEmpty {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(self.stringValue, forType: .string)
+        }
+    }
+
+    public func executeCut() {
+        executeCopy()
+        if let editor = currentEditor() as? NSTextView {
+            editor.insertText("", replacementRange: editor.selectedRange())
+        } else {
+            self.stringValue = ""
+        }
+    }
+
+    public func executeSelectAll() {
+        if let editor = currentEditor() {
+            editor.selectAll(nil)
+        } else {
+            self.selectText(nil)
+        }
+    }
+}
+
+open class EmojiCustomizationPanel: NSPanel {
+    open override var canBecomeKey: Bool { return true }
+    open override var canBecomeMain: Bool { return true }
+
+    open override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) {
+            return true
+        }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command {
+            guard let chars = event.charactersIgnoringModifiers?.lowercased() else {
+                return false
+            }
+            if chars == "v" || chars == "c" || chars == "x" || chars == "a" {
+                if let responder = self.firstResponder as? NSView {
+                    if let tf = responder as? PasteableEmojiTextField {
+                        if chars == "v" { tf.executePaste(); return true }
+                        if chars == "c" { tf.executeCopy(); return true }
+                        if chars == "x" { tf.executeCut(); return true }
+                        if chars == "a" { tf.executeSelectAll(); return true }
+                    } else if let tv = responder as? NSTextView, let tf = tv.delegate as? PasteableEmojiTextField {
+                        if chars == "v" { tf.executePaste(); return true }
+                        if chars == "c" { tf.executeCopy(); return true }
+                        if chars == "x" { tf.executeCut(); return true }
+                        if chars == "a" { tf.executeSelectAll(); return true }
+                    }
+                }
+            }
+        }
+        return false
+    }
+}
+
 public final class EmojiCustomizationController: NSWindowController, @unchecked Sendable {
     public static let shared = EmojiCustomizationController()
 
@@ -72,7 +205,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
             let panelHeight: CGFloat = 480
             let rect = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
 
-            let panel = NSPanel(
+            let panel = EmojiCustomizationPanel(
                 contentRect: rect,
                 styleMask: [.titled, .closable],
                 backing: .buffered,
@@ -126,7 +259,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
                 label.widthAnchor.constraint(equalToConstant: 220).isActive = true
                 rowStack.addArrangedSubview(label)
 
-                let tf = NSTextField(string: "")
+                let tf = PasteableEmojiTextField(frame: .zero)
                 tf.font = NSFont.systemFont(ofSize: 14)
                 tf.alignment = .center
                 tf.widthAnchor.constraint(equalToConstant: 60).isActive = true

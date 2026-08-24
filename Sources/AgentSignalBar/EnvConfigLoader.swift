@@ -31,6 +31,14 @@ public final class EnvConfigLoader: @unchecked Sendable {
         reload()
     }
 
+    public static var stableUserEnvPath: String {
+        return NSString(string: "~/.config/AgentSignalBar/.env").expandingTildeInPath
+    }
+
+    public static var legacyUserEnvPath: String {
+        return NSString(string: "~/.config/agent_signal_bar/.env").expandingTildeInPath
+    }
+
     public func reload() {
         lock.lock()
         defer { lock.unlock() }
@@ -38,7 +46,7 @@ public final class EnvConfigLoader: @unchecked Sendable {
         var token: String = ""
         var chatId: String = ""
 
-        // 1. ProcessInfo environment
+        // 1. ProcessInfo environment (highest priority)
         let procEnv = ProcessInfo.processInfo.environment
         if let t = procEnv["TELEGRAM_BOT_TOKEN"], !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             token = t.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -47,33 +55,93 @@ public final class EnvConfigLoader: @unchecked Sendable {
             chatId = c.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        // 2. ~/.config/AgentSignalBar/.env
-        let userConfigEnvPath = NSString(string: "~/.config/AgentSignalBar/.env").expandingTildeInPath
+        // 2. Stable user config location: ~/.config/AgentSignalBar/.env
+        let stableEnvPath = Self.stableUserEnvPath
         if token.isEmpty || chatId.isEmpty {
-            let parsed = parseDotEnvFile(atPath: userConfigEnvPath)
+            let parsed = parseDotEnvFile(atPath: stableEnvPath)
             if token.isEmpty, let t = parsed["TELEGRAM_BOT_TOKEN"] { token = t }
             if chatId.isEmpty, let c = parsed["TELEGRAM_CHAT_ID"] { chatId = c }
         }
 
-        // 3. Sibling .env next to repo-built AgentSignalBar.app bundle or working directory
+        // 2b. Legacy user config fallback: ~/.config/agent_signal_bar/.env
+        if token.isEmpty || chatId.isEmpty {
+            let parsedLegacy = parseDotEnvFile(atPath: Self.legacyUserEnvPath)
+            if token.isEmpty, let t = parsedLegacy["TELEGRAM_BOT_TOKEN"] { token = t }
+            if chatId.isEmpty, let c = parsedLegacy["TELEGRAM_CHAT_ID"] { chatId = c }
+        }
+
+        // 3. Development / repo-local fallback sources (sibling to app bundle, cwd, or known dev paths)
+        var fallbackToken = ""
+        var fallbackChatId = ""
+
         if token.isEmpty || chatId.isEmpty {
             // Sibling to app bundle
             let bundleURL = Bundle.main.bundleURL
             let appParentEnvURL = bundleURL.deletingLastPathComponent().appendingPathComponent(".env")
             let parsedSibling = parseDotEnvFile(atPath: appParentEnvURL.path)
-            if token.isEmpty, let t = parsedSibling["TELEGRAM_BOT_TOKEN"] { token = t }
-            if chatId.isEmpty, let c = parsedSibling["TELEGRAM_CHAT_ID"] { chatId = c }
+            if fallbackToken.isEmpty, let t = parsedSibling["TELEGRAM_BOT_TOKEN"] { fallbackToken = t }
+            if fallbackChatId.isEmpty, let c = parsedSibling["TELEGRAM_CHAT_ID"] { fallbackChatId = c }
         }
 
         if token.isEmpty || chatId.isEmpty {
             // Current working directory .env
             let cwdEnvPath = FileManager.default.currentDirectoryPath + "/.env"
             let parsedCwd = parseDotEnvFile(atPath: cwdEnvPath)
-            if token.isEmpty, let t = parsedCwd["TELEGRAM_BOT_TOKEN"] { token = t }
-            if chatId.isEmpty, let c = parsedCwd["TELEGRAM_CHAT_ID"] { chatId = c }
+            if fallbackToken.isEmpty, let t = parsedCwd["TELEGRAM_BOT_TOKEN"] { fallbackToken = t }
+            if fallbackChatId.isEmpty, let c = parsedCwd["TELEGRAM_CHAT_ID"] { fallbackChatId = c }
+        }
+
+        if token.isEmpty && !fallbackToken.isEmpty {
+            token = fallbackToken
+        }
+        if chatId.isEmpty && !fallbackChatId.isEmpty {
+            chatId = fallbackChatId
+        }
+
+        // 4. Safe migration: If stable config ~/.config/AgentSignalBar/.env is missing credentials, but a fallback has them, persist securely to stable path
+        if !token.isEmpty && !chatId.isEmpty {
+            migrateToStableEnvIfNeeded(token: token, chatId: chatId)
         }
 
         cachedConfig = TelegramConfig(botToken: token, chatId: chatId)
+    }
+
+    public func migrateToStableEnvIfNeeded(token: String, chatId: String) {
+        let stableEnvPath = Self.stableUserEnvPath
+        let fm = FileManager.default
+        let dirPath = NSString(string: stableEnvPath).deletingLastPathComponent
+
+        // Check if stable file already has both credentials
+        let existing = parseDotEnvFile(atPath: stableEnvPath)
+        if existing["TELEGRAM_BOT_TOKEN"] == token && existing["TELEGRAM_CHAT_ID"] == chatId {
+            return // Already synchronized
+        }
+
+        do {
+            if !fm.fileExists(atPath: dirPath) {
+                try fm.createDirectory(atPath: dirPath, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            }
+
+            var lines: [String] = []
+            if fm.fileExists(atPath: stableEnvPath), let content = try? String(contentsOfFile: stableEnvPath, encoding: .utf8) {
+                for line in content.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.hasPrefix("TELEGRAM_BOT_TOKEN=") && !trimmed.hasPrefix("TELEGRAM_CHAT_ID=") && !trimmed.isEmpty {
+                        lines.append(line)
+                    }
+                }
+            }
+
+            lines.append("TELEGRAM_BOT_TOKEN=\(token)")
+            lines.append("TELEGRAM_CHAT_ID=\(chatId)")
+            let outContent = lines.joined(separator: "\n") + "\n"
+
+            try outContent.write(toFile: stableEnvPath, atomically: true, encoding: .utf8)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stableEnvPath)
+            print("🔒 Safely synchronized Telegram configuration to stable user config path")
+        } catch {
+            print("⚠️ Failed to write to stable .env path: \(error.localizedDescription)")
+        }
     }
 
     public func getTelegramConfig() -> TelegramConfig {
