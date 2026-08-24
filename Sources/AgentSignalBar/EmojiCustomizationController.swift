@@ -6,6 +6,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
 
     private var windowInstance: NSWindow?
     private var textFields: [String: NSTextField] = [:]
+    private var fieldDelegates: [String: EmojiFieldDelegate] = [:]
 
     private struct StateItem {
         let key: String
@@ -23,7 +24,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         StateItem(key: "off", label: "Closed / Off", defaultEmoji: "😴", getCurrent: { $0.off.funEmoji }),
         StateItem(key: "quotaExhausted", label: "Quota Exhausted", defaultEmoji: "🤯", getCurrent: { $0.quotaDepleted?.funEmoji ?? "🤯" }),
         StateItem(key: "quotaRestored", label: "Quota Restored", defaultEmoji: "🥱", getCurrent: { $0.quotaRestored?.funEmoji ?? "🥱" }),
-        StateItem(key: "monitorUnavailable", label: "Monitor Not Connected", defaultEmoji: "😶🌫️", getCurrent: { $0.monitorUnavailable?.funEmoji ?? "😶🌫️" })
+        StateItem(key: "monitorUnavailable", label: "Monitor Not Connected", defaultEmoji: "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", getCurrent: { $0.monitorUnavailable?.funEmoji ?? "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}" })
     ]
 
     private init() {
@@ -55,7 +56,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "Customize Status Emoji — AgentBridge"
+            panel.title = "Customize Emoji — AgentBridge"
             panel.center()
             panel.isReleasedWhenClosed = false
 
@@ -78,7 +79,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
             ])
 
             // Header title
-            let headerLabel = NSTextField(labelWithString: "Customize Fun Emoji badges for each status:")
+            let headerLabel = NSTextField(labelWithString: "Customize Status Emoji:")
             headerLabel.font = NSFont.boldSystemFont(ofSize: 13)
             mainStack.addArrangedSubview(headerLabel)
 
@@ -91,6 +92,7 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
             mainStack.addArrangedSubview(gridStack)
 
             self.textFields.removeAll()
+            self.fieldDelegates.removeAll()
 
             for item in self.stateItems {
                 let rowStack = NSStackView()
@@ -108,9 +110,17 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
                 tf.alignment = .center
                 tf.widthAnchor.constraint(equalToConstant: 60).isActive = true
                 tf.heightAnchor.constraint(equalToConstant: 24).isActive = true
+                tf.isEditable = true
+                tf.isSelectable = true
+
+                let del = EmojiFieldDelegate(key: item.key, initialEmoji: item.defaultEmoji)
+                del.textField = tf
+                tf.delegate = del
+
+                self.fieldDelegates[item.key] = del
+                self.textFields[item.key] = tf
                 rowStack.addArrangedSubview(tf)
 
-                self.textFields[item.key] = tf
                 gridStack.addArrangedSubview(rowStack)
             }
 
@@ -156,12 +166,14 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         for item in stateItems {
             let val = item.getCurrent(currentBadges)
             textFields[item.key]?.stringValue = val
+            fieldDelegates[item.key]?.lastValidEmoji = val
         }
     }
 
     @objc private func resetButtonClicked() {
         for item in stateItems {
             textFields[item.key]?.stringValue = item.defaultEmoji
+            fieldDelegates[item.key]?.lastValidEmoji = item.defaultEmoji
         }
     }
 
@@ -174,8 +186,16 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         var badges = cfg.statusBadges
 
         for item in stateItems {
-            let userVal = textFields[item.key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let finalVal = userVal.isEmpty ? item.defaultEmoji : userVal
+            let rawUserVal = textFields[item.key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let finalVal: String
+            if rawUserVal.count == 1 {
+                finalVal = rawUserVal
+            } else if rawUserVal.isEmpty {
+                finalVal = fieldDelegates[item.key]?.lastValidEmoji ?? item.defaultEmoji
+            } else {
+                // Multi-grapheme: use last valid
+                finalVal = fieldDelegates[item.key]?.lastValidEmoji ?? item.defaultEmoji
+            }
 
             switch item.key {
             case "done":
@@ -222,5 +242,41 @@ public final class EmojiCustomizationController: NSWindowController, @unchecked 
         print("🎨 Status Emoji configuration saved successfully!")
         MenuBarManager.shared.updateTitleAndMenu()
         windowInstance?.close()
+    }
+}
+
+public final class EmojiFieldDelegate: NSObject, NSTextFieldDelegate {
+    public let key: String
+    public var lastValidEmoji: String
+    public weak var textField: NSTextField?
+
+    public init(key: String, initialEmoji: String) {
+        self.key = key
+        self.lastValidEmoji = initialEmoji
+    }
+
+    public func controlTextDidChange(_ obj: Notification) {
+        guard let tf = textField else { return }
+        let current = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty {
+            return
+        }
+        if current.count == 1 {
+            // Exactly one extended grapheme cluster (including composite emojis like 🐶, 😶‍🌫️, 👨‍💻, ❤️)
+            lastValidEmoji = current
+        } else {
+            // Multi-grapheme or invalid text: safely revert to last valid emoji
+            tf.stringValue = lastValidEmoji
+        }
+    }
+
+    public func controlTextDidEndEditing(_ obj: Notification) {
+        guard let tf = textField else { return }
+        let current = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.count == 1 {
+            lastValidEmoji = current
+        } else {
+            tf.stringValue = lastValidEmoji
+        }
     }
 }

@@ -1,93 +1,28 @@
 import Foundation
 import AppKit
 
-// Generates Chrome extension icons using Material Symbols ecg_heart concept
+// Generates Chrome extension icons using exact Google Material Symbols ecg_heart vector geometry
+
+let svgECGHeartGreen = """
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 -960 960 960"><path fill="#10A37F" d="M480-480Zm0 360q-18 0-34.5-6.5T416-146L148-415q-35-35-51.5-80T80-589q0-103 67-177t167-74q48 0 90.5 19t75.5 53q32-34 74.5-53t90.5-19q100 0 167.5 74T880-590q0 49-17 94t-51 80L543-146q-13 13-29 19.5t-34 6.5Zm40.29-510q7.71 0 13.71 4 6 4 11 10l71 106h188.13q7.94-19.43 11.9-39.43 3.97-20 3.97-40.57 0-77-49.95-133.5Q720.11-780 645.19-780q-35.19 0-67.69 14.5T521-725l-27 29q-3 3-6 5t-8 2q-5 0-8.64-1.88-3.63-1.89-6.36-5.12l-27-29q-24.27-25.82-56.64-40.41Q349-780 314-780q-74.57 0-124.29 56.44Q140-667.12 140-590q0 20.72 4 40.86T155.65-510H360q7.58 0 14.39 3.61 6.82 3.61 10.61 9.39l46 70 60-182q3.08-9 11.18-15 8.09-6 18.11-6Zm8.71 97-61 182q-2.97 9-11.15 15T439-330q-8 0-14-4t-10-10l-71-106H198l261 261q5 5 9.8 7 4.8 2 11.2 2 6.4 0 11.2-2 4.8-2 9.8-7l260-261H600q-8 0-14-4t-11-10l-46-69Z"/></svg>
+"""
 
 func drawECGHeartIcon(size: CGFloat) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size))
     image.lockFocus()
 
-    guard let ctx = NSGraphicsContext.current?.cgContext else {
-        image.unlockFocus()
-        return image
+    // Draw exact Material Symbols ecg_heart vector
+    if let data = svgECGHeartGreen.data(using: .utf8),
+       let svgImage = NSImage(data: data) {
+        let margin = size * 0.04
+        let iconRect = CGRect(
+            x: margin,
+            y: margin,
+            width: size - 2 * margin,
+            height: size - 2 * margin
+        )
+        svgImage.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
     }
-
-    let rect = CGRect(x: 0, y: 0, width: size, height: size)
-    let margin = size * 0.05
-    let drawingRect = rect.insetBy(dx: margin, dy: margin)
-
-    let cx = size * 0.5
-    let cy = size * 0.5
-    let scale = size / 100.0
-
-    // Heart Shape Path
-    let heartPath = CGMutablePath()
-    let topCenter = CGPoint(x: cx, y: cy + 18 * scale)
-    let bottomTip = CGPoint(x: cx, y: cy - 35 * scale)
-
-    heartPath.move(to: topCenter)
-    // Left lobe
-    heartPath.addCurve(
-        to: CGPoint(x: cx - 40 * scale, y: cy + 12 * scale),
-        control1: CGPoint(x: cx - 18 * scale, y: cy + 38 * scale),
-        control2: CGPoint(x: cx - 40 * scale, y: cy + 32 * scale)
-    )
-    heartPath.addCurve(
-        to: bottomTip,
-        control1: CGPoint(x: cx - 40 * scale, y: cy - 8 * scale),
-        control2: CGPoint(x: cx - 18 * scale, y: cy - 22 * scale)
-    )
-    // Right lobe
-    heartPath.addCurve(
-        to: CGPoint(x: cx + 40 * scale, y: cy + 12 * scale),
-        control1: CGPoint(x: cx + 18 * scale, y: cy - 22 * scale),
-        control2: CGPoint(x: cx + 40 * scale, y: cy - 8 * scale)
-    )
-    heartPath.addCurve(
-        to: topCenter,
-        control1: CGPoint(x: cx + 40 * scale, y: cy + 32 * scale),
-        control2: CGPoint(x: cx + 18 * scale, y: cy + 38 * scale)
-    )
-    heartPath.closeSubpath()
-
-    // Draw Heart Gradient (Vibrant Emerald / Teal Pulse gradient representing active health / ChatGPT monitoring)
-    ctx.saveGState()
-    ctx.addPath(heartPath)
-    ctx.clip()
-
-    let colorSpace = CGColorSpaceCreateDeviceRGB()
-    let heartColors = [
-        NSColor(red: 0.06, green: 0.72, blue: 0.55, alpha: 1.0).cgColor,
-        NSColor(red: 0.04, green: 0.52, blue: 0.42, alpha: 1.0).cgColor
-    ] as CFArray
-    if let gradient = CGGradient(colorsSpace: colorSpace, colors: heartColors, locations: [0.0, 1.0]) {
-        ctx.drawLinearGradient(gradient, start: CGPoint(x: cx, y: cy + 35 * scale), end: CGPoint(x: cx, y: cy - 35 * scale), options: [])
-    }
-    ctx.restoreGState()
-
-    // Draw ECG Pulse line across the heart
-    let ecgPath = CGMutablePath()
-    let leftX = cx - 35 * scale
-    let rightX = cx + 35 * scale
-    let baselineY = cy + 2 * scale
-
-    ecgPath.move(to: CGPoint(x: leftX, y: baselineY))
-    ecgPath.addLine(to: CGPoint(x: cx - 18 * scale, y: baselineY))
-    ecgPath.addLine(to: CGPoint(x: cx - 12 * scale, y: baselineY + 4 * scale))
-    ecgPath.addLine(to: CGPoint(x: cx - 6 * scale, y: baselineY - 16 * scale)) // sharp dip
-    ecgPath.addLine(to: CGPoint(x: cx + 4 * scale, y: baselineY + 22 * scale))  // sharp R-peak
-    ecgPath.addLine(to: CGPoint(x: cx + 12 * scale, y: baselineY - 8 * scale))  // S-wave
-    ecgPath.addLine(to: CGPoint(x: cx + 18 * scale, y: baselineY + 4 * scale))  // T-wave start
-    ecgPath.addLine(to: CGPoint(x: cx + 22 * scale, y: baselineY))
-    ecgPath.addLine(to: CGPoint(x: rightX, y: baselineY))
-
-    let strokeWidth = max(1.5, 5.0 * scale)
-    ctx.setLineWidth(strokeWidth)
-    ctx.setLineCap(.round)
-    ctx.setLineJoin(.round)
-    ctx.setStrokeColor(NSColor.white.cgColor)
-    ctx.addPath(ecgPath)
-    ctx.strokePath()
 
     image.unlockFocus()
     return image

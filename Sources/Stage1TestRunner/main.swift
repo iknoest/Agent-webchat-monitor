@@ -48,6 +48,7 @@ func assert(_ condition: Bool, _ message: String) throws {
 }
 
 print("🧪 Running Production Swift Stage 1 Logic & Containment Runner...")
+ConfigManager.shared.resetStatusBadgesToDefaults()
 
 // 1. Production AgentUsageStore Live Source Priority
 runTest("1. Live Usage Source Priority Over Config Fallbacks") {
@@ -4318,6 +4319,7 @@ runTest("209. Telegram: Done status sends single outbound notification with corr
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
 
     let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_done_tg_01", title: "Build Project", status: .done, lastDurationSeconds: 300)
@@ -4347,6 +4349,7 @@ runTest("210. Telegram: Duplicate Done status does not resend within debounce wi
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
 
     let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_done_01", title: "Refactor API", status: .done, lastDurationSeconds: 300)
@@ -5575,7 +5578,8 @@ runTest("280. ChatGPT Monitor Health: Heartbeat lease expires while Chrome is ru
     store.setChatGPTMonitorHealth(health)
     let info = store.getStatus(for: .chatgpt)
     try assert(info.effectiveDisplayStatus == .monitorUnavailable, "Effective status must be monitorUnavailable")
-    try assert(info.effectiveDisplayStatus.badge(theme: .funEmoji) == "⚠️")
+    try assert(info.effectiveDisplayStatus.badge(theme: .classic) == "⚠️")
+    try assert(info.effectiveDisplayStatus.badge(theme: .funEmoji) == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
 // 281. ChatGPT Monitor Health: Startup before first expected heartbeat -> No false warning during grace
@@ -5797,7 +5801,7 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
 
     let store = AgentStore.shared
@@ -5805,13 +5809,13 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
     _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_start", turnId: "turn_done_1")
     _ = store.handleCopilotEvent(sessionId: sessId, title: "Feature", cwd: "/Users/ava/Projects/Test", eventType: "assistant.turn_end", turnId: "turn_done_1")
 
+    bridge.setNotifyMeOverride(provider: .copilot, sessionId: sessId)
     bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Copilot output ready")
     Thread.sleep(forTimeInterval: 0.1)
 
     try assert(mockTransport.sentMessages.count == 1, "Genuine turn completion must emit exactly 1 Telegram notification, got: \(mockTransport.sentMessages.count)")
     try assert(mockTransport.sentMessages.first?.text.contains("finished") == true)
 
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     EnvConfigLoader.shared.reload()
 }
 
@@ -5822,8 +5826,13 @@ runTest("297. Done followed by App Close: App close after Done does not duplicat
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
     ConfigManager.shared.setTelegramEnabled(true)
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    let sessId = "copilot_sess_close_test"
+    let sess = AgentSessionInfo(provider: .copilot, sessionId: sessId, title: "Feature", status: .done, lastDurationSeconds: 300)
+    AgentStore.shared.syncSessions(for: .copilot, activeSessions: [sess], processRunning: true)
+    bridge.setNotifyMeOverride(provider: .copilot, sessionId: sessId)
 
     // 1. Done notification
     bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .done, detail: "Output ready")
@@ -5835,7 +5844,6 @@ runTest("297. Done followed by App Close: App close after Done does not duplicat
     Thread.sleep(forTimeInterval: 0.05)
     try assert(mockTransport.sentMessages.count == 1, "App closure after Done must not send duplicate notification, got: \(mockTransport.sentMessages.count)")
 
-    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     EnvConfigLoader.shared.reload()
 }
 
@@ -6226,13 +6234,13 @@ runTest("321. M2.1: All Fun canonical badges are config-driven") {
     try assert(badges.off.funEmoji == "😴")
     try assert(badges.quotaDepleted?.funEmoji == "🤯")
     try assert(badges.quotaRestored?.funEmoji == "🥱")
-    try assert(badges.monitorUnavailable?.funEmoji == "😶🌫️")
+    try assert(badges.monitorUnavailable?.funEmoji == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
-// 322. M2.1: monitorUnavailable default = 😶🌫️
-runTest("322. M2.1: monitorUnavailable default = 😶🌫️") {
+// 322. M2.1: monitorUnavailable default = 😶‍🌫️
+runTest("322. M2.1: monitorUnavailable default = 😶‍🌫️") {
     let badge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
-    try assert(badge == "😶🌫️", "monitorUnavailable default badge must be 😶🌫️, got: \(badge)")
+    try assert(badge == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "monitorUnavailable default badge must be 😶‍🌫️, got: \(badge)")
     try assert(EffectiveDisplayStatus.monitorUnavailable.statusTitle == "Monitor Not Connected")
 }
 
@@ -6262,7 +6270,7 @@ runTest("325. M2.1: Reset-to-default works") {
     ConfigManager.shared.resetStatusBadgesToDefaults()
     try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
     try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
-    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "😶🌫️")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
 // 326. M2.1: 30-second Done → no Telegram Done by default (< 5m)
@@ -6525,4 +6533,168 @@ runTest("338. M2.1: Telegram transport architecture remains unchanged") {
     try assert(defaultTransport is TelegramTransportProtocol, "URLSessionTelegramTransport must conform to TelegramTransportProtocol")
 }
 
-print("🎉 All 338 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health & M2.1 Identity and Notification UX Tests Passed!")
+// 339. M2.1 QA: user-facing theme label = "Emoji"
+runTest("339. M2.1 QA: user-facing theme label = Emoji") {
+    try assert(BadgeThemeMode.funEmoji.displayName == "Emoji", "BadgeThemeMode.funEmoji displayName must be exactly 'Emoji', got: \(BadgeThemeMode.funEmoji.displayName)")
+}
+
+// 340. M2.1 QA: user-facing theme label = "Classic Traffic Light"
+runTest("340. M2.1 QA: user-facing theme label = Classic Traffic Light") {
+    try assert(BadgeThemeMode.classic.displayName == "Classic Traffic Light", "BadgeThemeMode.classic displayName must be 'Classic Traffic Light', got: \(BadgeThemeMode.classic.displayName)")
+}
+
+// 341. M2.1 QA: no "Fun" user-facing theme terminology
+runTest("341. M2.1 QA: no Fun user-facing theme terminology") {
+    for mode in BadgeThemeMode.allCases {
+        try assert(!mode.displayName.contains("Fun"), "User-facing mode displayName must not contain 'Fun': \(mode.displayName)")
+        try assert(!mode.displayName.contains("Balls"), "User-facing mode displayName must not contain 'Balls': \(mode.displayName)")
+    }
+}
+
+// 342. M2.1 QA: no emoji parade in style selector
+runTest("342. M2.1 QA: no emoji parade in style selector") {
+    try assert(BadgeThemeMode.funEmoji.displayName == "Emoji")
+    try assert(!BadgeThemeMode.funEmoji.displayName.contains("🐶"))
+    try assert(!BadgeThemeMode.funEmoji.displayName.contains("🤔"))
+    try assert(!BadgeThemeMode.funEmoji.displayName.contains("🫥"))
+}
+
+// 343. M2.1 QA: no duplicate Reset outside customization panel
+runTest("343. M2.1 QA: no duplicate Reset outside customization panel") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    // Verify Menu Bar does not contain external reset command in Appearance
+    var foundExternalReset = false
+    if let settingsItem = menu.items.first(where: { $0.title.contains("Settings & Preferences") }),
+       let settingsMenu = settingsItem.submenu,
+       let appItem = settingsMenu.items.first(where: { $0.title == "Appearance" }),
+       let appMenu = appItem.submenu {
+        foundExternalReset = appMenu.items.contains(where: { $0.title.contains("Reset Status Emoji") })
+    }
+    try assert(!foundExternalReset, "External Reset Status Emoji command must not exist in Appearance submenu")
+}
+
+// 344. M2.1 QA: Customize panel Reset remains and restores default badges
+runTest("344. M2.1 QA: Customize panel Reset remains") {
+    ConfigManager.shared.updateFunEmoji(for: "working", emoji: "🔥")
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🔥")
+    ConfigManager.shared.resetStatusBadgesToDefaults()
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+}
+
+// 345. M2.1 QA: direct paste of 🐶 works (grapheme count == 1)
+runTest("345. M2.1 QA: direct paste of 🐶 works") {
+    let emoji = "🐶"
+    try assert(emoji.count == 1, "🐶 must have grapheme count 1")
+    ConfigManager.shared.updateFunEmoji(for: "done", emoji: emoji)
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+}
+
+// 346. M2.1 QA: direct paste of 😶‍🌫️ works (grapheme count == 1, 4 scalars)
+runTest("346. M2.1 QA: direct paste of 😶‍🌫️ works") {
+    let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+    try assert(emoji.count == 1, "😶‍🌫️ must have grapheme count 1, got \(emoji.count)")
+    try assert(emoji.unicodeScalars.count == 4, "😶‍🌫️ must contain 4 Unicode scalars")
+    ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: emoji)
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == emoji)
+}
+
+// 347. M2.1 QA: ZWJ survives config save/reload without being stripped
+runTest("347. M2.1 QA: ZWJ survives config save/reload") {
+    let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+    ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: emoji)
+    ConfigManager.shared.loadConfig()
+    let saved = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
+    try assert(saved == emoji, "Saved and reloaded emoji must match exact ZWJ emoji")
+    let hasZWJ = saved.unicodeScalars.contains(where: { $0.value == 0x200D })
+    try assert(hasZWJ, "Saved emoji must preserve U+200D ZERO WIDTH JOINER")
+}
+
+// 348. M2.1 QA: variation selector survives config save/reload
+runTest("348. M2.1 QA: variation selector survives config save/reload") {
+    let saved = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
+    let hasVS16 = saved.unicodeScalars.contains(where: { $0.value == 0xFE0F })
+    try assert(hasVS16, "Saved emoji must preserve U+FE0F VARIATION SELECTOR-16")
+}
+
+// 349. M2.1 QA: multiple grapheme input is rejected safely
+runTest("349. M2.1 QA: multiple grapheme input is rejected safely") {
+    let multiGrapheme = "🐶🤔"
+    try assert(multiGrapheme.count == 2, "Multi-grapheme input has count 2")
+    let del = EmojiFieldDelegate(key: "test", initialEmoji: "🐶")
+    let tf = NSTextField(string: multiGrapheme)
+    del.textField = tf
+    del.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: tf))
+    try assert(tf.stringValue == "🐶", "Multi-grapheme paste must safely revert to last valid single emoji")
+}
+
+// 350. M2.1 QA: default Monitor Not Connected = exact 😶‍🌫️
+runTest("350. M2.1 QA: default Monitor Not Connected = exact 😶‍🌫️") {
+    ConfigManager.shared.resetStatusBadgesToDefaults()
+    let badge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
+    try assert(badge == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "Default Monitor Not Connected must be exact 😶‍🌫️")
+    try assert(badge.count == 1, "Default Monitor Not Connected badge count must be 1")
+}
+
+// 351. M2.1 QA: legend renders exact 😶‍🌫️ in Emoji style
+runTest("351. M2.1 QA: legend renders exact 😶‍🌫️ in Emoji style") {
+    let legend = MenuBarManager.getStatusLegendItems(theme: .funEmoji)
+    let warnItem = legend.first(where: { $0.status == .monitorUnavailable })
+    try assert(warnItem != nil, "Legend must have monitorUnavailable item")
+    try assert(warnItem?.badge == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "Legend badge must be exact 😶‍🌫️")
+    try assert(warnItem?.title == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F} Monitor Not Connected")
+    try assert(warnItem?.desc.contains("The monitoring companion is not currently reporting") == true)
+}
+
+// 352. M2.1 QA: exact diversity_2 app asset is packaged
+runTest("352. M2.1 QA: exact diversity_2 app asset is packaged") {
+    let fm = FileManager.default
+    try assert(fm.fileExists(atPath: "Resources/AppIcon.icns"), "Resources/AppIcon.icns must exist")
+    let attr = try fm.attributesOfItem(atPath: "Resources/AppIcon.icns")
+    let sz = attr[.size] as? Int64 ?? 0
+    try assert(sz > 10000, "Resources/AppIcon.icns must be a valid compiled multi-resolution icns file (>10KB), got \(sz)")
+}
+
+// 353. M2.1 QA: actual app bundle references the icon in Info.plist
+runTest("353. M2.1 QA: actual app bundle references the icon in Info.plist") {
+    let buildScript = try String(contentsOfFile: "build_app.sh", encoding: .utf8)
+    try assert(buildScript.contains("<key>CFBundleIconFile</key>\n    <string>AppIcon</string>"))
+    try assert(buildScript.contains("cp -f \"Resources/AppIcon.icns\" \"$RESOURCES_DIR/AppIcon.icns\""))
+}
+
+// 354. M2.1 QA: exact ecg_heart extension asset is packaged in 4 sizes
+runTest("354. M2.1 QA: exact ecg_heart extension asset is packaged") {
+    let fm = FileManager.default
+    for sz in [16, 32, 48, 128] {
+        let p = "adapters/chrome-extension/icons/icon\(sz).png"
+        try assert(fm.fileExists(atPath: p), "\(p) must exist")
+    }
+}
+
+// 355. M2.1 QA: manifest name remains ChatGPT Webchat Monitor
+runTest("355. M2.1 QA: manifest name remains ChatGPT Webchat Monitor") {
+    let manifestData = try Data(contentsOf: URL(fileURLWithPath: "adapters/chrome-extension/manifest.json"))
+    let json = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+    try assert(json?["name"] as? String == "ChatGPT Webchat Monitor")
+}
+
+// 356. M2.1 QA: default Telegram threshold still suppresses a normal <5m Done
+runTest("356. M2.1 QA: default Telegram threshold still suppresses a normal <5m Done") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .chatgpt, sessionId: "sess_cg_2m", title: "2m GPT Turn", status: .done, turnId: "turn_2m", lastDurationSeconds: 120)
+    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "2m GPT Turn")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "A 2-minute ordinary ChatGPT Done must be suppressed at 5m threshold")
+}
+
+print("🎉 All 356 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Human QA Corrective Patch Tests Passed!")

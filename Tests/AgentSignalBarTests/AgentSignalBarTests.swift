@@ -1886,7 +1886,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(badges.off.funEmoji, "😴")
         XCTAssertEqual(badges.quotaDepleted?.funEmoji, "🤯")
         XCTAssertEqual(badges.quotaRestored?.funEmoji, "🥱")
-        XCTAssertEqual(badges.monitorUnavailable?.funEmoji, "😶🌫️")
+        XCTAssertEqual(badges.monitorUnavailable?.funEmoji, "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 
         // Customization
         ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "✨")
@@ -1898,7 +1898,26 @@ final class AgentSignalBarTests: XCTestCase {
         // Reset
         ConfigManager.shared.resetStatusBadgesToDefaults()
         XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "🥱")
-        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "😶🌫️")
+        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
+    }
+
+    func testM21QAThemeAndGraphemeValidation() throws {
+        // Theme label
+        XCTAssertEqual(BadgeThemeMode.funEmoji.displayName, "Emoji")
+        XCTAssertEqual(BadgeThemeMode.classic.displayName, "Classic Traffic Light")
+        XCTAssertFalse(BadgeThemeMode.funEmoji.displayName.contains("Fun"))
+        XCTAssertFalse(BadgeThemeMode.classic.displayName.contains("Balls"))
+
+        // Single vs multi grapheme validation
+        let validComposite = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+        XCTAssertEqual(validComposite.count, 1)
+        XCTAssertEqual(validComposite.unicodeScalars.count, 4)
+
+        let delegate = EmojiFieldDelegate(key: "test", initialEmoji: "🐶")
+        let tf = NSTextField(string: "🐶🤔")
+        delegate.textField = tf
+        delegate.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: tf))
+        XCTAssertEqual(tf.stringValue, "🐶", "Multi-grapheme paste must revert safely to last valid value")
     }
 
     func testM21TelegramNotificationPolicyV2AndOverrides() async throws {

@@ -127,7 +127,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         items.append((.idle, idleBadge, "\(idleBadge) Idle / Standby", "Agent process is running and standby for input"))
 
         let warnBadge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: theme)
-        items.append((.monitorUnavailable, warnBadge, "\(warnBadge) Monitor Not Connected", "Monitoring source is not currently connected. The companion extension/provider monitor may be disabled, missing, or temporarily not reporting."))
+        items.append((.monitorUnavailable, warnBadge, "\(warnBadge) Monitor Not Connected", "The monitoring companion is not currently reporting. It may be disabled, missing, or temporarily unavailable."))
 
         let offBadge = EffectiveDisplayStatus.off.badge(theme: theme)
         items.append((.off, offBadge, "\(offBadge) App Closed / Process Terminated", "Agent process or browser tab is not running"))
@@ -381,7 +381,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         legendSubmenu.addItem(NSMenuItem.separator())
 
-        let themeHeading = NSMenuItem(title: "Current Theme: \(currentTheme == .funEmoji ? "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)" : "Classic Colored Balls (⚪🟡🟢🔴⚫)")", action: nil, keyEquivalent: "")
+        let themeHeading = NSMenuItem(title: "Current Style: \(currentTheme == .funEmoji ? "Emoji" : "Classic Traffic Light")", action: nil, keyEquivalent: "")
         themeHeading.isEnabled = false
         legendSubmenu.addItem(themeHeading)
         legendSubmenu.addItem(NSMenuItem.separator())
@@ -964,35 +964,31 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         viewMenuItem.submenu = viewSubmenu
         appearanceSubmenu.addItem(viewMenuItem)
 
-        // Badge Theme Submenu
-        let themeTitle = currentTheme == .funEmoji ? "Badge Theme: Fun" : "Badge Theme: Classic"
-        let themeMenuItem = NSMenuItem(title: themeTitle, action: nil, keyEquivalent: "")
-        let themeSubmenu = NSMenu()
+        // Status Style Submenu
+        let styleTitle = currentTheme == .funEmoji ? "Status Style: Emoji" : "Status Style: Classic Traffic Light"
+        let styleMenuItem = NSMenuItem(title: styleTitle, action: nil, keyEquivalent: "")
+        let styleSubmenu = NSMenu()
 
-        let funThemeItem = NSMenuItem(title: "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
-        funThemeItem.target = self
-        funThemeItem.representedObject = BadgeThemeMode.funEmoji
-        funThemeItem.state = currentTheme == .funEmoji ? .on : .off
-        themeSubmenu.addItem(funThemeItem)
+        let emojiThemeItem = NSMenuItem(title: "Emoji", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
+        emojiThemeItem.target = self
+        emojiThemeItem.representedObject = BadgeThemeMode.funEmoji
+        emojiThemeItem.state = currentTheme == .funEmoji ? .on : .off
+        styleSubmenu.addItem(emojiThemeItem)
 
-        let classicThemeItem = NSMenuItem(title: "Classic Colored Balls (⚪🟡🟢🔴⚫)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
+        let classicThemeItem = NSMenuItem(title: "Classic Traffic Light", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
         classicThemeItem.target = self
         classicThemeItem.representedObject = BadgeThemeMode.classic
         classicThemeItem.state = currentTheme == .classic ? .on : .off
-        themeSubmenu.addItem(classicThemeItem)
+        styleSubmenu.addItem(classicThemeItem)
 
-        themeMenuItem.submenu = themeSubmenu
-        appearanceSubmenu.addItem(themeMenuItem)
+        styleMenuItem.submenu = styleSubmenu
+        appearanceSubmenu.addItem(styleMenuItem)
 
-        // Customize Status Emoji Panel Action
+        // Customize Emoji Panel Action
         appearanceSubmenu.addItem(NSMenuItem.separator())
-        let customizeEmojiItem = NSMenuItem(title: "Customize Status Emoji…", action: #selector(openCustomizeStatusEmojiClicked), keyEquivalent: "")
+        let customizeEmojiItem = NSMenuItem(title: "Customize Emoji…", action: #selector(openCustomizeStatusEmojiClicked), keyEquivalent: "")
         customizeEmojiItem.target = self
         appearanceSubmenu.addItem(customizeEmojiItem)
-
-        let resetEmojiItem = NSMenuItem(title: "Reset Status Emoji to Defaults", action: #selector(resetStatusEmojiClicked), keyEquivalent: "")
-        resetEmojiItem.target = self
-        appearanceSubmenu.addItem(resetEmojiItem)
 
         appearanceItem.submenu = appearanceSubmenu
         settingsSubmenu.addItem(appearanceItem)

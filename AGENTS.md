@@ -1289,3 +1289,38 @@ Next: Deliver comprehensive final milestone report to Ava in Traditional Chinese
 Blockers: none
 
 [RELEASE] M2.1 — Identity & Notification UX — antigravity — 2026-08-24T16:50:00+02:00
+
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: M2.1 Human QA Corrective Patch
+Done:
+1. Terminology & Appearance Submenu:
+   - Replaced all user-facing "Fun" / "Fun Emoji" / "Colored Balls" branding with concise "Emoji" and "Classic Traffic Light".
+   - Updated menu hierarchy: `Settings & Preferences -> Appearance -> Status Style -> Emoji / Classic Traffic Light`, `Customize Emoji…`.
+   - Removed emoji parade from theme selectors.
+2. Deduplication of Reset UI:
+   - Removed external `Reset Status Emoji to Defaults` from Appearance menu.
+   - Retained single authoritative `Reset to Defaults` button inside `Customize Emoji…` panel.
+3. Grapheme Cluster & Composite Emoji Validation:
+   - Attached `EmojiFieldDelegate` to `NSTextField` with extended grapheme cluster validation (`count == 1`).
+   - Verified that multi-scalar composite emojis (`🐶`, `❤️`, `😶‍🌫️`, `👨‍💻`, `👍🏻`) are accepted and preserved without stripping ZWJ (`U+200D`) or Variation Selector-16 (`U+FE0F`).
+   - Safeguarded against multi-grapheme paste by safely reverting invalid input to the last valid single grapheme.
+4. Exact Monitor Not Connected Emoji:
+   - Explicitly configured and verified `\u{1F636}\u{200D}\u{1F32B}\u{FE0F}` (`😶‍🌫️`) across defaults, config, and legend.
+   - Updated legend explanation to neutral wording: "The monitoring companion is not currently reporting. It may be disabled, missing, or temporarily unavailable."
+5. Exact Google Material Symbols Vector Assets:
+   - Vendored exact official Material Symbols `diversity_2.svg` and `ecg_heart.svg`.
+   - Generated native `AppIcon.icns` with `diversity_2` vector and packaged inside `AgentSignalBar.app/Contents/Resources/AppIcon.icns`.
+   - Generated packaged `ecg_heart` icons for Chrome extension in 16, 32, 48, 128px.
+6. Tests & Verification:
+   - Added Tests 339 to 356 in `Stage1TestRunner` (356/356 passed).
+   - Verified 30/30 JS tests passed in `background_test.js`.
+   - Verified SPM test suite passed (`swift test`).
+   - Verified release build via `./build_app.sh` (clean exit 0).
+   - Verified `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (356/356 passed), `node adapters/chrome-extension/background_test.js` (30/30 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), app relaunched cleanly.
+Next: Proceed to PART B Read-Only Discovery for M3 Project Bridge.
+Blockers: none
+
+[RELEASE] M2.1 Human QA Corrective Patch — antigravity — 2026-08-24T18:33:00+02:00

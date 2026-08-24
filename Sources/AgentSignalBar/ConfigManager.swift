@@ -31,7 +31,7 @@ public struct StatusBadgesConfig: Codable {
         overworking: StatusBadgeItem = StatusBadgeItem(classic: "🟡", funEmoji: "🥵"),
         quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⦸", funEmoji: "🤯"),
         quotaRestored: StatusBadgeItem = StatusBadgeItem(classic: "⚪", funEmoji: "🥱"),
-        monitorUnavailable: StatusBadgeItem = StatusBadgeItem(classic: "⚠️", funEmoji: "😶🌫️")
+        monitorUnavailable: StatusBadgeItem = StatusBadgeItem(classic: "⚠️", funEmoji: "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
     ) {
         self.idle = idle
         self.working = working

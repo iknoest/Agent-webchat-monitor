@@ -7,8 +7,8 @@ public enum BadgeThemeMode: String, Codable, CaseIterable {
 
     public var displayName: String {
         switch self {
-        case .classic: return "Classic Colored Balls (⚪🟡🟢🔴⚫)"
-        case .funEmoji: return "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)"
+        case .classic: return "Classic Traffic Light"
+        case .funEmoji: return "Emoji"
         }
     }
 }
@@ -208,7 +208,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             case .done: return customBadges.done.funEmoji
             case .blocked: return customBadges.blocked.funEmoji
             case .quotaExhausted: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
-            case .monitorUnavailable: return customBadges.monitorUnavailable?.funEmoji ?? "😶🌫️"
+            case .monitorUnavailable: return customBadges.monitorUnavailable?.funEmoji ?? "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
             }
         }
     }
