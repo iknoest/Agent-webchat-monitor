@@ -1056,14 +1056,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         styleMenuItem.submenu = styleSubmenu
         appearanceSubmenu.addItem(styleMenuItem)
 
-        // Customize Emoji Panel Action (Visible ONLY when Status Style is Emoji)
-        if currentTheme == .funEmoji {
-            appearanceSubmenu.addItem(NSMenuItem.separator())
-            let customizeEmojiItem = NSMenuItem(title: "Customize Emoji…", action: #selector(openCustomizeStatusEmojiClicked), keyEquivalent: "")
-            customizeEmojiItem.target = self
-            appearanceSubmenu.addItem(customizeEmojiItem)
-        }
-
         appearanceItem.submenu = appearanceSubmenu
         settingsSubmenu.addItem(appearanceItem)
 
@@ -1332,16 +1324,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             print("⏱️ Telegram Completion Minimum Runtime updated to \(mins == 0 ? "Off" : "\(mins) min") and saved to config.json")
             updateTitleAndMenu()
         }
-    }
-
-    @objc private func openCustomizeStatusEmojiClicked() {
-        EmojiCustomizationController.shared.showWindow()
-    }
-
-    @objc private func resetStatusEmojiClicked() {
-        ConfigManager.shared.resetStatusBadgesToDefaults()
-        print("🎨 Status Badges reset to canonical defaults!")
-        updateTitleAndMenu()
     }
 
     @objc private func toggleClosedLidModeClicked() {

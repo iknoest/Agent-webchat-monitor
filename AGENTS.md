@@ -1399,4 +1399,34 @@ Blockers: none
 
 [RELEASE] M2.1 Tiny Corrective Patch — Do Not Block M3 — antigravity — 2026-08-24T21:26:00+02:00
 
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: Final M2.1 Closeout — Remove Emoji Customization & Canonical App Cleanup
+Done:
+1. Removed Emoji Customization Completely:
+   - Removed `Customize Emoji…` and `Reset Emoji` from MenuBarManager Appearance submenu.
+   - Deleted `Sources/AgentSignalBar/EmojiCustomizationController.swift` and `PasteableEmojiTextField`.
+   - Enforced fixed canonical badge mappings in `AgentState.swift` and `ConfigManager.swift`:
+     - Emoji: Working 🤔 (Overworking 🥵), Done 🐶, Needs You 🥶, Idle 🫥, Off 😴, Quota Depleted 🤯, Quota Restored 🥱, Monitor Not Connected 😶🌫️ (`U+1F636 U+200D U+1F32B U+FE0F`).
+     - Classic Traffic Light: Working 🟡, Done 🟢, Needs You 🔴, Idle ⚪, Off ⚫, Quota Depleted ⛔, Quota Restored ⚪, Monitor Not Connected ⚠️.
+   - Config loading resets `statusBadges` to canonical `StatusBadgesConfig.defaultConfig`, completely ignoring/overriding any stale user customization in `config.json`.
+2. Canonical Application Cleanup:
+   - Audited app copies across `/Applications/`, repo root, and Spotlight.
+   - Verified `/Applications/AgentSignalLight.app` (`com.agentsignallight.AgentSignalLight` by XiongYang Guan) is an independent external 3rd-party app and left it untouched.
+   - Updated `build_app.sh` to stage builds strictly in `.build/AgentBridge.app`, eliminate repo-root `.app` bundles/symlinks, unregister them from LaunchServices, and install exclusively to `/Applications/AgentBridge.app`.
+   - Verified Spotlight indexes only `/Applications/AgentBridge.app`.
+3. Tests & Verification:
+   - Updated `Stage1TestRunner` tests 323-325, 344-350, 374-378, 391-394 (395/395 passed).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Verified SPM test suite in `AgentSignalBarTests.swift` passed (`swift test`).
+   - Verified release build and installation via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+   - Relaunched `/Applications/AgentBridge.app`.
+Verified: `swift run Stage1TestRunner` (395/395 passed), `node adapters/chrome-extension/background_test.js` (30/30 passed), `swift test` (clean exit 0), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), `/Applications/AgentBridge.app` running cleanly.
+Next: Branch `feat/identity-notification-ux` is ready to merge into main; prepare fresh-session M3.1 handoff.
+Blockers: none
+
+[RELEASE] Final M2.1 Closeout — Remove Emoji Customization & Canonical App Cleanup — antigravity — 2026-08-24T21:48:00+02:00
+
+
 

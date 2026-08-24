@@ -86,29 +86,28 @@ public enum AgentStatus: String, Codable, Sendable {
     case quotaExceeded = "quotaExceeded"
 
     public func badge(theme: BadgeThemeMode = .classic, thinkingDuration: TimeInterval? = nil, overworkThresholdMinutes: Int = 10) -> String {
-        let customBadges = ConfigManager.shared.config.statusBadges
         switch theme {
         case .classic:
             switch self {
-            case .off: return customBadges.off.classic
-            case .idle: return customBadges.idle.classic
-            case .working: return customBadges.working.classic
-            case .done: return customBadges.done.classic
-            case .blocked: return customBadges.blocked.classic
-            case .quotaExceeded: return customBadges.quotaDepleted?.classic ?? "⛔"
+            case .off: return "⚫"
+            case .idle: return "⚪"
+            case .working: return "🟡"
+            case .done: return "🟢"
+            case .blocked: return "🔴"
+            case .quotaExceeded: return "⛔"
             }
         case .funEmoji:
             switch self {
-            case .off: return customBadges.off.funEmoji
-            case .idle: return customBadges.idle.funEmoji
+            case .off: return "😴"
+            case .idle: return "🫥"
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
-                    return customBadges.overworking?.funEmoji ?? "🥵"
+                    return "🥵"
                 }
-                return customBadges.working.funEmoji
-            case .done: return customBadges.done.funEmoji
-            case .blocked: return customBadges.blocked.funEmoji
-            case .quotaExceeded: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
+                return "🤔"
+            case .done: return "🐶"
+            case .blocked: return "🥶"
+            case .quotaExceeded: return "🤯"
             }
         }
     }
@@ -182,33 +181,32 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
     case off = "off"
 
     public func badge(theme: BadgeThemeMode = .classic, thinkingDuration: TimeInterval? = nil, overworkThresholdMinutes: Int = 10) -> String {
-        let customBadges = ConfigManager.shared.config.statusBadges
         switch theme {
         case .classic:
             switch self {
-            case .off: return customBadges.off.classic
-            case .idle: return customBadges.idle.classic
-            case .quotaRestored: return customBadges.quotaRestored?.classic ?? customBadges.idle.classic
-            case .working: return customBadges.working.classic
-            case .done: return customBadges.done.classic
-            case .blocked: return customBadges.blocked.classic
-            case .quotaExhausted: return customBadges.quotaDepleted?.classic ?? "⛔"
-            case .monitorUnavailable: return customBadges.monitorUnavailable?.classic ?? "⚠️"
+            case .off: return "⚫"
+            case .idle: return "⚪"
+            case .quotaRestored: return "⚪"
+            case .working: return "🟡"
+            case .done: return "🟢"
+            case .blocked: return "🔴"
+            case .quotaExhausted: return "⛔"
+            case .monitorUnavailable: return "⚠️"
             }
         case .funEmoji:
             switch self {
-            case .off: return customBadges.off.funEmoji
-            case .idle: return customBadges.idle.funEmoji
-            case .quotaRestored: return customBadges.quotaRestored?.funEmoji ?? "🥱"
+            case .off: return "😴"
+            case .idle: return "🫥"
+            case .quotaRestored: return "🥱"
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
-                    return customBadges.overworking?.funEmoji ?? "🥵"
+                    return "🥵"
                 }
-                return customBadges.working.funEmoji
-            case .done: return customBadges.done.funEmoji
-            case .blocked: return customBadges.blocked.funEmoji
-            case .quotaExhausted: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
-            case .monitorUnavailable: return customBadges.monitorUnavailable?.funEmoji ?? "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+                return "🤔"
+            case .done: return "🐶"
+            case .blocked: return "🥶"
+            case .quotaExhausted: return "🤯"
+            case .monitorUnavailable: return "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
             }
         }
     }

@@ -48,7 +48,6 @@ func assert(_ condition: Bool, _ message: String) throws {
 }
 
 print("🧪 Running Production Swift Stage 1 Logic & Containment Runner...")
-ConfigManager.shared.resetStatusBadgesToDefaults()
 
 // 1. Production AgentUsageStore Live Source Priority
 runTest("1. Live Usage Source Priority Over Config Fallbacks") {
@@ -6248,32 +6247,34 @@ runTest("322. M2.1: monitorUnavailable default = 😶‍🌫️") {
     try assert(EffectiveDisplayStatus.monitorUnavailable.statusTitle == "Monitor Not Connected")
 }
 
-// 323. M2.1: quotaRestored is configurable
-runTest("323. M2.1: quotaRestored is configurable") {
-    ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "✨")
-    let badge = EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji)
-    try assert(badge == "✨", "Customized quotaRestored badge must be ✨, got: \(badge)")
-    ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "🥱")
-    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji) == "🥱")
+// 323. M2.1: Canonical Quota Badges
+runTest("323. M2.1: Canonical Quota Badges") {
+    let emojiExhausted = EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji)
+    let classicExhausted = EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic)
+    try assert(emojiExhausted == "🤯", "Emoji quota exhausted must be 🤯")
+    try assert(classicExhausted == "⛔", "Classic quota exhausted must be ⛔")
+
+    let emojiRestored = EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji)
+    let classicRestored = EffectiveDisplayStatus.quotaRestored.badge(theme: .classic)
+    try assert(emojiRestored == "🥱", "Emoji quota restored must be 🥱")
+    try assert(classicRestored == "⚪", "Classic quota restored must be ⚪")
 }
 
-// 324. M2.1: Emoji customization persists
-runTest("324. M2.1: Emoji customization persists") {
-    ConfigManager.shared.updateFunEmoji(for: "done", emoji: "🎉")
-    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🎉")
-    // Reload from disk to verify persistence
+// 324. M2.1: Stale statusBadges in config.json is ignored and overridden by canonical values
+runTest("324. M2.1: Stale statusBadges in config.json is overridden") {
     ConfigManager.shared.loadConfig()
-    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🎉")
-    ConfigManager.shared.updateFunEmoji(for: "done", emoji: "🐶")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
-// 325. M2.1: Reset-to-default works
-runTest("325. M2.1: Reset-to-default works") {
-    ConfigManager.shared.updateFunEmoji(for: "working", emoji: "🔥")
-    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🔥")
-    ConfigManager.shared.resetStatusBadgesToDefaults()
+// 325. M2.1: Canonical Fixed Badge Mappings are immutable
+runTest("325. M2.1: Canonical Fixed Badge Mappings are immutable") {
     try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
     try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji) == "🥶")
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .funEmoji) == "🫥")
+    try assert(EffectiveDisplayStatus.off.badge(theme: .funEmoji) == "😴")
     try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
@@ -6569,66 +6570,62 @@ runTest("343. M2.1 QA: no duplicate Reset outside customization panel") {
     try assert(!foundExternalReset, "External Reset Status Emoji command must not exist in Appearance submenu")
 }
 
-// 344. M2.1 QA: Customize panel Reset remains and restores default badges
-runTest("344. M2.1 QA: Customize panel Reset remains") {
-    ConfigManager.shared.updateFunEmoji(for: "working", emoji: "🔥")
-    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🔥")
-    ConfigManager.shared.resetStatusBadgesToDefaults()
-    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+// 344. M2.1 QA: Customize Emoji item does not exist in Appearance submenu
+runTest("344. M2.1 QA: Customize Emoji item does not exist in Appearance submenu") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let settingsMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu
+    let appMenu = settingsMenu?.items.first(where: { $0.title == "Appearance" })?.submenu
+    let hasCustomize = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
+    try assert(!hasCustomize, "Customize Emoji menu item must not exist in Appearance menu")
 }
 
-// 345. M2.1 QA: direct paste of 🐶 works (grapheme count == 1)
-runTest("345. M2.1 QA: direct paste of 🐶 works") {
-    let emoji = "🐶"
-    try assert(emoji.count == 1, "🐶 must have grapheme count 1")
-    ConfigManager.shared.updateFunEmoji(for: "done", emoji: emoji)
-    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+// 345. M2.1 QA: Canonical Classic Traffic Light mappings
+runTest("345. M2.1 QA: Canonical Classic Traffic Light mappings") {
+    try assert(EffectiveDisplayStatus.working.badge(theme: .classic) == "🟡")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .classic) == "🟢")
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .classic) == "🔴")
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .classic) == "⚪")
+    try assert(EffectiveDisplayStatus.off.badge(theme: .classic) == "⚫")
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic) == "⛔")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .classic) == "⚠️")
 }
 
-// 346. M2.1 QA: direct paste of 😶‍🌫️ works (grapheme count == 1, 4 scalars)
-runTest("346. M2.1 QA: direct paste of 😶‍🌫️ works") {
+// 346. M2.1 QA: Canonical Emoji mappings with exact 😶‍🌫️
+runTest("346. M2.1 QA: Canonical Emoji mappings with exact 😶‍🌫️") {
     let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
-    try assert(emoji.count == 1, "😶‍🌫️ must have grapheme count 1, got \(emoji.count)")
-    try assert(emoji.unicodeScalars.count == 4, "😶‍🌫️ must contain 4 Unicode scalars")
-    ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: emoji)
     try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == emoji)
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji) == "🥶")
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .funEmoji) == "🫥")
+    try assert(EffectiveDisplayStatus.off.badge(theme: .funEmoji) == "😴")
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji) == "🤯")
+    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji) == "🥱")
 }
 
-// 347. M2.1 QA: ZWJ survives config save/reload without being stripped
-runTest("347. M2.1 QA: ZWJ survives config save/reload") {
-    let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
-    ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: emoji)
-    ConfigManager.shared.loadConfig()
+// 347. M2.1 QA: ZWJ survives in canonical 😶‍🌫️ definition
+runTest("347. M2.1 QA: ZWJ survives in canonical 😶‍🌫️ definition") {
     let saved = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
-    try assert(saved == emoji, "Saved and reloaded emoji must match exact ZWJ emoji")
     let hasZWJ = saved.unicodeScalars.contains(where: { $0.value == 0x200D })
     try assert(hasZWJ, "Saved emoji must preserve U+200D ZERO WIDTH JOINER")
 }
 
-// 348. M2.1 QA: variation selector survives config save/reload
-runTest("348. M2.1 QA: variation selector survives config save/reload") {
+// 348. M2.1 QA: variation selector survives in canonical 😶‍🌫️ definition
+runTest("348. M2.1 QA: variation selector survives in canonical 😶‍🌫️ definition") {
     let saved = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
     let hasVS16 = saved.unicodeScalars.contains(where: { $0.value == 0xFE0F })
     try assert(hasVS16, "Saved emoji must preserve U+FE0F VARIATION SELECTOR-16")
 }
 
-// 349. M2.1 QA: single emoji validation accepts 1 grapheme and rejects multi-grapheme/text
-runTest("349. M2.1 QA: single emoji validation accepts 1 grapheme and rejects multi-grapheme/text") {
-    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid single emoji")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("❤️"), "❤️ must be valid single emoji")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"), "😶‍🌫️ must be valid single emoji")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("👨‍💻"), "👨‍💻 must be valid single emoji")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("👍🏻"), "👍🏻 must be valid single emoji")
-
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("🐶🐱"), "🐶🐱 must be rejected (count == 2)")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("ABC"), "ABC must be rejected")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("hello🙂"), "hello🙂 must be rejected")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji(""), "empty string must be rejected")
+// 349. M2.1 QA: Exact 😶‍🌫️ grapheme count is 1
+runTest("349. M2.1 QA: Exact 😶‍🌫️ grapheme count is 1") {
+    let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+    try assert(emoji.count == 1, "😶‍🌫️ must be exactly 1 grapheme cluster")
+    try assert(emoji.unicodeScalars.count == 4, "😶‍🌫️ must have 4 unicode scalars")
 }
 
 // 350. M2.1 QA: default Monitor Not Connected = exact 😶‍🌫️
 runTest("350. M2.1 QA: default Monitor Not Connected = exact 😶‍🌫️") {
-    ConfigManager.shared.resetStatusBadgesToDefaults()
     let badge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
     try assert(badge == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "Default Monitor Not Connected must be exact 😶‍🌫️")
     try assert(badge.count == 1, "Default Monitor Not Connected badge count must be 1")
@@ -6995,39 +6992,36 @@ runTest("373. P1-B: Unmuted session notifies immediately when Minimum Runtime is
     try assert(msgs.count == 1, "Unmuted session must notify on completion when threshold is Off, got \(msgs.count)")
 }
 
-// 374. P1-C: Ordinary NSTextField allows standard typing and paste without aggressive keystroke mutation
-runTest("374. P1-C: Standard NSTextField allows editing") {
-    let tf = NSTextField(string: "")
-    tf.stringValue = "🐶"
-    try assert(tf.stringValue == "🐶", "Standard NSTextField allows setting single emoji")
+// 374. P1-C: Appearance menu contains Status Style: Emoji and Classic Traffic Light
+runTest("374. P1-C: Appearance menu contains Status Style: Emoji and Classic Traffic Light") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let settingsMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu
+    let appMenu = settingsMenu?.items.first(where: { $0.title == "Appearance" })?.submenu
+    let styleItem = appMenu?.items.first(where: { $0.title.contains("Status Style") })
+    try assert(styleItem != nil, "Status Style item must exist in Appearance menu")
+    try assert(styleItem?.submenu?.items.contains(where: { $0.title == "Emoji" }) == true)
+    try assert(styleItem?.submenu?.items.contains(where: { $0.title == "Classic Traffic Light" }) == true)
 }
 
-// 375. P1-C: isValidSingleEmoji accepts single emojis and rejects multi-graphemes or text on Save
-runTest("375. P1-C: isValidSingleEmoji validation rules") {
-    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("🤯"), "🤯 must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("😴"), "😴 must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("🥱"), "🥱 must be valid")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("🐶🤯"), "🐶🤯 must be invalid")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("abc"), "abc must be invalid")
+// 375. P1-C: Canonical fixed Emoji mappings are immutable
+runTest("375. P1-C: Canonical fixed Emoji mappings are immutable") {
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji) == "🥶")
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .funEmoji) == "🫥")
+    try assert(EffectiveDisplayStatus.off.badge(theme: .funEmoji) == "😴")
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji) == "🤯")
+    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji) == "🥱")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 }
 
-// 376. P1-D: Customize Emoji is visible ONLY in Emoji style, hidden in Classic Traffic Light
-runTest("376. P1-D: Customize Emoji is visible ONLY in Emoji style") {
-    // 1. Emoji style
-    AgentStore.shared.currentTheme = .funEmoji
-    var menu = MenuBarManager.shared.buildMenuForTesting()
-    var appMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu?.items.first(where: { $0.title == "Appearance" })?.submenu
-    var hasCust = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
-    try assert(hasCust, "Customize Emoji… must be visible when theme is Emoji")
-
-    // 2. Classic Traffic Light style
-    AgentStore.shared.currentTheme = .classic
-    menu = MenuBarManager.shared.buildMenuForTesting()
-    appMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu?.items.first(where: { $0.title == "Appearance" })?.submenu
-    hasCust = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
-    try assert(!hasCust, "Customize Emoji… must be hidden when theme is Classic Traffic Light")
-    AgentStore.shared.currentTheme = .funEmoji // Restore
+// 376. P1-D: Customize Emoji is completely removed from all menus
+runTest("376. P1-D: Customize Emoji is completely removed from all menus") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let settingsMenu = menu.items.first(where: { $0.title.contains("Settings & Preferences") })?.submenu
+    let appMenu = settingsMenu?.items.first(where: { $0.title == "Appearance" })?.submenu
+    let hasCustomize = appMenu?.items.contains(where: { $0.title.contains("Customize Emoji") }) == true
+    try assert(!hasCustomize, "Customize Emoji menu item must NOT exist in Appearance menu")
 }
 
 // 377. P1-E: Classic Traffic Light Quota Exhausted symbol is ⛔
@@ -7042,12 +7036,12 @@ runTest("377. P1-E: Classic Traffic Light Quota Exhausted symbol is ⛔") {
     try assert(quotaLeg?.title.contains("⛔") == true, "Legend title must start with ⛔: \(quotaLeg?.title ?? "")")
 }
 
-// 378. P1-F: Build script produces AgentBridge.app, installs to /Applications, and preserves config compatibility
-runTest("378. P1-F: Build script produces AgentBridge.app and preserves config compatibility") {
+// 378. P1-F: Build script produces .build/AgentBridge.app, cleans repo-root .app, and installs to /Applications/AgentBridge.app
+runTest("378. P1-F: Build script stages in .build/ and installs to /Applications/AgentBridge.app") {
     let buildScript = try String(contentsOfFile: "build_app.sh", encoding: .utf8)
-    try assert(buildScript.contains("APP_DIR=\"AgentBridge.app\""), "Build script must set APP_DIR to AgentBridge.app")
+    try assert(buildScript.contains("STAGING_DIR=\".build/AgentBridge.app\""), "Build script must stage in .build/AgentBridge.app")
     try assert(buildScript.contains("/Applications/AgentBridge.app"), "Build script must install to /Applications/AgentBridge.app")
-    try assert(buildScript.contains("ln -sfn \"$APP_DIR\" AgentSignalBar.app"), "Build script must maintain backward compatibility symlink")
+    try assert(buildScript.contains("rm -rf \"AgentBridge.app\" \"AgentSignalBar.app\""), "Build script must clean repo-root apps")
 
     // Config path compatibility check
     let cfgPath = ConfigManager.shared.configPathString
@@ -7251,54 +7245,39 @@ runTest("390. Secrets are never logged in diagnostic summary") {
     try assert(summary.contains("configured"), "Summary must report 'configured'")
 }
 
-// 391. Actual AppKit PasteableEmojiTextField accepts direct paste of 😶‍🌫️
-runTest("391. Actual AppKit PasteableEmojiTextField accepts direct paste of 😶‍🌫️") {
-    let tf = PasteableEmojiTextField(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", forType: .string)
-
-    tf.executePaste()
-    try assert(tf.stringValue == "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", "PasteableEmojiTextField must accept pasted 😶‍🌫️ via executePaste")
+// 391. Canonical 😶‍🌫️ is exact 1 grapheme cluster (4 unicode scalars)
+runTest("391. Canonical 😶‍🌫️ is exact 1 grapheme cluster (4 unicode scalars)") {
+    let emoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
+    try assert(emoji.count == 1, "😶‍🌫️ must be exactly 1 grapheme")
+    try assert(emoji.unicodeScalars.count == 4, "😶‍🌫️ must have 4 unicode scalars")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == emoji)
 }
 
-// 392. Save rejects 'x'
-runTest("392. Save rejects 'x'") {
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("x"), "'x' must fail validation")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji("Hello"), "'Hello' must fail validation")
-    try assert(!EmojiCustomizationController.isValidSingleEmoji(""), "Empty must fail validation")
+// 392. Canonical status badge mappings are fixed and immutable across all themes
+runTest("392. Canonical status badge mappings are fixed and immutable") {
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji) == "🥶")
+    try assert(EffectiveDisplayStatus.idle.badge(theme: .funEmoji) == "🫥")
+    try assert(EffectiveDisplayStatus.off.badge(theme: .funEmoji) == "😴")
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji) == "🤯")
+    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji) == "🥱")
 }
 
-// 393. Save accepts composite emojis: 🐶, ❤️, 😶‍🌫️, 👨‍💻, 👍🏻
-runTest("393. Save accepts composite emojis") {
-    try assert(EmojiCustomizationController.isValidSingleEmoji("🐶"), "🐶 must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("❤️"), "❤️ must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"), "😶‍🌫️ must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("👨‍💻"), "👨‍💻 must be valid")
-    try assert(EmojiCustomizationController.isValidSingleEmoji("👍🏻"), "👍🏻 must be valid")
+// 393. Classic Quota Exhausted is ⛔ and Monitor Not Connected is ⚠️
+runTest("393. Classic Quota Exhausted is ⛔ and Monitor Not Connected is ⚠️") {
+    try assert(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic) == "⛔")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .classic) == "⚠️")
+    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .classic) == "⚪")
 }
 
-// 394. PasteableEmojiTextField performKeyEquivalent handles Cmd+V, Cmd+C, Cmd+X, Cmd+A
-runTest("394. PasteableEmojiTextField performKeyEquivalent handles Cmd+V, Cmd+C, Cmd+X, Cmd+A") {
-    let tf = PasteableEmojiTextField(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString("🐶", forType: .string)
+// 394. Emoji Overworking threshold produces 🥵 when duration >= threshold
+runTest("394. Emoji Overworking threshold produces 🥵 when duration >= threshold") {
+    let normalWorking = EffectiveDisplayStatus.working.badge(theme: .funEmoji, thinkingDuration: 60, overworkThresholdMinutes: 10)
+    try assert(normalWorking == "🤔", "Normal working duration (< 10m) must return 🤔")
 
-    let pasteEvent = NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: .command,
-        timestamp: ProcessInfo.processInfo.systemUptime,
-        windowNumber: 0,
-        context: nil,
-        characters: "v",
-        charactersIgnoringModifiers: "v",
-        isARepeat: false,
-        keyCode: 9
-    )!
-
-    let handled = tf.performKeyEquivalent(with: pasteEvent)
-    try assert(handled, "performKeyEquivalent must return true for Cmd+V")
-    try assert(tf.stringValue == "🐶", "tf stringValue must become 🐶 after Cmd+V event")
+    let overworking = EffectiveDisplayStatus.working.badge(theme: .funEmoji, thinkingDuration: 601, overworkThresholdMinutes: 10)
+    try assert(overworking == "🥵", "Overworking duration (>= 10m) must return 🥵")
 }
 
 // 395. Persistent session muting is stored in ConfigManager
@@ -7311,4 +7290,4 @@ runTest("395. Persistent session muting is stored in ConfigManager") {
     try assert(!ConfigManager.shared.isSessionCompletionMuted(key: sessionKey))
 }
 
-print("🎉 All 395 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & M2.1 Tiny Corrective Patch Tests Passed!")
+print("🎉 All 395 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity and Notification UX & Canonical Cleanup Tests Passed!")

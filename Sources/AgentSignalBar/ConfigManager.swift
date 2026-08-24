@@ -253,32 +253,12 @@ public final class ConfigManager: @unchecked Sendable {
             let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
             var decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
-            // Auto-backfill missing properties in existing config.json
+            // Always enforce canonical statusBadges so obsolete customizations never override
+            decoded.statusBadges = StatusBadgesConfig.defaultConfig
+
             var needsSave = false
-            if decoded.statusBadges.overworking == nil {
-                decoded.statusBadges.overworking = StatusBadgeItem(classic: "🟡", funEmoji: "🥵")
-                needsSave = true
-            }
-            if decoded.statusBadges.quotaDepleted == nil {
-                decoded.statusBadges.quotaDepleted = StatusBadgeItem(classic: "⛔", funEmoji: "🤯")
-                needsSave = true
-            } else if decoded.statusBadges.quotaDepleted?.classic == "🔴⚠️" || decoded.statusBadges.quotaDepleted?.classic == "⦸" {
-                decoded.statusBadges.quotaDepleted?.classic = "⛔"
-                needsSave = true
-            }
-            if decoded.statusBadges.quotaRestored == nil {
-                decoded.statusBadges.quotaRestored = StatusBadgeItem(classic: "⚪", funEmoji: "🥱")
-                needsSave = true
-            }
-            if decoded.statusBadges.monitorUnavailable == nil {
-                decoded.statusBadges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
-                needsSave = true
-            } else if decoded.statusBadges.monitorUnavailable?.funEmoji == "😶🌫️" || decoded.statusBadges.monitorUnavailable?.funEmoji == "🌫️" {
-                decoded.statusBadges.monitorUnavailable?.funEmoji = "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"
-                needsSave = true
-            }
             if decoded.telegramDoneThresholdMinutes == nil {
-                decoded.telegramDoneThresholdMinutes = 5
+                decoded.telegramDoneThresholdMinutes = 0
                 needsSave = true
             }
             if decoded.isTelegramQuotaAlertsEnabled == nil {
@@ -344,60 +324,6 @@ public final class ConfigManager: @unchecked Sendable {
     public func toggleSessionCompletionMuted(key: String) {
         let currentMuted = isSessionCompletionMuted(key: key)
         setSessionCompletionMuted(key: key, muted: !currentMuted)
-    }
-
-    public func resetStatusBadgesToDefaults() {
-        var cfg = config
-        cfg.statusBadges = StatusBadgesConfig.defaultConfig
-        saveConfig(cfg)
-    }
-
-    public func updateFunEmoji(for stateKey: String, emoji: String) {
-        var cfg = config
-        var badges = cfg.statusBadges
-        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        switch stateKey.lowercased() {
-        case "idle":
-            badges.idle.funEmoji = trimmed
-        case "working":
-            badges.working.funEmoji = trimmed
-        case "done":
-            badges.done.funEmoji = trimmed
-        case "blocked":
-            badges.blocked.funEmoji = trimmed
-        case "off":
-            badges.off.funEmoji = trimmed
-        case "overworking":
-            if badges.overworking != nil {
-                badges.overworking?.funEmoji = trimmed
-            } else {
-                badges.overworking = StatusBadgeItem(classic: "🟡", funEmoji: trimmed)
-            }
-        case "quotadepleted", "quotaexhausted":
-            if badges.quotaDepleted != nil {
-                badges.quotaDepleted?.funEmoji = trimmed
-            } else {
-                badges.quotaDepleted = StatusBadgeItem(classic: "⦸", funEmoji: trimmed)
-            }
-        case "quotarestored":
-            if badges.quotaRestored != nil {
-                badges.quotaRestored?.funEmoji = trimmed
-            } else {
-                badges.quotaRestored = StatusBadgeItem(classic: "⚪", funEmoji: trimmed)
-            }
-        case "monitorunavailable", "monitornotconnected":
-            if badges.monitorUnavailable != nil {
-                badges.monitorUnavailable?.funEmoji = trimmed
-            } else {
-                badges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: trimmed)
-            }
-        default:
-            break
-        }
-        cfg.statusBadges = badges
-        saveConfig(cfg)
     }
 
     public func setTelegramQuotaAlertsEnabled(_ enabled: Bool) {

@@ -1888,15 +1888,7 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(badges.quotaRestored?.funEmoji, "🥱")
         XCTAssertEqual(badges.monitorUnavailable?.funEmoji, "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
 
-        // Customization
-        ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "✨")
-        XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "✨")
-
-        ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: "⚡")
-        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "⚡")
-
-        // Reset
-        ConfigManager.shared.resetStatusBadgesToDefaults()
+        // Canonical fixed badge mapping
         XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "🥱")
         XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
     }
@@ -2048,19 +2040,17 @@ final class AgentSignalBarTests: XCTestCase {
         // 4. Classic Quota Exhausted symbol is ⛔
         XCTAssertEqual(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic), "⛔")
 
-        // 5. Emoji validation & AppKit paste
-        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🐶"))
-        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("🤯"))
-        XCTAssertTrue(EmojiCustomizationController.isValidSingleEmoji("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}"))
-        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("x"))
-        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("🐶🤯"))
-        XCTAssertFalse(EmojiCustomizationController.isValidSingleEmoji("text"))
-
-        let pasteTf = PasteableEmojiTextField(frame: .zero)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("\u{1F636}\u{200D}\u{1F32B}\u{FE0F}", forType: .string)
-        pasteTf.executePaste()
-        XCTAssertEqual(pasteTf.stringValue, "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
+        // 5. Fixed canonical Emoji mappings
+        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "\u{1F636}\u{200D}\u{1F32B}\u{FE0F}")
+        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .classic), "⚠️")
+        XCTAssertEqual(EffectiveDisplayStatus.quotaExhausted.badge(theme: .funEmoji), "🤯")
+        XCTAssertEqual(EffectiveDisplayStatus.quotaExhausted.badge(theme: .classic), "⛔")
+        XCTAssertEqual(EffectiveDisplayStatus.done.badge(theme: .funEmoji), "🐶")
+        XCTAssertEqual(EffectiveDisplayStatus.working.badge(theme: .funEmoji), "🤔")
+        XCTAssertEqual(EffectiveDisplayStatus.blocked.badge(theme: .funEmoji), "🥶")
+        XCTAssertEqual(EffectiveDisplayStatus.idle.badge(theme: .funEmoji), "🫥")
+        XCTAssertEqual(EffectiveDisplayStatus.off.badge(theme: .funEmoji), "😴")
+        XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "🥱")
 
         // 6. Persistent session completion mute
         let testSessKey = "chatgpt_sess_test_persistent_mute"
