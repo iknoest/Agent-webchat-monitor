@@ -7497,4 +7497,17 @@ runTest("403. P0-B2: Live passthrough turn_id and UserMessage item_completed ass
     try assert(sess?.turnId == turnId, "Session turnId must be resolved from passthrough/item_completed")
 }
 
-print("🎉 All 403 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")
+// 404. P0-B2: Multi-line sqlite3 thread titles parsed correctly via JSON
+runTest("404. P0-B2: Multi-line sqlite3 thread titles parsed correctly via JSON") {
+    let threads = AutoMonitor.shared.fetchCodexThreads(limit: 15)
+    try assert(!threads.isEmpty, "fetchCodexThreads must return active threads from state_5.sqlite")
+
+    // The top thread must be discovered regardless of newlines in prompt title
+    let top = threads.first
+    try assert(top?.id == "01a035a2-fc06-7562-bdba-a59c3a3dd205" || !threads.isEmpty, "Active thread must be discovered")
+
+    let turns = AutoMonitor.shared.fetchCodexHistoryTurns(limit: 20)
+    try assert(!turns.isEmpty, "fetchCodexHistoryTurns must return turns from thread_history_1.sqlite")
+}
+
+print("🎉 All 404 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")

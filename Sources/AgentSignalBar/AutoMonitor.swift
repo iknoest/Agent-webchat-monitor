@@ -869,20 +869,17 @@ public final class AutoMonitor: @unchecked Sendable {
         // 1. Fetch display titles from local_thread_catalog in codex-dev.db if available
         var catalogTitles: [String: String] = [:]
         if fm.fileExists(atPath: catalogDbPath) {
-            let catQuery = "SELECT thread_id || '|||' || display_title FROM local_thread_catalog WHERE host_id='local' AND missing_candidate=0;"
+            let catQuery = "SELECT thread_id, display_title FROM local_thread_catalog WHERE host_id='local' AND missing_candidate=0;"
             if let catOutput = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-                arguments: [catalogDbPath, catQuery],
+                arguments: ["-json", catalogDbPath, catQuery],
                 timeoutSeconds: 1.0
-            ) {
-                for line in catOutput.components(separatedBy: "\n") {
-                    let parts = line.components(separatedBy: "|||")
-                    if parts.count >= 2 {
-                        let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !tid.isEmpty && !title.isEmpty {
-                            catalogTitles[tid] = title
-                        }
+            ), let catData = catOutput.data(using: .utf8),
+               let catArray = try? JSONSerialization.jsonObject(with: catData) as? [[String: Any]] {
+                for dict in catArray {
+                    if let tid = dict["thread_id"] as? String, !tid.isEmpty,
+                       let title = dict["display_title"] as? String, !title.isEmpty {
+                        catalogTitles[tid] = title
                     }
                 }
             }
@@ -892,35 +889,32 @@ public final class AutoMonitor: @unchecked Sendable {
         var results: [CodexThreadInfo] = []
         var seenIds = Set<String>()
 
-        let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
+        let query = "SELECT id, COALESCE(NULLIF(name, ''), '') AS name, COALESCE(NULLIF(title, ''), '') AS title, rollout_path, cwd, updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
         if let output = runProcessWithTimeout(
             executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-            arguments: [dbPath, query],
+            arguments: ["-json", dbPath, query],
             timeoutSeconds: 1.0
-        ) {
-            let lines = output.components(separatedBy: "\n")
-            for line in lines {
-                let parts = line.components(separatedBy: "|||")
-                if parts.count >= 6 {
-                    let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        ), let data = output.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for dict in array {
+                guard let tid = dict["id"] as? String, !tid.isEmpty,
+                      let path = dict["rollout_path"] as? String, !path.isEmpty,
+                      fm.fileExists(atPath: path),
+                      !seenIds.contains(tid) else { continue }
+                seenIds.insert(tid)
+                let rawName = dict["name"] as? String ?? ""
+                let rawTitle = dict["title"] as? String ?? ""
+                let cwd = dict["cwd"] as? String ?? ""
+                let updated = (dict["updated_at_ms"] as? NSNumber)?.int64Value ?? 0
 
-                    let resolvedTitle: String
-                    if let catTitle = catalogTitles[tid], !catTitle.isEmpty && AutoMonitor.isSafeSessionTitle(catTitle) {
-                        resolvedTitle = catTitle
-                    } else {
-                        resolvedTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
-                    }
-
-                    if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
-                        seenIds.insert(tid)
-                        results.append(CodexThreadInfo(id: tid, title: resolvedTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
-                    }
+                let resolvedTitle: String
+                if let catTitle = catalogTitles[tid], !catTitle.isEmpty && AutoMonitor.isSafeSessionTitle(catTitle) {
+                    resolvedTitle = catTitle
+                } else {
+                    resolvedTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
                 }
+
+                results.append(CodexThreadInfo(id: tid, title: resolvedTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
             }
         }
 
@@ -961,33 +955,28 @@ public final class AutoMonitor: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [:] }
 
         var turns: [String: CodexHistoryTurnInfo] = [:]
-        let query = "SELECT thread_id || '|||' || turn_id || '|||' || status || '|||' || started_at || '|||' || COALESCE(completed_at, 0) || '|||' || COALESCE(duration_ms, 0) FROM thread_turns ORDER BY started_at DESC LIMIT \(limit);"
+        let query = "SELECT thread_id, turn_id, status, started_at, completed_at, duration_ms FROM thread_turns ORDER BY started_at DESC LIMIT \(limit);"
         if let output = runProcessWithTimeout(
             executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-            arguments: [dbPath, query],
+            arguments: ["-json", dbPath, query],
             timeoutSeconds: 1.0
-        ) {
-            for line in output.components(separatedBy: "\n") {
-                let parts = line.components(separatedBy: "|||")
-                if parts.count >= 6 {
-                    let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let turnId = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let status = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                    let startedAt = Int64(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                    let compVal = Int64(parts[4].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                    let durVal = Double(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-
-                    if !tid.isEmpty && turns[tid] == nil {
-                        turns[tid] = CodexHistoryTurnInfo(
-                            threadId: tid,
-                            turnId: turnId,
-                            status: status,
-                            startedAt: startedAt,
-                            completedAt: compVal > 0 ? compVal : nil,
-                            durationMs: durVal > 0 ? durVal : nil
-                        )
-                    }
-                }
+        ), let data = output.data(using: .utf8),
+           let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for dict in array {
+                guard let tid = dict["thread_id"] as? String, !tid.isEmpty, turns[tid] == nil,
+                      let turnId = dict["turn_id"] as? String, !turnId.isEmpty,
+                      let status = dict["status"] as? String, !status.isEmpty else { continue }
+                let startedAt = (dict["started_at"] as? NSNumber)?.int64Value ?? 0
+                let compVal = (dict["completed_at"] as? NSNumber)?.int64Value
+                let durVal = (dict["duration_ms"] as? NSNumber)?.doubleValue
+                turns[tid] = CodexHistoryTurnInfo(
+                    threadId: tid,
+                    turnId: turnId,
+                    status: status,
+                    startedAt: startedAt,
+                    completedAt: (compVal != nil && compVal! > 0) ? compVal : nil,
+                    durationMs: (durVal != nil && durVal! > 0) ? durVal : nil
+                )
             }
         }
         return turns
@@ -1236,21 +1225,18 @@ public final class AutoMonitor: @unchecked Sendable {
 
         // Query session-store.db for titles & cwds if available
         if fm.fileExists(atPath: sessionStoreDbPath) {
-            let query = "SELECT id || '|||' || COALESCE(summary, '') || '|||' || COALESCE(cwd, '') FROM sessions ORDER BY updated_at DESC LIMIT 20;"
+            let query = "SELECT id, COALESCE(summary, '') AS summary, COALESCE(cwd, '') AS cwd FROM sessions ORDER BY updated_at DESC LIMIT 20;"
             if let output = runProcessWithTimeout(
                 executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-                arguments: [sessionStoreDbPath, query],
+                arguments: ["-json", sessionStoreDbPath, query],
                 timeoutSeconds: 1.0
-            ) {
-                for line in output.components(separatedBy: "\n") {
-                    let parts = line.components(separatedBy: "|||")
-                    if parts.count >= 3 {
-                        let id = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let summary = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cwd = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !id.isEmpty {
-                            dbTitles[id] = (title: summary, cwd: cwd)
-                        }
+            ), let data = output.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                for dict in array {
+                    if let id = dict["id"] as? String, !id.isEmpty {
+                        let summary = dict["summary"] as? String ?? ""
+                        let cwd = dict["cwd"] as? String ?? ""
+                        dbTitles[id] = (title: summary, cwd: cwd)
                     }
                 }
             }
