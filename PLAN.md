@@ -7,63 +7,67 @@
 * Needs You ≤ 30s
 * Finished ≤ 30s
 
-## Product Roadmap Status Summary
+---
 
-### DONE
-- [x] **ChatGPT**: Exact-tab session detector & multi-tab state aggregation (`[x] Implemented & Verified`)
-- [x] **Claude**: Provider-native lifecycle hooks (`[x] Implemented & Verified`)
-- [x] **Antigravity**: Native hooks + Notification Center AX probe support Working (🟡) + Finished (🟢) + Needs-You (🔴) permission detection + Multi-Session Identity (`[x] Implemented & Verified`)
-- [x] **Runtime resource containment**: Zero-leak event loops, bounded tail reading, and subprocess reaping (`[x] Implemented & Verified`)
-- [x] **Watchdog protection**: Non-overlapping poll execution lock (`[x] Implemented & Verified`)
-- [x] **Caffeinate orphan/lifecycle repair**: Ownership auditing and clean process termination (`[x] Implemented & Verified`)
+## Milestone 2 (M2) — Release Candidate Seal Status
 
-### ACCEPTED
+### HUMAN ACCEPTED
 - [x] **ChatGPT**: Exact Chrome return routing (`[x] Ava accepted`: exact Chrome tabId activation without opening new tabs/windows)
-- [x] **Claude Lifecycle**: Provider-native lifecycle hooks (`[x] Ava accepted`: real-use accepted)
-- [x] **Claude Quota Semantics & 100% Exhausted UI**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, Smart Auto keep-awake excluded when exhausted (`[x] Ava accepted`: real-use 100% 5-hour quota exhaustion observed, verified unified `⛔` badge, truthful 100% display, and clean lifecycle isolation)
+- [x] **ChatGPT Monitor Health**: Automatic disconnect lease detection & clean recovery (`[x] Ava accepted`: 60s lease expiration warned on extension disable, recovered within seconds on re-enable)
+- [x] **Claude Lifecycle**: Provider-native lifecycle hooks & multi-turn continuity (`[x] Ava accepted`: real-use accepted)
+- [x] **Claude Quota Semantics & 100% Exhausted UI**: Provider availability decoupled from turn lifecycle, zero fake reset-time guessing, reset timestamp caching & plan-usage preservation (`[x] Ava accepted`: real-use 100% 5-hour quota exhaustion observed, verified unified `⛔` badge, truthful 100% display, and clean lifecycle isolation)
 - [x] **Closed-Lid V2 Smart Auto Keep-Awake**: Privileged `pmset disablesleep 1`/`0` integration under Smart Auto policy, battery floor safety (<20%), automatic restoration upon work completion (`[x] Ava accepted`: verified real 4-minute closed-lid continuous execution and automatic clean restoration to `SleepDisabled 0`; crash recovery automated verified)
-- [x] **Unified Display Status & Menu Bar Modes**: Shared `EffectiveDisplayStatus` derivation across Detailed (default) and Compact (optional provider-aware), persistent user preference, and stable status item autosave name (`[x] Implemented & Verified`)
-- [x] **Provider Availability & Quota v1**: Unified 4-case availability model (`available`, `limited`, `quotaExhausted`, `unknown`), multi-model family structure (`ModelFamilyQuota`), truthful unavailable reporting for unpersisted disk sources (Antigravity/Codex), Smart Auto keep-awake decoupling, and multi-model family dropdown dashboard (`[x] Implemented & Verified`)
-- [x] **Menu Bar Visual Direction**: Compact/Fun provider rendering with ` | ` separator between groups (`[x] Ava accepted`: visual polish frozen)
+- [x] **Unified Display Status & Menu Bar Modes**: Shared `EffectiveDisplayStatus` derivation across Detailed (default) and Compact/Fun with ` | ` separator between groups (`[x] Ava accepted`: visual polish frozen)
+- [x] **Provider Close Lifecycle Truth**: Application close transitions to `.off`, zero false Done/Telegram notifications emitted (`[x] Ava accepted`)
+- [x] **Telegram Alerts Root Menu Placement**: First-level root menu toggle directly below Smart Keep-Awake and above Settings (`[x] Ava accepted`)
 
-### ACTIVE / HUMAN DAILY-USE EVIDENCE
-- [x] **P0 Lifecycle State Reconciliation & HTTP Socket Teardown**: Fixed `NWConnection` state teardown, 5s fetch timeout protection, and OS process liveness reconciliation via `kill(pid, 0)`. Automated 206 tests passing; in daily real use.
+### IMPLEMENTED + AUTOMATED VERIFIED
+- [x] **Five-Provider Smart Auto Keep-Awake**: ChatGPT Web, Claude Code, Antigravity, Codex Desktop, GitHub Copilot participate in Smart Auto; disconnected providers are strictly excluded from sleep assertions.
+- [x] **One-Shot Auto-Switch**: Turn-aware and session-aware window focus when ready without arming cross-provider races.
+- [x] **Rate-Limit Semantic Repair**: StopFailure handling, quota recovery reconciliation, and rate limit backoff.
+- [x] **Telegram Bridge v1**: Outbound Done / Needs You push alerts with strict privacy sanitization (no prompts, body texts, cwd paths, or private URLs in messages); inbound `/status`, `/quota`, `/sessions`, `/help` command router.
+- [x] **Codex Current Version Lifecycle Tracking**:
+  - Active session discovery directly from `~/.codex/state_5.sqlite` threads ordered by `updated_at_ms DESC`.
+  - User-facing session title resolution via `~/.codex/sqlite/codex-dev.db` `local_thread_catalog.display_title`.
+  - Rollout parser honoring authoritative `task_started` / `task_complete` turn boundaries.
+  - Subagent filtering (`thread_source != 'subagent'`).
+  - `token_count` metrics isolation and trailing event regression prevention.
+  - Explicit `.disconnected` monitor health degradation on database corruption/inaccessibility.
+- [x] **Monitored Agents & Usage Dashboard**: Per-provider toggle in UI, truthful unavailable quota reporting for non-persisted disk sources.
 
-### NEXT MILESTONE — Smart Auto Provider Completion
-- [ ] **Smart Auto Full Provider Integration**:
-  - **Target Smart Keep-Awake Provider Set**:
-    1. ChatGPT Web
-    2. Claude Code
-    3. Antigravity
-    4. Codex Desktop
-    5. GitHub Copilot
-  - **Rules**:
-    - Codex and Copilot are not intended to remain permanently excluded.
-    - No user-facing "trust promotion" controls needed.
-    - When normal lifecycle evidence is sufficiently reliable without concrete runtime defects, integrate them directly into Smart Auto.
-    - Monitored Agents remains authoritative: a disabled provider must never influence Smart Auto.
-    - Quota remains strictly separated from lifecycle and must never activate Smart Auto by itself.
+### PENDING HUMAN (Non-Blocking)
+- [ ] **Codex Current-Version Lifecycle Natural Spot-Check**: Await natural human usage of Codex Desktop. (`RECORDED: PENDING NATURAL HUMAN ACCEPTANCE`)
+- [ ] **Auto-Switch Final Natural Human Spot-Check**: Natural multi-agent turn focus switch observation.
+- [ ] **Codex-Only Smart Auto Natural Spot-Check**: Natural spot-check of Codex keep-awake release.
 
-### SUBSEQUENT MILESTONE — Telegram Mobile Alerts (v1)
-- [ ] **Telegram Mobile Push Notifications**:
-  - **Scope**: Notification only (one-way push).
-  - **Trigger Events**:
-    - `🔴 Needs You`
-    - `🟢 Done / New Output Ready`
-    - Abnormal monitor / provider failure worth user attention
-  - **SLA**: Target delivery $\le$ 30s.
-  - **Suppression**: NO notifications for `Working` or `Idle`.
-  - **Parked**: Remote task dispatch / remote agent commands remain parked for later.
+### PARKED NATURAL EVENT
+- [ ] **Claude Quota Exhaustion → Recovery**: Natural live cycle transition observation.
+- [ ] **Claude Re-Login → Needs You**: Natural token expiration modal observation.
 
-### PARKED
-- [ ] **Telegram Remote Task / Control**: Parked until mobile notification v1 is fully accepted.
-- [ ] **Codex Desktop v1 Working/Done Lifecycle**: `IMPLEMENTED — HUMAN ACCEPTANCE PARKED` (Parent rollout watcher `task_started`/`task_complete` per-thread isolation implemented; human acceptance parked until quota availability around Aug 20; strictly excluded from Smart Auto `trustedProviders`)
-- [ ] **AGY extended provider-task lifetime tracking**: Parked to prioritize reliable Needs You (🔴) permission detection
-- [ ] **Relay**: Clean AI output relay enhancements
-- [ ] **Desktop exact-session navigation**: Parked until native accessibility / URL schemes exist
-- [ ] **Multi-agent autonomous turn orchestration**: Parked for future milestone
-- [ ] **Quota Resume Orchestration** (`LEVEL 1 IMPLEMENTED / LEVEL 2-3 INVESTIGATION — P1`):
-  - **Goal**: When a provider hits quota exhaustion, AgentSignalBar helps work continue after quota resets.
-  - **Level 1 (`IMPLEMENTED — QUOTA RESTORATION AWARENESS`)**: Detect quota restoration (>0% left after exhaustion) and surface it to Ava via Fun theme 🥱 / Classic theme `[Quota Restored]` without acquiring keep-awake.
-  - **Level 2 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: Use provider-native auto-resume when officially available from provider CLI/app.
-  - **Level 3 (`INVESTIGATION / P1 — NOT IMPLEMENTED`)**: For providers with stable CLI/session identity, investigate safe automatic resume of the exact interrupted session after quota restoration.
+### EXTERNAL / PARKED
+- [ ] **Copilot Authorization-Dependent Lifecycle Acceptance**: Parked pending active GitHub Copilot entitlement.
+
+### WATCH ONLY
+- [ ] **Copilot Telegram Duplicate Done**: Only reopen if reproduced on latest accepted build.
+
+---
+
+## Next Roadmap Milestones
+
+### Milestone 2.1 (M2.1) — Identity & Notification UX
+- [ ] **Final Product Naming**
+- [ ] **Main App Icon**: `diversity_2` icon integration
+- [ ] **ChatGPT Webchat Monitor Icon**: `ecg_heart` Chrome extension icon
+- [ ] **Config-Driven Status Badges**: Customizable emoji mapping for monitor unavailable (`😶🌫️` default) and quota restored
+- [ ] **Telegram Done Notification Threshold**: Configurable thinking duration minimum for Done alerts + per-session override
+
+### Milestone 3 (M3) — Project Bridge
+- [ ] **Local Folder Canonical Project Identity**
+- [ ] **One Current ChatGPT Reviewer per Project**
+- [ ] **Reviewer Migration History & Thread Pairing**
+- [ ] **Agent Session Association by CWD / Workspace**
+- [ ] **Optional GitHub Repository Association**
+- [ ] **Project Switcher & Contextual Menu Navigation**
+
+### Milestone 4 (M4) — Telegram → AI Routing
+- [ ] **Project-Aware Remote AI Routing**: Direct prompt/dispatch to active project context via Telegram after Project Bridge is established.
