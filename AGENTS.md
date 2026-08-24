@@ -1223,3 +1223,36 @@ Blockers: none
 
 [RELEASE] Lifecycle Truth, Quota Reset Preservation & Root UX Closeout — antigravity — 2026-08-23T13:20:00+02:00
 
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: P0 Codex Current Version Lifecycle Truth & Source Health Restoration
+Done:
+1. Investigation & Root Cause:
+   - Diagnosed Codex Desktop schema drift & event shape changes:
+     - `fetchCodexThreads` previously relied on `~/.codex/.codex-global-state.json` `selected-project`, which locked onto a stale project ID and ignored actively updating threads in `state_5.sqlite`.
+     - `processCodexRollout` treated `token_count` metrics snapshots as `task_started` (without `turn_id`), causing background token updates to regress completed turns back to `🟡 Working` indefinitely.
+     - `processCodexRollout` prematurely treated streaming `response_item` `message` (role `assistant`) as `task_complete` before the authoritative `task_complete` event arrived.
+     - Titles were falling back to long pasted prompts because `codex-dev.db` `local_thread_catalog` was not consulted.
+2. Authoritative Source & Lifecycle State Machine Fix:
+   - Updated `fetchCodexThreads` to query `state_5.sqlite` directly (`archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC`) joined with `codex-dev.db` table `local_thread_catalog` for exact user-facing `display_title`.
+   - Updated `processCodexRollout` to strictly parse authoritative `task_started` (with `turn_id`), active signals (`reasoning`, `custom_tool_call`), and authoritative `task_complete` (with duration), removing `token_count` from turn-start and removing intermediate assistant messages from completion.
+   - Added completed turn guard in `handleCodexRolloutEvent` preventing trailing events with the same `turn_id` from regressing `.done` back to `.working`.
+3. Degraded / Monitor Health Handling:
+   - Added `setCodexMonitorHealth()` / `isCodexMonitorDisconnected()` and generalized `EffectiveDisplayStatus.effectiveDisplayStatus` to surface `.monitorUnavailable` (`⚠️`) when any monitored provider's source database/extension is unavailable or unparseable.
+   - Probed `state_5.sqlite` in `AutoMonitor.swift` so database missing/corruption triggers `.monitorUnavailable` immediately instead of silently fabricating Idle/Working.
+   - Excluded disconnected providers from `SleepManager` `evaluateSmartAutoRequirement()`, guaranteeing that broken provider sources cannot keep macOS awake indefinitely.
+   - Updated `MenuBarManager.swift` and `TelegramCommandRouter.swift` to render `⚠️ Codex Desktop — Monitor Unavailable`.
+4. Verification:
+   - Added Tests 305 to 316 in `Stage1TestRunner` (`316 / 316 PASSED`).
+   - Ran `swift test` (clean exit 0).
+   - Ran `node adapters/chrome-extension/background_test.js` (`29 / 29 passed`).
+   - Ran `./build_app.sh` (clean exit 0, `.app` bundle generated).
+   - Ran `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (316/316 passed), `swift test` (clean exit 0), `background_test.js` (29/29 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), app relaunched cleanly.
+Next: Present full report to Ava in Traditional Chinese and ask for the single human validation test.
+Blockers: none
+
+[RELEASE] P0 Codex Current Version Lifecycle Truth & Source Health Restoration — antigravity — 2026-08-24T16:15:00+02:00
+
+

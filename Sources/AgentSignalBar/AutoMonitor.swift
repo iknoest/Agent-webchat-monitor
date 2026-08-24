@@ -745,80 +745,74 @@ public final class AutoMonitor: @unchecked Sendable {
         return "Codex Session"
     }
 
-    public func fetchCodexThreads(limit: Int = 10) -> [CodexThreadInfo] {
+    public func fetchCodexThreads(limit: Int = 15) -> [CodexThreadInfo] {
         let fm = FileManager.default
         let dbPath = NSString(string: "~/.codex/state_5.sqlite").expandingTildeInPath
-        let globalStatePath = NSString(string: "~/.codex/.codex-global-state.json").expandingTildeInPath
+        let catalogDbPath = NSString(string: "~/.codex/sqlite/codex-dev.db").expandingTildeInPath
 
-        var targetThreadId: String? = nil
-
-        if fm.fileExists(atPath: globalStatePath),
-           let data = try? Data(contentsOf: URL(fileURLWithPath: globalStatePath)),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let selProj = json["selected-project"] as? [String: Any],
-           let projId = selProj["projectId"] as? String,
-           let orders = json["sidebar-project-thread-orders"] as? [String: Any],
-           let projOrder = orders[projId] as? [String: Any],
-           let threadIds = projOrder["threadIds"] as? [String],
-           let topId = threadIds.first, !topId.isEmpty {
-            targetThreadId = topId
+        guard fm.fileExists(atPath: dbPath) else {
+            return []
         }
 
+        // 1. Fetch display titles from local_thread_catalog in codex-dev.db if available
+        var catalogTitles: [String: String] = [:]
+        if fm.fileExists(atPath: catalogDbPath) {
+            let catQuery = "SELECT thread_id || '|||' || display_title FROM local_thread_catalog WHERE host_id='local' AND missing_candidate=0;"
+            if let catOutput = runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+                arguments: [catalogDbPath, catQuery],
+                timeoutSeconds: 1.0
+            ) {
+                for line in catOutput.components(separatedBy: "\n") {
+                    let parts = line.components(separatedBy: "|||")
+                    if parts.count >= 2 {
+                        let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let title = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !tid.isEmpty && !title.isEmpty {
+                            catalogTitles[tid] = title
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch active threads from state_5.sqlite
         var results: [CodexThreadInfo] = []
         var seenIds = Set<String>()
 
-        if fm.fileExists(atPath: dbPath) {
-            if let tid = targetThreadId {
-                let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE id='\(tid)' AND archived=0 AND COALESCE(thread_source, 'user') != 'subagent';"
-                if let output = runProcessWithTimeout(
-                    executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-                    arguments: [dbPath, query],
-                    timeoutSeconds: 1.0
-                ) {
-                    let parts = output.components(separatedBy: "|||")
-                    if parts.count >= 6 {
-                        let tidStr = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                        let safeTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
-                        if !tidStr.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) {
-                            seenIds.insert(tidStr)
-                            results.append(CodexThreadInfo(id: tidStr, title: safeTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
-                        }
-                    }
-                }
-            }
+        let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
+        if let output = runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+            arguments: [dbPath, query],
+            timeoutSeconds: 1.0
+        ) {
+            let lines = output.components(separatedBy: "\n")
+            for line in lines {
+                let parts = line.components(separatedBy: "|||")
+                if parts.count >= 6 {
+                    let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
 
-            let query = "SELECT id || '|||' || COALESCE(NULLIF(name, ''), '') || '|||' || COALESCE(NULLIF(title, ''), '') || '|||' || rollout_path || '|||' || cwd || '|||' || updated_at_ms FROM threads WHERE archived=0 AND COALESCE(thread_source, 'user') != 'subagent' ORDER BY updated_at_ms DESC LIMIT \(limit);"
-            if let output = runProcessWithTimeout(
-                executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
-                arguments: [dbPath, query],
-                timeoutSeconds: 1.0
-            ) {
-                let lines = output.components(separatedBy: "\n")
-                for line in lines {
-                    let parts = line.components(separatedBy: "|||")
-                    if parts.count >= 6 {
-                        let tid = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let rawName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let rawTitle = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let path = parts[3].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cwd = parts[4].trimmingCharacters(in: .whitespacesAndNewlines)
-                        let updated = Int64(parts[5].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                        let safeTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
-                        if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
-                            seenIds.insert(tid)
-                            results.append(CodexThreadInfo(id: tid, title: safeTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
-                        }
+                    let resolvedTitle: String
+                    if let catTitle = catalogTitles[tid], !catTitle.isEmpty && AutoMonitor.isSafeSessionTitle(catTitle) {
+                        resolvedTitle = catTitle
+                    } else {
+                        resolvedTitle = AutoMonitor.resolveCodexSessionTitle(name: rawName, title: rawTitle, cwd: cwd)
+                    }
+
+                    if !tid.isEmpty && !path.isEmpty && fm.fileExists(atPath: path) && !seenIds.contains(tid) {
+                        seenIds.insert(tid)
+                        results.append(CodexThreadInfo(id: tid, title: resolvedTitle, rolloutPath: path, cwd: cwd, updatedAtMs: updated))
                     }
                 }
             }
         }
 
-        return Array(results.prefix(limit))
+        return results
     }
 
     public func fetchCodexThreadInfo() -> CodexThreadInfo? {
@@ -942,7 +936,6 @@ public final class AutoMonitor: @unchecked Sendable {
             let payload = json["payload"] as? [String: Any]
             let payloadType = payload?["type"] as? String ?? json["type"] as? String
             let role = payload?["role"] as? String
-            let phase = payload?["phase"] as? String
             let turnId = (payload?["turn_id"] as? String) ?? (json["turn_id"] as? String)
             let durationMs = payload?["duration_ms"] as? Double
 
@@ -977,8 +970,8 @@ public final class AutoMonitor: @unchecked Sendable {
                     turnId: turnId,
                     durationMs: nil
                 )
-            } else if payloadType == "reasoning" || payloadType == "custom_tool_call" || payloadType == "custom_tool_call_output" || payloadType == "token_count" {
-                // Active reasoning / tool execution / token updates in progress
+            } else if payloadType == "reasoning" || payloadType == "custom_tool_call" || payloadType == "custom_tool_call_output" {
+                // Active reasoning / tool execution in progress
                 _ = AgentStore.shared.handleCodexRolloutEvent(
                     threadId: thread.id,
                     title: thread.title,
@@ -987,17 +980,6 @@ public final class AutoMonitor: @unchecked Sendable {
                     eventType: "task_started",
                     turnId: turnId,
                     durationMs: nil
-                )
-            } else if payloadType == "message" && role == "assistant" && phase != "commentary" {
-                // Final assistant message -> turn complete!
-                _ = AgentStore.shared.handleCodexRolloutEvent(
-                    threadId: thread.id,
-                    title: thread.title,
-                    cwd: thread.cwd,
-                    rolloutPath: thread.rolloutPath,
-                    eventType: "task_complete",
-                    turnId: turnId,
-                    durationMs: durationMs
                 )
             }
         }
@@ -1013,13 +995,44 @@ public final class AutoMonitor: @unchecked Sendable {
         })
 
         guard codexApp != nil else {
+            AgentStore.shared.setMonitorHealth(for: .codex, health: .connected)
             AgentStore.shared.updateStatus(for: .codex, status: .off, detail: "Codex Desktop closed")
             AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: false)
             return
         }
 
+        let dbPath = NSString(string: "~/.codex/state_5.sqlite").expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: dbPath) else {
+            // Codex app is running, but state database is missing
+            AgentStore.shared.setMonitorHealth(for: .codex, health: .disconnected)
+            AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex database unavailable")
+            AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+            return
+        }
+
         let historyTurns = fetchCodexHistoryTurns(limit: 20)
-        let threads = fetchCodexThreads(limit: 10)
+        let threads = fetchCodexThreads(limit: 15)
+
+        if threads.isEmpty {
+            // Probe if sqlite query succeeded or failed
+            let probeQuery = "SELECT COUNT(*) FROM threads;"
+            let probeOutput = runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+                arguments: [dbPath, probeQuery],
+                timeoutSeconds: 1.0
+            )
+            if probeOutput == nil {
+                // SQLite query failed/timeout -> corrupted or inaccessible database
+                AgentStore.shared.setMonitorHealth(for: .codex, health: .disconnected)
+                AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex database unparseable")
+                AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+                return
+            }
+        }
+
+        // Database is healthy and parseable
+        AgentStore.shared.setMonitorHealth(for: .codex, health: .connected)
+
         let validThreadIds = Set(threads.map { $0.id })
 
         // 1. Authoritative Multi-Session Reconciliation: Purge obsolete threads & reconcile completed turns
@@ -1065,7 +1078,7 @@ public final class AutoMonitor: @unchecked Sendable {
                 }
             }
 
-            // Also incrementally process rollout file for live events (reasoning, tools, assistant message)
+            // Also incrementally process rollout file for live events (reasoning, tools)
             processCodexRollout(thread: thread)
         }
 

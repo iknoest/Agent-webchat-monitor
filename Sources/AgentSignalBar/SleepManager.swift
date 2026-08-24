@@ -93,7 +93,7 @@ public final class SleepManager: @unchecked Sendable {
             if AgentStore.shared.getAvailability(for: agent) == .quotaExhausted {
                 return false
             }
-            if agent == .chatgpt && AgentStore.shared.isChatGPTMonitorDisconnected() {
+            if AgentStore.shared.isMonitorDisconnected(for: agent) {
                 return false
             }
             return true

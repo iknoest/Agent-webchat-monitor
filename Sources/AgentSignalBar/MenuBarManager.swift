@@ -475,8 +475,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 displayStatusLabel = statusLabel
             }
             let title: String
-            if agent == .chatgpt && displayStatus == .monitorUnavailable {
-                title = "⚠️ \(agent.displayName) — Monitor Not Connected"
+            if displayStatus == .monitorUnavailable {
+                title = "⚠️ \(agent.displayName) — Monitor Unavailable"
             } else if displayStatus == .quotaRestored {
                 title = "\(badge) \(agent.displayName)\(nameTag)\(sessionStr) [Quota Restored] [Idle]"
             } else {
@@ -541,6 +541,24 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 timeItem.isEnabled = false
                 submenu.addItem(timeItem)
             } else {
+                if displayStatus == .monitorUnavailable {
+                    let warnItem = NSMenuItem(title: "⚠️ \(agent.displayName) Monitor Unavailable", action: nil, keyEquivalent: "")
+                    warnItem.isEnabled = false
+                    submenu.addItem(warnItem)
+
+                    let desc: String
+                    if agent == .codex {
+                        desc = "   Local state database unavailable or unparseable"
+                    } else {
+                        desc = "   Monitoring source is unavailable"
+                    }
+                    let descItem = NSMenuItem(title: desc, action: nil, keyEquivalent: "")
+                    descItem.isEnabled = false
+                    submenu.addItem(descItem)
+
+                    submenu.addItem(NSMenuItem.separator())
+                }
+
                 if let sessionTitle = info.sessionTitle, !sessionTitle.isEmpty {
                     let sItem = NSMenuItem(title: "Active Session: \(sessionTitle)", action: nil, keyEquivalent: "")
                     sItem.isEnabled = false

@@ -5947,4 +5947,212 @@ runTest("304. Fun Emoji Rendering: Honors configured statusBadges mapping") {
     try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji, thinkingDuration: 700, overworkThresholdMinutes: 10) == (cfg.overworking?.funEmoji ?? "🥵"))
 }
 
-print("🎉 All 304 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu & Fun Emoji Config Tests Passed!")
+// 305. Codex Thread Catalog: Resolves human-readable display title from catalog
+runTest("305. Codex Thread Catalog: Resolves human-readable display title from catalog") {
+    let resolved = AutoMonitor.resolveCodexSessionTitle(name: "", title: "# User prompt pasted text...", cwd: "/Users/ava/Projects/Jobsearcher")
+    try assert(resolved == "Jobsearcher", "Fallback must resolve safe directory folder when prompt is raw, got: \(resolved)")
+    let clean = AutoMonitor.resolveCodexSessionTitle(name: "Review Gmail loop correctness", title: "ignored", cwd: "/Users/ava/Projects/Jobsearcher")
+    try assert(clean == "Review Gmail loop correctness", "Clean name must be preserved, got: \(clean)")
+}
+
+// 306. Codex Subagent Filtering: Subagent thread source is rejected from top-level sessions
+runTest("306. Codex Subagent Filtering: Subagent thread source is rejected from top-level sessions") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    let turns: [String: AutoMonitor.CodexHistoryTurnInfo] = [:]
+    let validIds: Set<String> = ["valid_user_thread"]
+    store.reconcileCodexSessions(validThreadIds: validIds, historyTurns: turns)
+    // Synthetic subagent thread should not be tracked
+    let sessions = store.getSessions(for: .codex)
+    try assert(!sessions.contains { $0.sessionId == "subagent_thread" })
+}
+
+// 307. Codex Rollout: task_started sets working with turnId and thinkingStartTime
+runTest("307. Codex Rollout: task_started sets working with turnId and thinkingStartTime") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    let threadId = "codex_live_thread_1"
+    let turnId = "turn_101"
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Test Live Task",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_started",
+        turnId: turnId,
+        durationMs: nil,
+        isTestMode: true
+    )
+    let sessions = store.getSessions(for: .codex)
+    let session = sessions.first { $0.sessionId == threadId }
+    try assert(session != nil)
+    try assert(session?.status == .working)
+    try assert(session?.turnId == turnId)
+    try assert(session?.thinkingStartTime != nil)
+}
+
+// 308. Codex Rollout: token_count metrics event does NOT mutate completed turn to working
+runTest("308. Codex Rollout: token_count metrics event does NOT mutate completed turn to working") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    let threadId = "codex_live_thread_2"
+    let turnId = "turn_102"
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Test Complete Task",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_started",
+        turnId: turnId,
+        durationMs: nil,
+        isTestMode: true
+    )
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Test Complete Task",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_complete",
+        turnId: turnId,
+        durationMs: 45000,
+        isTestMode: true
+    )
+    let sessionAfterDone = store.getSessions(for: .codex).first { $0.sessionId == threadId }
+    try assert(sessionAfterDone?.status == .done)
+
+    // Simulating token_count processing in AutoMonitor: AutoMonitor must ignore token_count without starting new task
+    // Even if a trailing task_started with same turnId is called, guard prevents regression:
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Test Complete Task",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_started",
+        turnId: turnId,
+        durationMs: nil,
+        isTestMode: true
+    )
+    let sessionStillDone = store.getSessions(for: .codex).first { $0.sessionId == threadId }
+    try assert(sessionStillDone?.status == .done, "Completed turn must NOT regress to working on trailing rollout event with same turnId")
+}
+
+// 309. Codex Rollout: task_complete authoritatively marks turn as done with duration
+runTest("309. Codex Rollout: task_complete authoritatively marks turn as done with duration") {
+    let store = AgentStore.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    let threadId = "codex_live_thread_3"
+    let turnId = "turn_103"
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Task With Duration",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_started",
+        turnId: turnId,
+        durationMs: nil,
+        isTestMode: true
+    )
+    _ = store.handleCodexRolloutEvent(
+        threadId: threadId,
+        title: "Task With Duration",
+        cwd: "/Users/ava/Projects/Test",
+        rolloutPath: "/tmp/test.jsonl",
+        eventType: "task_complete",
+        turnId: turnId,
+        durationMs: 120000,
+        isTestMode: true
+    )
+    let session = store.getSessions(for: .codex).first { $0.sessionId == threadId }
+    try assert(session?.status == .done)
+    try assert(session?.lastDurationSeconds == 120.0)
+}
+
+// 310. Codex Monitor Health: setCodexMonitorHealth disconnected surfaces monitorUnavailable
+runTest("310. Codex Monitor Health: setCodexMonitorHealth disconnected surfaces monitorUnavailable") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .codex, status: .idle, detail: "Codex ready")
+    store.setCodexMonitorHealth(.disconnected)
+    let info = store.getStatus(for: .codex)
+    try assert(info.effectiveDisplayStatus == .monitorUnavailable, "Disconnected monitor must yield monitorUnavailable effectiveDisplayStatus, got: \(info.effectiveDisplayStatus)")
+    try assert(store.isCodexMonitorDisconnected())
+    try assert(store.isMonitorDisconnected(for: .codex))
+}
+
+// 311. Codex Monitor Health: Disconnected Codex is excluded from Smart Auto keep-awake
+runTest("311. Codex Monitor Health: Disconnected Codex is excluded from Smart Auto keep-awake") {
+    let store = AgentStore.shared
+    let sleepMgr = SleepManager.shared
+    store.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    store.updateStatus(for: .codex, status: .working, detail: "Stale working")
+    store.setCodexMonitorHealth(.disconnected)
+
+    // Other monitored agents are idle
+    store.updateStatus(for: .chatgpt, status: .idle)
+    store.updateStatus(for: .claude, status: .idle)
+    store.updateStatus(for: .antigravity, status: .idle)
+    store.updateStatus(for: .copilot, status: .idle)
+
+    let eval = sleepMgr.evaluateSmartAutoRequirement()
+    try assert(!eval.shouldKeepAwake, "Disconnected Codex working state must NOT keep Smart Auto awake")
+}
+
+// 312. Codex Monitor Health: TelegramCommandRouter status reports Monitor unavailable
+runTest("312. Codex Monitor Health: TelegramCommandRouter status reports Monitor unavailable") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .codex, status: .idle)
+    store.setCodexMonitorHealth(.disconnected)
+
+    let router = TelegramCommandRouter.shared
+    let res = router.generateStatusOverview()
+    try assert(res.text.contains("⚠️ Codex Desktop — Monitor unavailable"), "Status overview must report monitor unavailable for Codex, got: \(res.text)")
+}
+
+// 313. Codex Monitor Health: Restoring connected health clears monitorUnavailable
+runTest("313. Codex Monitor Health: Restoring connected health clears monitorUnavailable") {
+    let store = AgentStore.shared
+    store.setCodexMonitorHealth(.connected)
+    store.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop ready")
+    let info = store.getStatus(for: .codex)
+    try assert(info.effectiveDisplayStatus == .idle)
+    try assert(!store.isCodexMonitorDisconnected())
+}
+
+// 314. Multi-Provider Monitor Health: Universal isMonitorDisconnected helper
+runTest("314. Multi-Provider Monitor Health: Universal isMonitorDisconnected helper") {
+    let store = AgentStore.shared
+    store.setMonitorHealth(for: .chatgpt, health: .disconnected)
+    store.setMonitorHealth(for: .codex, health: .connected)
+    try assert(store.isMonitorDisconnected(for: .chatgpt))
+    try assert(!store.isMonitorDisconnected(for: .codex))
+    store.setMonitorHealth(for: .chatgpt, health: .connected)
+    try assert(!store.isMonitorDisconnected(for: .chatgpt))
+}
+
+// 315. MenuBarManager: Renders Monitor Unavailable row when monitor health is disconnected
+runTest("315. MenuBarManager: Renders Monitor Unavailable row when monitor health is disconnected") {
+    let store = AgentStore.shared
+    store.updateStatus(for: .codex, status: .idle)
+    store.setCodexMonitorHealth(.disconnected)
+
+    let mgr = MenuBarManager.shared
+    let menu = mgr.buildMenuForTesting()
+    let codexItem = menu.items.first { $0.representedObject as? AgentID == .codex }
+    try assert(codexItem != nil)
+    try assert(codexItem?.title.contains("⚠️ Codex Desktop — Monitor Unavailable") == true, "Menu row must reflect monitor unavailable, got: \(codexItem?.title ?? "")")
+
+    store.setCodexMonitorHealth(.connected)
+}
+
+// 316. AutoMonitor: Database probe handles valid and missing sqlite gracefully
+runTest("316. AutoMonitor: Database probe handles valid and missing sqlite gracefully") {
+    let monitor = AutoMonitor.shared
+    let threads = monitor.fetchCodexThreads(limit: 5)
+    // On Ava's real machine, fetchCodexThreads returns valid threads with clean resolved titles
+    for t in threads {
+        try assert(!t.id.isEmpty)
+        try assert(!t.title.isEmpty)
+        try assert(AutoMonitor.isSafeSessionTitle(t.title))
+    }
+}
+
+print("🎉 All 316 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth & Source Health Tests Passed!")

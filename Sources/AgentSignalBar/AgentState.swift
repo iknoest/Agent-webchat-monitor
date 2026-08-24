@@ -426,7 +426,7 @@ public struct AgentInfo: Codable {
         if status == .off {
             return .off
         }
-        if id == .chatgpt && monitorHealth == .disconnected {
+        if monitorHealth == .disconnected {
             return .monitorUnavailable
         }
         if status == .blocked {
@@ -517,25 +517,43 @@ public final class AgentStore: @unchecked Sendable {
         }
     }
 
-    public func setChatGPTMonitorHealth(_ health: MonitorHealth) {
+    public func setMonitorHealth(for agent: AgentID, health: MonitorHealth) {
         lock.lock()
-        var info = states[.chatgpt] ?? AgentInfo(id: .chatgpt, status: .off)
+        var info = states[agent] ?? AgentInfo(id: agent, status: .off)
         let oldHealth = info.monitorHealth
         info.monitorHealth = health
-        states[.chatgpt] = info
+        states[agent] = info
         let changed = (oldHealth != health)
         lock.unlock()
 
         if changed {
-            TelegramBridge.shared.handleChatGPTMonitorHealthChange(oldHealth: oldHealth, newHealth: health)
+            if agent == .chatgpt {
+                TelegramBridge.shared.handleChatGPTMonitorHealthChange(oldHealth: oldHealth, newHealth: health)
+            }
             MenuBarManager.shared.scheduleTitleAndMenuUpdate()
         }
     }
 
-    public func isChatGPTMonitorDisconnected() -> Bool {
+    public func setChatGPTMonitorHealth(_ health: MonitorHealth) {
+        setMonitorHealth(for: .chatgpt, health: health)
+    }
+
+    public func setCodexMonitorHealth(_ health: MonitorHealth) {
+        setMonitorHealth(for: .codex, health: health)
+    }
+
+    public func isMonitorDisconnected(for agent: AgentID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return (states[.chatgpt]?.monitorHealth == .disconnected)
+        return (states[agent]?.monitorHealth == .disconnected)
+    }
+
+    public func isChatGPTMonitorDisconnected() -> Bool {
+        return isMonitorDisconnected(for: .chatgpt)
+    }
+
+    public func isCodexMonitorDisconnected() -> Bool {
+        return isMonitorDisconnected(for: .codex)
     }
 
     public func resetChatGPTMonitorHealthForTesting(appStartTime: Date? = nil, lastHeartbeat: Date? = nil) {
@@ -1531,6 +1549,13 @@ public final class AgentStore: @unchecked Sendable {
 
         switch eventType {
         case "task_started":
+            // Guard: If this exact session and turnId has already completed (.done) via rollout or history reconciliation,
+            // do NOT regress back to .working unless a NEW turnId is provided!
+            if session.status == .done, let curTurnId = session.turnId, let incomingTurnId = turnId, curTurnId == incomingTurnId {
+                lock.unlock()
+                return true
+            }
+
             session.status = .working
             if let tId = turnId, !tId.isEmpty {
                 session.turnId = tId
