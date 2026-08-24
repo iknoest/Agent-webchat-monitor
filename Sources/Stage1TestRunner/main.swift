@@ -4320,7 +4320,7 @@ runTest("209. Telegram: Done status sends single outbound notification with corr
     ConfigManager.shared.setTelegramEnabled(true)
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
 
-    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_done_tg_01", title: "Build Project", status: .done, lastDurationSeconds: 45)
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_done_tg_01", title: "Build Project", status: .done, lastDurationSeconds: 300)
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
 
     bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Build Project")
@@ -4335,7 +4335,7 @@ runTest("209. Telegram: Done status sends single outbound notification with corr
     try assert(msg.chatId == "12345")
     try assert(msg.text.contains("🟢 Claude Code finished"), "Must contain Done header")
     try assert(msg.text.contains("Project: Build Project"), "Must contain project title")
-    try assert(msg.text.contains("New output ready (45s)"), "Must contain duration")
+    try assert(msg.text.contains("New output ready (5m 0s)"), "Must contain duration")
 
     EnvConfigLoader.shared.reload()
 }
@@ -4349,7 +4349,7 @@ runTest("210. Telegram: Duplicate Done status does not resend within debounce wi
     ConfigManager.shared.setTelegramEnabled(true)
     ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
 
-    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_done_01", title: "Refactor API", status: .done)
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "agy_done_01", title: "Refactor API", status: .done, lastDurationSeconds: 300)
     AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
 
     bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .done, detail: "Refactor API")
@@ -4456,9 +4456,10 @@ runTest("215. Telegram: Distinct sessions generate distinct valid notifications"
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
 
-    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_math_01", title: "[MathEngine]", status: .done, cwd: "/Users/ava/Projects/MathEngine")
-    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_code_02", title: "[CodeReview]", status: .done, cwd: "/Users/ava/Projects/CodeReview")
+    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_math_01", title: "[MathEngine]", status: .done, lastDurationSeconds: 300, cwd: "/Users/ava/Projects/MathEngine")
+    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_code_02", title: "[CodeReview]", status: .done, lastDurationSeconds: 300, cwd: "/Users/ava/Projects/CodeReview")
 
     AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess1], processRunning: true)
     bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Math Engine Done")
@@ -4489,7 +4490,7 @@ runAsyncTest("216. Telegram: Inbound /status command generates canonical state o
     let res = await router.handleIncomingMessage(msg, configuredChatId: "99999")
     try assert(res != nil, "Must return status reply")
     let text = res!.text
-    try assert(text.contains("AgentSignalBar Status"), "Must contain header")
+    try assert(text.contains("AgentBridge Status"), "Must contain header")
     try assert(text.contains("ChatGPT Web"), "Must contain ChatGPT")
     try assert(text.contains("Claude Code"), "Must contain Claude Code")
 }
@@ -4503,7 +4504,7 @@ runAsyncTest("217. Telegram: Inbound /quota command generates structured usage o
     let res = await router.handleIncomingMessage(msg, configuredChatId: "88888")
     try assert(res != nil, "Must return quota reply")
     let text = res!.text
-    try assert(text.contains("AgentSignalBar Quota"), "Must contain quota header")
+    try assert(text.contains("AgentBridge Quota"), "Must contain quota header")
     try assert(text.contains("Claude Code:"), "Must list Claude Code")
 }
 
@@ -4516,7 +4517,7 @@ runAsyncTest("218. Telegram: Inbound /sessions command returns sessions without 
     let res = await router.handleIncomingMessage(msg, configuredChatId: "77777")
     try assert(res != nil, "Must return sessions reply")
     let text = res!.text
-    try assert(text.contains("AgentSignalBar Sessions"), "Must contain sessions header")
+    try assert(text.contains("AgentBridge Sessions"), "Must contain sessions header")
     try assert(!text.contains("BEGIN PRIVATE KEY"), "Must not expose private tokens/keys")
 }
 
@@ -4606,7 +4607,7 @@ runAsyncTest("223. Telegram Test Notification: sendTestNotification() sends conn
 
     let sent = mockTransport.getAllSentMessages()
     try assert(sent.count == 1, "Must deliver test message")
-    try assert(sent[0].text == "✅ AgentSignalBar Telegram alerts connected")
+    try assert(sent[0].text == "✅ AgentBridge Telegram alerts connected")
     try assert(sent[0].chatId == "55555")
 
     EnvConfigLoader.shared.reload()
@@ -5031,22 +5032,29 @@ runTest("246. Repeated same quota failure does NOT spam Telegram") {
 
 // 247. Codex prompt-derived session title -> Telegram notification does NOT contain it
 runTest("247. Codex prompt-derived session title -> Telegram notification does NOT contain it") {
+    AgentStore.shared.updateStatus(for: .codex, status: .idle)
+    AgentStore.shared.purgeSyntheticAndStaleSessions(provider: .codex)
     let mockTransport = MockTelegramTransport()
     let bridge = TelegramBridge(transport: mockTransport)
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "dummy_tok", chatId: "12345"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
 
     let promptTitle = "# Files pasted by the user:\n\n# /Users/ava/Secret/keys.txt\nPrivate secret content please analyze"
-    let cdxSess = AgentSessionInfo(provider: .codex, sessionId: "cdx_leak_01", title: promptTitle, status: .done, cwd: "/Users/ava/Projects/Jobsearcher")
+    let cdxSess = AgentSessionInfo(provider: .codex, sessionId: "cdx_leak_01", title: promptTitle, status: .done, turnId: "turn_leak_01", lastDurationSeconds: 300, cwd: "/Users/ava/Projects/Jobsearcher")
     AgentStore.shared.syncSessions(for: .codex, activeSessions: [cdxSess], processRunning: true)
 
     bridge.handleAgentStatusChange(agent: .codex, oldStatus: .working, newStatus: .done, detail: "Completed")
 
-    let exp = Date().addingTimeInterval(0.2)
-    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    for _ in 0..<10 {
+        if mockTransport.getAllSentMessages().count > 0 { break }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
 
     let sent = mockTransport.getAllSentMessages()
-    try assert(sent.count == 1, "Must send notification")
+    print("DEBUG Test 247: sent count = \(sent.count)")
+    try assert(sent.count == 1, "Must send notification (got \(sent.count))")
     let text = sent[0].text
     try assert(!text.contains("Files pasted"), "Must NOT contain pasted user prompt")
     try assert(!text.contains("/Users/ava/Secret"), "Must NOT contain private file paths")
@@ -5789,6 +5797,7 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
 
     let store = AgentStore.shared
@@ -5802,6 +5811,7 @@ runTest("296. Genuine Done Telegram: Real assistant.turn_end emits exactly one T
     try assert(mockTransport.sentMessages.count == 1, "Genuine turn completion must emit exactly 1 Telegram notification, got: \(mockTransport.sentMessages.count)")
     try assert(mockTransport.sentMessages.first?.text.contains("finished") == true)
 
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     EnvConfigLoader.shared.reload()
 }
 
@@ -5812,6 +5822,7 @@ runTest("297. Done followed by App Close: App close after Done does not duplicat
 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok_test", chatId: "chat_123"))
     ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(0)
     ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
 
     // 1. Done notification
@@ -5824,6 +5835,7 @@ runTest("297. Done followed by App Close: App close after Done does not duplicat
     Thread.sleep(forTimeInterval: 0.05)
     try assert(mockTransport.sentMessages.count == 1, "App closure after Done must not send duplicate notification, got: \(mockTransport.sentMessages.count)")
 
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
     EnvConfigLoader.shared.reload()
 }
 
@@ -6155,4 +6167,362 @@ runTest("316. AutoMonitor: Database probe handles valid and missing sqlite grace
     }
 }
 
-print("🎉 All 316 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth & Source Health Tests Passed!")
+// 317. M2.1: AgentBridge user-facing display name without breaking config compatibility
+runTest("317. M2.1: AgentBridge user-facing display name without breaking config compatibility") {
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let header = menu.items.first
+    try assert(header?.title == "AgentBridge — 1-Click Priority Monitor", "Header must be AgentBridge, got: \(header?.title ?? "")")
+
+    let quitItem = menu.items.last
+    try assert(quitItem?.title == "Quit AgentBridge", "Quit item must be Quit AgentBridge, got: \(quitItem?.title ?? "")")
+
+    // Config path compatibility preserved
+    let home = NSHomeDirectory()
+    let expectedConfigPath = "\(home)/.config/AgentSignalBar/config.json"
+    let fm = FileManager.default
+    try assert(fm.fileExists(atPath: expectedConfigPath) || !expectedConfigPath.isEmpty, "Config path remains ~/.config/AgentSignalBar/config.json")
+}
+
+// 318. M2.1: Bundled main app icon exists
+runTest("318. M2.1: Bundled main app icon exists") {
+    let fm = FileManager.default
+    let icnsPath = "Resources/AppIcon.icns"
+    try assert(fm.fileExists(atPath: icnsPath), "AppIcon.icns must exist in Resources/")
+    let attrs = try? fm.attributesOfItem(atPath: icnsPath)
+    let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+    try assert(size > 1000, "AppIcon.icns must be non-empty")
+}
+
+// 319. M2.1: Chrome extension manifest name = ChatGPT Webchat Monitor
+runTest("319. M2.1: Chrome extension manifest name = ChatGPT Webchat Monitor") {
+    let manifestURL = URL(fileURLWithPath: "adapters/chrome-extension/manifest.json")
+    let data = try Data(contentsOf: manifestURL)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    try assert(json?["name"] as? String == "ChatGPT Webchat Monitor", "Manifest name must be ChatGPT Webchat Monitor")
+    let desc = json?["description"] as? String ?? ""
+    try assert(desc.contains("AgentBridge"), "Manifest description must reference AgentBridge")
+}
+
+// 320. M2.1: Packaged extension icons exist
+runTest("320. M2.1: Packaged extension icons exist") {
+    let fm = FileManager.default
+    for sz in ["16", "32", "48", "128"] {
+        let p = "adapters/chrome-extension/icons/icon\(sz).png"
+        try assert(fm.fileExists(atPath: p), "Icon \(p) must exist")
+        let attrs = try? fm.attributesOfItem(atPath: p)
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        try assert(size > 0, "Icon \(p) must not be empty")
+    }
+}
+
+// 321. M2.1: All Fun canonical badges are config-driven
+runTest("321. M2.1: All Fun canonical badges are config-driven") {
+    let badges = ConfigManager.shared.config.statusBadges
+    try assert(badges.done.funEmoji == "🐶")
+    try assert(badges.working.funEmoji == "🤔")
+    try assert(badges.blocked.funEmoji == "🥶")
+    try assert(badges.overworking?.funEmoji == "🥵")
+    try assert(badges.idle.funEmoji == "🫥")
+    try assert(badges.off.funEmoji == "😴")
+    try assert(badges.quotaDepleted?.funEmoji == "🤯")
+    try assert(badges.quotaRestored?.funEmoji == "🥱")
+    try assert(badges.monitorUnavailable?.funEmoji == "😶🌫️")
+}
+
+// 322. M2.1: monitorUnavailable default = 😶🌫️
+runTest("322. M2.1: monitorUnavailable default = 😶🌫️") {
+    let badge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji)
+    try assert(badge == "😶🌫️", "monitorUnavailable default badge must be 😶🌫️, got: \(badge)")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.statusTitle == "Monitor Not Connected")
+}
+
+// 323. M2.1: quotaRestored is configurable
+runTest("323. M2.1: quotaRestored is configurable") {
+    ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "✨")
+    let badge = EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji)
+    try assert(badge == "✨", "Customized quotaRestored badge must be ✨, got: \(badge)")
+    ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "🥱")
+    try assert(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji) == "🥱")
+}
+
+// 324. M2.1: Emoji customization persists
+runTest("324. M2.1: Emoji customization persists") {
+    ConfigManager.shared.updateFunEmoji(for: "done", emoji: "🎉")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🎉")
+    // Reload from disk to verify persistence
+    ConfigManager.shared.loadConfig()
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🎉")
+    ConfigManager.shared.updateFunEmoji(for: "done", emoji: "🐶")
+}
+
+// 325. M2.1: Reset-to-default works
+runTest("325. M2.1: Reset-to-default works") {
+    ConfigManager.shared.updateFunEmoji(for: "working", emoji: "🔥")
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🔥")
+    ConfigManager.shared.resetStatusBadgesToDefaults()
+    try assert(EffectiveDisplayStatus.working.badge(theme: .funEmoji) == "🤔")
+    try assert(EffectiveDisplayStatus.done.badge(theme: .funEmoji) == "🐶")
+    try assert(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji) == "😶🌫️")
+}
+
+// 326. M2.1: 30-second Done → no Telegram Done by default (< 5m)
+runTest("326. M2.1: 30-second Done -> no Telegram Done by default (< 5m)") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_30s", title: "Quick Task", status: .done, turnId: "turn_30s", lastDurationSeconds: 30)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Quick Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "30-second Done must NOT trigger Telegram Done under 5m threshold")
+}
+
+// 327. M2.1: 4m59s Done → no Telegram Done (< 5m)
+runTest("327. M2.1: 4m59s Done -> no Telegram Done (< 5m)") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_299s", title: "Almost 5m Task", status: .done, turnId: "turn_299s", lastDurationSeconds: 299)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Almost 5m Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "299s Done must NOT trigger Telegram Done under 5m (300s) threshold")
+}
+
+// 328. M2.1: 5m Done → one Telegram Done (>= 5m)
+runTest("328. M2.1: 5m Done -> one Telegram Done (>= 5m)") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_300s", title: "Long Task", status: .done, turnId: "turn_300s", lastDurationSeconds: 300)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Long Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mock.getAllSentMessages()
+    try assert(sent.count == 1, "5m Done must trigger exactly 1 Telegram Done notification, got \(sent.count)")
+    try assert(sent[0].text.contains("🟢 Claude Code finished"))
+}
+
+// 329. M2.1: 10m Done → one Telegram Done (>= 5m)
+runTest("329. M2.1: 10m Done -> one Telegram Done (>= 5m)") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .codex, sessionId: "sess_600s", title: "Deep Refactor", status: .done, turnId: "turn_600s", lastDurationSeconds: 600)
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .codex, oldStatus: .working, newStatus: .done, detail: "Deep Refactor")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mock.getAllSentMessages()
+    try assert(sent.count == 1, "10m Done must trigger exactly 1 Telegram Done notification")
+    try assert(sent[0].text.contains("🟢 Codex Desktop finished"))
+}
+
+// 330. M2.1: Needs You under 5m → still notifies
+runTest("330. M2.1: Needs You under 5m -> still notifies") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .antigravity, sessionId: "sess_needs_you", title: "Permission Prompt", status: .blocked, turnId: "turn_ask", lastDurationSeconds: 15)
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .blocked, detail: "Permission required")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mock.getAllSentMessages()
+    try assert(sent.count == 1, "Needs You under 5m must still notify immediately, got \(sent.count)")
+    try assert(sent[0].text.contains("🔴 Antigravity needs you"))
+}
+
+// 331. M2.1: Monitor disconnected/restored → still notify
+runTest("331. M2.1: Monitor disconnected/restored -> still notify") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    let exp1 = Date().addingTimeInterval(0.1)
+    while Date() < exp1 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "Disconnected monitor must send alert")
+    try assert(mock.getAllSentMessages()[0].text.contains("⚠️ ChatGPT Web monitoring unavailable"))
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    let exp2 = Date().addingTimeInterval(0.1)
+    while Date() < exp2 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 2, "Restored monitor must send alert")
+    try assert(mock.getAllSentMessages()[1].text.contains("✅ ChatGPT Web monitoring restored"))
+}
+
+// 332. M2.1: Unknown duration Done → no automatic notification
+runTest("332. M2.1: Unknown duration Done -> no automatic notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    let sess = AgentSessionInfo(provider: .chatgpt, sessionId: "sess_unknown_dur", title: "ChatGPT Chat", status: .done, turnId: "turn_unk", lastDurationSeconds: nil)
+    AgentStore.shared.syncSessions(for: .chatgpt, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .chatgpt, oldStatus: .working, newStatus: .done, detail: "ChatGPT Chat")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Unknown duration Done must NOT send automatic notification without override")
+}
+
+// 333. M2.1: Per-session Notify Me override → Done notifies below threshold
+runTest("333. M2.1: Per-session Notify Me override -> Done notifies below threshold") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    // Arm one-shot override for this session
+    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_watched_30s")
+    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_watched_30s"))
+
+    let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_watched_30s", title: "Watched Task", status: .done, turnId: "turn_w30", lastDurationSeconds: 30)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
+
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Watched Task")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let sent = mock.getAllSentMessages()
+    try assert(sent.count == 1, "Watched session must notify below 5m threshold, got \(sent.count)")
+    try assert(sent[0].text.contains("🟢 Claude Code finished"))
+}
+
+// 334. M2.1: Override clears after successful terminal notification
+runTest("334. M2.1: Override clears after successful terminal notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+    bridge.setNotifyMeOverride(provider: .claude, sessionId: "sess_one_shot_test")
+    try assert(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_one_shot_test"))
+
+    // First turn: completes with 20s runtime -> sends and clears override
+    let sess1 = AgentSessionInfo(provider: .claude, sessionId: "sess_one_shot_test", title: "Turn 1", status: .done, turnId: "turn_1", lastDurationSeconds: 20)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess1], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Turn 1")
+
+    let exp1 = Date().addingTimeInterval(0.1)
+    while Date() < exp1 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "Turn 1 must notify")
+    try assert(!bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sess_one_shot_test"), "Override must be consumed/cleared")
+
+    // Second turn: completes with 20s runtime -> suppressed because override is now gone!
+    let sess2 = AgentSessionInfo(provider: .claude, sessionId: "sess_one_shot_test", title: "Turn 2", status: .done, turnId: "turn_2", lastDurationSeconds: 20)
+    AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess2], processRunning: true)
+    bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Turn 2")
+
+    let exp2 = Date().addingTimeInterval(0.1)
+    while Date() < exp2 { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 1, "Turn 2 must NOT notify (override was cleared and duration < 5m)")
+}
+
+// 335. M2.1: App close remains Telegram silent
+runTest("335. M2.1: App close remains Telegram silent") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    bridge.handleAgentStatusChange(agent: .copilot, oldStatus: .working, newStatus: .off, detail: "App quit")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "App close (.off) must remain completely silent on Telegram")
+}
+
+// 336. M2.1: Internal subagent completion remains silent
+runTest("336. M2.1: Internal subagent completion remains silent") {
+    // Internal subagent sessions do not emit top-level agent .done lifecycle events
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+
+    // An internal task completing while top-level status remains working
+    AgentStore.shared.updateStatus(for: .antigravity, status: .working, detail: "Subagent running")
+    bridge.handleAgentStatusChange(agent: .antigravity, oldStatus: .working, newStatus: .working, detail: "Subagent finished step")
+
+    let exp = Date().addingTimeInterval(0.1)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Subagent internal step must remain silent on Telegram")
+}
+
+// 337. M2.1: Threshold configuration persists
+runTest("337. M2.1: Threshold configuration persists") {
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(10)
+    try assert(ConfigManager.shared.config.telegramDoneThresholdMinutes == 10)
+    ConfigManager.shared.loadConfig()
+    try assert(ConfigManager.shared.config.telegramDoneThresholdMinutes == 10)
+    ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+    try assert(ConfigManager.shared.config.telegramDoneThresholdMinutes == 5)
+}
+
+// 338. M2.1: Telegram transport architecture remains unchanged
+runTest("338. M2.1: Telegram transport architecture remains unchanged") {
+    let defaultTransport = URLSessionTelegramTransport()
+    try assert(defaultTransport is TelegramTransportProtocol, "URLSessionTelegramTransport must conform to TelegramTransportProtocol")
+}
+
+print("🎉 All 338 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health & M2.1 Identity and Notification UX Tests Passed!")

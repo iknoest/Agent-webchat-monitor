@@ -10,9 +10,112 @@ public final class TelegramBridge: @unchecked Sendable {
     public private(set) var lastDeliveryResult: TelegramDeliveryResult?
     private var lastUpdateId: Int64 = 0
     private var lastSentNotificationKeys: [String: Date] = [:]
+    private var activeOverrides: [String: TelegramNotifyOverride] = [:]
+
+    public struct TelegramNotifyOverride: Equatable, Sendable {
+        public let provider: AgentID
+        public let sessionId: String?
+        public let targetTabId: Int?
+        public let turnId: String?
+        public let armedAt: Date
+
+        public init(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, turnId: String? = nil, armedAt: Date = Date()) {
+            self.provider = provider
+            self.sessionId = sessionId
+            self.targetTabId = targetTabId
+            self.turnId = turnId
+            self.armedAt = armedAt
+        }
+    }
 
     public init(transport: TelegramTransportProtocol = URLSessionTelegramTransport()) {
         self.transport = transport
+    }
+
+    private func makeOverrideKey(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) -> String {
+        if let tabId = targetTabId {
+            return "\(provider.rawValue)_tab_\(tabId)"
+        }
+        if let sId = sessionId, !sId.isEmpty {
+            return "\(provider.rawValue)_sess_\(sId)"
+        }
+        return "\(provider.rawValue)_sess_root"
+    }
+
+    public func isNotifyMeOverrideActive(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
+        if activeOverrides[key] != nil { return true }
+        if sessionId != nil && activeOverrides["\(provider.rawValue)_sess_root"] != nil { return true }
+        return false
+    }
+
+    public func setNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, turnId: String? = nil) {
+        lock.lock()
+        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
+        activeOverrides[key] = TelegramNotifyOverride(
+            provider: provider,
+            sessionId: sessionId,
+            targetTabId: targetTabId,
+            turnId: turnId,
+            armedAt: Date()
+        )
+        lock.unlock()
+        print("🔔 Armed Telegram 'Notify Me When Ready' override for \(provider.displayName) [\(key)]")
+    }
+
+    public func clearNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil) {
+        lock.lock()
+        let key = makeOverrideKey(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
+        activeOverrides.removeValue(forKey: key)
+        if sessionId != nil {
+            activeOverrides.removeValue(forKey: "\(provider.rawValue)_sess_root")
+        }
+        lock.unlock()
+        print("🔕 Disarmed Telegram 'Notify Me When Ready' override for \(provider.displayName) [\(key)]")
+    }
+
+    public func toggleNotifyMeOverride(provider: AgentID, sessionId: String? = nil, targetTabId: Int? = nil, turnId: String? = nil) {
+        if isNotifyMeOverrideActive(provider: provider, sessionId: sessionId, targetTabId: targetTabId) {
+            clearNotifyMeOverride(provider: provider, sessionId: sessionId, targetTabId: targetTabId)
+        } else {
+            setNotifyMeOverride(provider: provider, sessionId: sessionId, targetTabId: targetTabId, turnId: turnId)
+        }
+    }
+
+    private func consumeNotifyMeOverride(agent: AgentID, sessionId: String?, targetTabId: Int?, webLink: String?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var found = false
+        if let tabId = targetTabId {
+            let key = "\(agent.rawValue)_tab_\(tabId)"
+            if activeOverrides.removeValue(forKey: key) != nil {
+                found = true
+            }
+        }
+        if let sId = sessionId, !sId.isEmpty {
+            let key = "\(agent.rawValue)_sess_\(sId)"
+            if activeOverrides.removeValue(forKey: key) != nil {
+                found = true
+            }
+        }
+        if let link = webLink, !link.isEmpty {
+            let key = "\(agent.rawValue)_sess_\(link)"
+            if activeOverrides.removeValue(forKey: key) != nil {
+                found = true
+            }
+        }
+        let rootKey = "\(agent.rawValue)_sess_root"
+        if activeOverrides.removeValue(forKey: rootKey) != nil {
+            found = true
+        }
+
+        if found {
+            print("🔔 Consumed one-shot Telegram Notify Me override for \(agent.displayName)")
+        }
+        return found
     }
 
     public func setup() {
@@ -119,7 +222,7 @@ public final class TelegramBridge: @unchecked Sendable {
             return res
         }
 
-        let testMessage = "✅ AgentSignalBar Telegram alerts connected"
+        let testMessage = "✅ AgentBridge Telegram alerts connected"
         do {
             let res = try await transport.sendMessage(
                 botToken: config.botToken,
@@ -151,11 +254,44 @@ public final class TelegramBridge: @unchecked Sendable {
         // 4. Outbound Lifecycle Event Filtering: ONLY Needs You (blocked) and Done (done)
         guard newStatus == .blocked || newStatus == .done else { return }
 
-        // 5. Deduplication Gate
         let info = AgentStore.shared.getStatus(for: agent)
         let relevantSession = AgentStore.shared.getSessions(for: agent).first(where: { $0.status == newStatus })
         let sessionId = relevantSession?.sessionId ?? "parent"
-        let turnId = relevantSession?.turnId ?? "turn"
+        let turnId = relevantSession?.turnId ?? info.turnId ?? "turn"
+
+        // 5. Telegram Notification Policy v2 Duration Threshold & Per-Session Override Gate for Done events
+        if newStatus == .done {
+            let hasOverride = consumeNotifyMeOverride(
+                agent: agent,
+                sessionId: relevantSession?.sessionId,
+                targetTabId: relevantSession?.targetTabId ?? info.targetTabId,
+                webLink: relevantSession?.webLink ?? info.webLink
+            )
+
+            if !hasOverride {
+                let thresholdMinutes = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 5
+                // Threshold 0 means Off (suppress automatic Done notifications)
+                guard thresholdMinutes > 0 else {
+                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): threshold is Off (per-session override only)")
+                    return
+                }
+
+                // If duration is unknown or <= 0, suppress notification unless watched
+                guard let dur = relevantSession?.lastDurationSeconds ?? info.lastDurationSeconds, dur > 0 else {
+                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): duration is unknown")
+                    return
+                }
+
+                // Check duration against threshold
+                let thresholdSeconds = Double(thresholdMinutes * 60)
+                guard dur >= thresholdSeconds else {
+                    print("🔕 Suppressed Telegram Done alert for \(agent.displayName): runtime (\(Int(dur))s) < threshold (\(Int(thresholdSeconds))s)")
+                    return
+                }
+            }
+        }
+
+        // 6. Deduplication Gate
         let dedupeKey = "\(agent.rawValue)_\(sessionId)_\(turnId)_\(newStatus.rawValue)"
 
         lock.lock()
@@ -166,7 +302,7 @@ public final class TelegramBridge: @unchecked Sendable {
         lastSentNotificationKeys[dedupeKey] = Date()
         lock.unlock()
 
-        // 6. Format Privacy-Safe Outbound Notification
+        // 7. Format Privacy-Safe Outbound Notification
         let safeProject = TelegramPrivacySafeContext.resolveSafeProjectContext(agent: agent, session: relevantSession)
         let text: String
 
@@ -195,7 +331,7 @@ public final class TelegramBridge: @unchecked Sendable {
             """
         }
 
-        // 7. Non-blocking asynchronous outbound delivery
+        // 8. Non-blocking asynchronous outbound delivery
         Task { [weak self] in
             guard let self = self else { return }
             let res = try? await self.transport.sendMessage(
@@ -265,6 +401,7 @@ public final class TelegramBridge: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         lastSentNotificationKeys.removeAll()
+        activeOverrides.removeAll()
         lastDeliveryResult = nil
         lastUpdateId = 0
         stopPolling()

@@ -19,6 +19,8 @@ public struct StatusBadgesConfig: Codable {
     public var off: StatusBadgeItem
     public var overworking: StatusBadgeItem?
     public var quotaDepleted: StatusBadgeItem?
+    public var quotaRestored: StatusBadgeItem?
+    public var monitorUnavailable: StatusBadgeItem?
 
     public init(
         idle: StatusBadgeItem = StatusBadgeItem(classic: "⚪", funEmoji: "🫥"),
@@ -27,7 +29,9 @@ public struct StatusBadgesConfig: Codable {
         blocked: StatusBadgeItem = StatusBadgeItem(classic: "🔴", funEmoji: "🥶"),
         off: StatusBadgeItem = StatusBadgeItem(classic: "⚫", funEmoji: "😴"),
         overworking: StatusBadgeItem = StatusBadgeItem(classic: "🟡", funEmoji: "🥵"),
-        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⦸", funEmoji: "🤯")
+        quotaDepleted: StatusBadgeItem = StatusBadgeItem(classic: "⦸", funEmoji: "🤯"),
+        quotaRestored: StatusBadgeItem = StatusBadgeItem(classic: "⚪", funEmoji: "🥱"),
+        monitorUnavailable: StatusBadgeItem = StatusBadgeItem(classic: "⚠️", funEmoji: "😶🌫️")
     ) {
         self.idle = idle
         self.working = working
@@ -36,6 +40,8 @@ public struct StatusBadgesConfig: Codable {
         self.off = off
         self.overworking = overworking
         self.quotaDepleted = quotaDepleted
+        self.quotaRestored = quotaRestored
+        self.monitorUnavailable = monitorUnavailable
     }
 
     public static var defaultConfig: StatusBadgesConfig {
@@ -121,6 +127,7 @@ public struct AppConfig: Codable {
     public var isClosedLidEnabled: Bool? // default false
     public var minBatteryPercentForClosedLid: Int? // default 20
     public var isTelegramEnabled: Bool? // default true
+    public var telegramDoneThresholdMinutes: Int? // default 5 (0 means Off / per-session override only)
     public var customMainIconPath: String?
     public var disabledAgents: [String]? // explicit list of user-disabled agent rawValues
     public var agents: [String: AgentCustomConfig]
@@ -140,6 +147,7 @@ public struct AppConfig: Codable {
             isClosedLidEnabled: nil,
             minBatteryPercentForClosedLid: 20,
             isTelegramEnabled: true,
+            telegramDoneThresholdMinutes: 5,
             customMainIconPath: nil,
             disabledAgents: [],
             agents: [
@@ -240,7 +248,7 @@ public final class ConfigManager: @unchecked Sendable {
             let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
             var decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
-            // Auto-backfill overworking and quotaDepleted if missing in existing config.json
+            // Auto-backfill missing properties in existing config.json
             var needsSave = false
             if decoded.statusBadges.overworking == nil {
                 decoded.statusBadges.overworking = StatusBadgeItem(classic: "🟡", funEmoji: "🥵")
@@ -251,6 +259,18 @@ public final class ConfigManager: @unchecked Sendable {
                 needsSave = true
             } else if decoded.statusBadges.quotaDepleted?.classic == "🔴⚠️" {
                 decoded.statusBadges.quotaDepleted?.classic = "⦸"
+                needsSave = true
+            }
+            if decoded.statusBadges.quotaRestored == nil {
+                decoded.statusBadges.quotaRestored = StatusBadgeItem(classic: "⚪", funEmoji: "🥱")
+                needsSave = true
+            }
+            if decoded.statusBadges.monitorUnavailable == nil {
+                decoded.statusBadges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: "😶🌫️")
+                needsSave = true
+            }
+            if decoded.telegramDoneThresholdMinutes == nil {
+                decoded.telegramDoneThresholdMinutes = 5
                 needsSave = true
             }
             if decoded.agents["copilot"] == nil {
@@ -283,6 +303,66 @@ public final class ConfigManager: @unchecked Sendable {
     public func setTelegramEnabled(_ enabled: Bool) {
         var cfg = config
         cfg.isTelegramEnabled = enabled
+        saveConfig(cfg)
+    }
+
+    public func setTelegramDoneThresholdMinutes(_ mins: Int) {
+        var cfg = config
+        cfg.telegramDoneThresholdMinutes = mins
+        saveConfig(cfg)
+    }
+
+    public func resetStatusBadgesToDefaults() {
+        var cfg = config
+        cfg.statusBadges = StatusBadgesConfig.defaultConfig
+        saveConfig(cfg)
+    }
+
+    public func updateFunEmoji(for stateKey: String, emoji: String) {
+        var cfg = config
+        var badges = cfg.statusBadges
+        let trimmed = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        switch stateKey.lowercased() {
+        case "idle":
+            badges.idle.funEmoji = trimmed
+        case "working":
+            badges.working.funEmoji = trimmed
+        case "done":
+            badges.done.funEmoji = trimmed
+        case "blocked":
+            badges.blocked.funEmoji = trimmed
+        case "off":
+            badges.off.funEmoji = trimmed
+        case "overworking":
+            if badges.overworking != nil {
+                badges.overworking?.funEmoji = trimmed
+            } else {
+                badges.overworking = StatusBadgeItem(classic: "🟡", funEmoji: trimmed)
+            }
+        case "quotadepleted", "quotaexhausted":
+            if badges.quotaDepleted != nil {
+                badges.quotaDepleted?.funEmoji = trimmed
+            } else {
+                badges.quotaDepleted = StatusBadgeItem(classic: "⦸", funEmoji: trimmed)
+            }
+        case "quotarestored":
+            if badges.quotaRestored != nil {
+                badges.quotaRestored?.funEmoji = trimmed
+            } else {
+                badges.quotaRestored = StatusBadgeItem(classic: "⚪", funEmoji: trimmed)
+            }
+        case "monitorunavailable", "monitornotconnected":
+            if badges.monitorUnavailable != nil {
+                badges.monitorUnavailable?.funEmoji = trimmed
+            } else {
+                badges.monitorUnavailable = StatusBadgeItem(classic: "⚠️", funEmoji: trimmed)
+            }
+        default:
+            break
+        }
+        cfg.statusBadges = badges
         saveConfig(cfg)
     }
 

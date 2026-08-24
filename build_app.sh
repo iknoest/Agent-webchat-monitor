@@ -1,5 +1,5 @@
 #!/bin/bash
-# AgentSignalBar macOS App Bundle Builder Script
+# AgentSignalBar / AgentBridge macOS App Bundle Builder Script
 set -e
 
 echo "🔨 Building Swift Release Binary..."
@@ -14,6 +14,9 @@ mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR/icons"
 
 cp -f .build/release/AgentSignalBar "$MACOS_DIR/AgentSignalBar"
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp -f "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+fi
 if [ -d "agent-white-icon" ]; then
     cp -Rf agent-white-icon/* "$RESOURCES_DIR/icons/" 2>/dev/null || true
 fi
@@ -28,7 +31,11 @@ cat <<EOF > "$APP_DIR/Contents/Info.plist"
     <key>CFBundleIdentifier</key>
     <string>com.ava.AgentSignalBar</string>
     <key>CFBundleName</key>
-    <string>AgentSignalBar</string>
+    <string>AgentBridge</string>
+    <key>CFBundleDisplayName</key>
+    <string>AgentBridge</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -40,6 +47,5 @@ cat <<EOF > "$APP_DIR/Contents/Info.plist"
 </dict>
 </plist>
 EOF
-
-echo "✅ AgentSignalBar.app bundle created successfully!"
+echo "✅ AgentBridge ($APP_DIR) bundle created successfully!"
 echo "💡 You can launch it with: open AgentSignalBar.app"

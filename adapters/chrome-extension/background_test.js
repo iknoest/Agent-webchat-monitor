@@ -698,6 +698,32 @@ async function test29_PeriodicHeartbeatSentWhenPayloadUnchangedAfterLeaseInterva
     console.log('✅ Test 29 Passed: Periodic heartbeat sent when payload unchanged after lease interval');
 }
 
+function test30_ExtensionIdentityAndPackagedIcons() {
+    const fs = require('fs');
+    const path = require('path');
+
+    const manifestPath = path.join(__dirname, 'manifest.json');
+    const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+    const manifest = JSON.parse(manifestContent);
+
+    assert.strictEqual(manifest.name, 'ChatGPT Webchat Monitor', 'Extension name must be ChatGPT Webchat Monitor');
+    assert(manifest.description.includes('AgentBridge'), 'Description must reference AgentBridge');
+    assert(manifest.icons, 'Manifest must declare icons');
+    assert.strictEqual(manifest.icons['16'], 'icons/icon16.png');
+    assert.strictEqual(manifest.icons['32'], 'icons/icon32.png');
+    assert.strictEqual(manifest.icons['48'], 'icons/icon48.png');
+    assert.strictEqual(manifest.icons['128'], 'icons/icon128.png');
+
+    for (const size of ['16', '32', '48', '128']) {
+        const iconPath = path.join(__dirname, manifest.icons[size]);
+        assert(fs.existsSync(iconPath), `Packaged icon ${manifest.icons[size]} must exist`);
+        const stats = fs.statSync(iconPath);
+        assert(stats.size > 0, `Icon ${manifest.icons[size]} must not be empty`);
+    }
+
+    console.log('✅ Test 30 Passed: Extension name is ChatGPT Webchat Monitor and packaged ecg_heart icons exist');
+}
+
 async function runAll() {
     test1_ActiveTabIdlePlusDoneTabProducesAggregateDone();
     test2_SwitchingActiveTabsLeavesAggregateUnchanged();
@@ -728,7 +754,8 @@ async function runAll() {
     test27_TabNavigationResetsSessionIdentityAndStatus();
     test28_FetchInterceptorSingletonGuardAndSensorReason();
     await test29_PeriodicHeartbeatSentWhenPayloadUnchangedAfterLeaseInterval();
-    console.log('🎉 All 29 Multi-Tab, State Consistency, Raw Sensor Repair & Heartbeat Lease JS Stress Tests Passed!');
+    test30_ExtensionIdentityAndPackagedIcons();
+    console.log('🎉 All 30 Multi-Tab, State Consistency, Extension Identity & Heartbeat Lease JS Stress Tests Passed!');
 }
 
 runAll();

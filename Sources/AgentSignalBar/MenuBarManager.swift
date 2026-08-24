@@ -31,7 +31,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             self.statusItem = item
 
             if let button = item.button {
-                button.title = "AgentSignalBar"
+                button.title = "AgentBridge"
             }
 
             let contextMenu = NSMenu()
@@ -127,7 +127,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         items.append((.idle, idleBadge, "\(idleBadge) Idle / Standby", "Agent process is running and standby for input"))
 
         let warnBadge = EffectiveDisplayStatus.monitorUnavailable.badge(theme: theme)
-        items.append((.monitorUnavailable, warnBadge, "\(warnBadge) Monitor Not Connected / Sensor Unavailable", "ChatGPT Web monitoring extension is not reporting while Chrome is open"))
+        items.append((.monitorUnavailable, warnBadge, "\(warnBadge) Monitor Not Connected", "Monitoring source is not currently connected. The companion extension/provider monitor may be disabled, missing, or temporarily not reporting."))
 
         let offBadge = EffectiveDisplayStatus.off.badge(theme: theme)
         items.append((.off, offBadge, "\(offBadge) App Closed / Process Terminated", "Agent process or browser tab is not running"))
@@ -322,8 +322,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let tgEnabled = cfg.isTelegramEnabled ?? true
         let tgConfigured = EnvConfigLoader.shared.getTelegramConfig().isConfigured
         let tgLastTest = TelegramBridge.shared.lastDeliveryResult?.safeSummary ?? "none"
+        let tgThreshold = cfg.telegramDoneThresholdMinutes ?? 5
+        let badgesSig = "\(cfg.statusBadges.done.funEmoji):\(cfg.statusBadges.working.funEmoji):\(cfg.statusBadges.blocked.funEmoji):\(cfg.statusBadges.overworking?.funEmoji ?? ""):\(cfg.statusBadges.idle.funEmoji):\(cfg.statusBadges.off.funEmoji):\(cfg.statusBadges.quotaDepleted?.funEmoji ?? ""):\(cfg.statusBadges.quotaRestored?.funEmoji ?? ""):\(cfg.statusBadges.monitorUnavailable?.funEmoji ?? "")"
 
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest)|\(sessionsStr)|\(stateDetails)"
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold)|\(badgesSig)|\(sessionsStr)|\(stateDetails)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -357,7 +359,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let overworkMins = AgentStore.shared.overworkThresholdMinutes
 
         // 1. Header & Color Legend Submenu
-        let headerItem = NSMenuItem(title: "Agent Signal Bar — 1-Click Priority Monitor", action: nil, keyEquivalent: "")
+        let headerItem = NSMenuItem(title: "AgentBridge — 1-Click Priority Monitor", action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
@@ -379,7 +381,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         legendSubmenu.addItem(NSMenuItem.separator())
 
-        let themeHeading = NSMenuItem(title: "Current Theme: \(currentTheme == .funEmoji ? "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)" : "Classic Colored Balls (⚪🟡🟢🔴⚫)")", action: nil, keyEquivalent: "")
+        let themeHeading = NSMenuItem(title: "Current Theme: \(currentTheme == .funEmoji ? "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)" : "Classic Colored Balls (⚪🟡🟢🔴⚫)")", action: nil, keyEquivalent: "")
         themeHeading.isEnabled = false
         legendSubmenu.addItem(themeHeading)
         legendSubmenu.addItem(NSMenuItem.separator())
@@ -529,6 +531,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         tabSwitchItem.state = isTabArmed ? .on : .off
                         tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
                         submenu.addItem(tabSwitchItem)
+
+                        let isTabTgArmed = TelegramBridge.shared.isNotifyMeOverrideActive(provider: .chatgpt, sessionId: tab.url, targetTabId: tab.tabId)
+                        let tabTgItem = NSMenuItem(title: "    Notify Me on Telegram When Ready", action: #selector(toggleOneShotTelegramNotifyClicked(_:)), keyEquivalent: "")
+                        tabTgItem.target = self
+                        tabTgItem.state = isTabTgArmed ? .on : .off
+                        tabTgItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
+                        submenu.addItem(tabTgItem)
                     }
                 } else if displayStatus != .monitorUnavailable {
                     let noTabsItem = NSMenuItem(title: "No open ChatGPT tabs in Chrome", action: nil, keyEquivalent: "")
@@ -596,6 +605,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     switchItem.state = isArmed ? .on : .off
                     switchItem.representedObject = ["agent": agent, "sessionId": currentSessionId as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
                     submenu.addItem(switchItem)
+
+                    let isTgArmed = TelegramBridge.shared.isNotifyMeOverrideActive(provider: agent, sessionId: currentSessionId, targetTabId: info.targetTabId)
+                    let tgItem = NSMenuItem(title: "Notify Me on Telegram When Ready", action: #selector(toggleOneShotTelegramNotifyClicked(_:)), keyEquivalent: "")
+                    tgItem.target = self
+                    tgItem.state = isTgArmed ? .on : .off
+                    tgItem.representedObject = ["agent": agent, "sessionId": currentSessionId as Any, "tabId": info.targetTabId as Any, "webLink": info.webLink as Any]
+                    submenu.addItem(tgItem)
                 }
             }
 
@@ -863,6 +879,31 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         notifyToggleItem.state = isNotifyEnabled ? .on : .off
         alertsSubmenu.addItem(notifyToggleItem)
 
+        // Telegram Done Threshold Submenu
+        let currentDoneThreshold = ConfigManager.shared.config.telegramDoneThresholdMinutes ?? 5
+        let doneThresholdTitle = currentDoneThreshold == 0 ? "Telegram Done Threshold: Off" : "Telegram Done Threshold: \(currentDoneThreshold) min"
+        let doneThresholdItem = NSMenuItem(title: doneThresholdTitle, action: nil, keyEquivalent: "")
+        let doneThresholdSubmenu = NSMenu()
+        let availableThresholdOptions: [(Int, String)] = [
+            (0, "Off (Per-session override only)"),
+            (1, "1 min"),
+            (3, "3 min"),
+            (5, "5 min (Default)"),
+            (10, "10 min"),
+            (15, "15 min")
+        ]
+        for (mins, label) in availableThresholdOptions {
+            let item = NSMenuItem(title: label, action: #selector(selectTelegramDoneThresholdClicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mins
+            if mins == currentDoneThreshold {
+                item.state = .on
+            }
+            doneThresholdSubmenu.addItem(item)
+        }
+        doneThresholdItem.submenu = doneThresholdSubmenu
+        alertsSubmenu.addItem(doneThresholdItem)
+
         // Completion Sound Selector Submenu
         let currentDoneSound = ConfigManager.shared.config.doneSoundName ?? "Glass"
         let doneSoundItem = NSMenuItem(title: "Completion Sound: \(currentDoneSound)", action: nil, keyEquivalent: "")
@@ -928,7 +969,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let themeMenuItem = NSMenuItem(title: themeTitle, action: nil, keyEquivalent: "")
         let themeSubmenu = NSMenu()
 
-        let funThemeItem = NSMenuItem(title: "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
+        let funThemeItem = NSMenuItem(title: "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)", action: #selector(selectBadgeThemeClicked(_:)), keyEquivalent: "")
         funThemeItem.target = self
         funThemeItem.representedObject = BadgeThemeMode.funEmoji
         funThemeItem.state = currentTheme == .funEmoji ? .on : .off
@@ -943,6 +984,16 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         themeMenuItem.submenu = themeSubmenu
         appearanceSubmenu.addItem(themeMenuItem)
 
+        // Customize Status Emoji Panel Action
+        appearanceSubmenu.addItem(NSMenuItem.separator())
+        let customizeEmojiItem = NSMenuItem(title: "Customize Status Emoji…", action: #selector(openCustomizeStatusEmojiClicked), keyEquivalent: "")
+        customizeEmojiItem.target = self
+        appearanceSubmenu.addItem(customizeEmojiItem)
+
+        let resetEmojiItem = NSMenuItem(title: "Reset Status Emoji to Defaults", action: #selector(resetStatusEmojiClicked), keyEquivalent: "")
+        resetEmojiItem.target = self
+        appearanceSubmenu.addItem(resetEmojiItem)
+
         appearanceItem.submenu = appearanceSubmenu
         settingsSubmenu.addItem(appearanceItem)
 
@@ -950,7 +1001,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         menu.addItem(settingsItem)
 
         // 5. Quit Item
-        let quitItem = NSMenuItem(title: "Quit AgentSignalBar", action: #selector(quitClicked), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit AgentBridge", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
@@ -1181,8 +1232,42 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             agent: .chatgpt,
             oldStatus: .working,
             newStatus: .done,
-            detail: "Test Notification Alert from AgentSignalBar!"
+            detail: "Test Notification Alert from AgentBridge!"
         )
+    }
+
+    @objc private func toggleOneShotTelegramNotifyClicked(_ sender: NSMenuItem) {
+        if let dict = sender.representedObject as? [String: Any], let agent = dict["agent"] as? AgentID {
+            let sessionId = dict["sessionId"] as? String
+            let tabId = dict["tabId"] as? Int
+            let url = dict["url"] as? String ?? dict["webLink"] as? String
+            TelegramBridge.shared.toggleNotifyMeOverride(provider: agent, sessionId: sessionId ?? url, targetTabId: tabId)
+            updateTitleAndMenu()
+        } else if let agent = sender.representedObject as? AgentID {
+            let info = AgentStore.shared.getStatus(for: agent)
+            let sessions = AgentStore.shared.getSessions(for: agent)
+            let currentSessionId = sessions.first?.sessionId
+            TelegramBridge.shared.toggleNotifyMeOverride(provider: agent, sessionId: currentSessionId ?? info.webLink, targetTabId: info.targetTabId)
+            updateTitleAndMenu()
+        }
+    }
+
+    @objc private func selectTelegramDoneThresholdClicked(_ sender: NSMenuItem) {
+        if let mins = sender.representedObject as? Int {
+            ConfigManager.shared.setTelegramDoneThresholdMinutes(mins)
+            print("⏱️ Telegram Done Threshold updated to \(mins == 0 ? "Off" : "\(mins) min") and saved to config.json")
+            updateTitleAndMenu()
+        }
+    }
+
+    @objc private func openCustomizeStatusEmojiClicked() {
+        EmojiCustomizationController.shared.showWindow()
+    }
+
+    @objc private func resetStatusEmojiClicked() {
+        ConfigManager.shared.resetStatusBadgesToDefaults()
+        print("🎨 Status Badges reset to canonical defaults!")
+        updateTitleAndMenu()
     }
 
     @objc private func toggleClosedLidModeClicked() {

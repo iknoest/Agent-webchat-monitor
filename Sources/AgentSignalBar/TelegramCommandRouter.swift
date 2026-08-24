@@ -83,7 +83,7 @@ public final class TelegramCommandRouter: @unchecked Sendable {
         let config = ConfigManager.shared
         let theme = store.currentTheme
 
-        var lines: [String] = ["AgentSignalBar Status\n"]
+        var lines: [String] = ["AgentBridge Status\n"]
         let monitored = AgentID.allCases.filter { config.isAgentMonitored($0) }
 
         if monitored.isEmpty {
@@ -98,25 +98,24 @@ public final class TelegramCommandRouter: @unchecked Sendable {
 
                 let badge = info.effectiveDisplayStatus.badge(theme: theme)
                 var statusText = info.effectiveDisplayStatus.rawValue.capitalized
-
-                if info.status == .working {
-                    if let start = info.thinkingStartTime {
+                if info.effectiveDisplayStatus == .done {
+                    statusText = "Done"
+                } else if info.effectiveDisplayStatus == .working {
+                    if let dur = info.lastDurationSeconds, dur > 0 {
+                        statusText = "Working (\(Int(dur))s)"
+                    } else if let start = info.thinkingStartTime {
                         let dur = Int(Date().timeIntervalSince(start))
-                        if dur >= 60 {
-                            statusText = "Working (\(dur / 60)m)"
-                        } else {
-                            statusText = "Working (\(dur)s)"
-                        }
+                        statusText = "Working (\(dur)s)"
                     } else {
                         statusText = "Working"
                     }
-                } else if info.status == .done {
-                    statusText = "Done"
-                } else if info.status == .blocked {
+                } else if info.effectiveDisplayStatus == .blocked {
                     statusText = "Needs You"
-                } else if info.status == .idle {
-                    statusText = "Idle"
-                } else if info.status == .off {
+                } else if info.effectiveDisplayStatus == .quotaExhausted {
+                    statusText = "Quota Exhausted"
+                } else if info.effectiveDisplayStatus == .quotaRestored {
+                    statusText = "Quota Restored"
+                } else if info.effectiveDisplayStatus == .off {
                     statusText = "Closed"
                 }
 
@@ -131,7 +130,7 @@ public final class TelegramCommandRouter: @unchecked Sendable {
         let config = ConfigManager.shared
         let monitored = AgentID.allCases.filter { config.isAgentMonitored($0) }
 
-        var lines: [String] = ["AgentSignalBar Quota\n"]
+        var lines: [String] = ["AgentBridge Quota\n"]
 
         if monitored.isEmpty {
             lines.append("No agents currently enabled under Monitored Agents.")
@@ -197,7 +196,7 @@ public final class TelegramCommandRouter: @unchecked Sendable {
         let monitored = Set(AgentID.allCases.filter { config.isAgentMonitored($0) })
         let allSessions = store.getAllSessions().filter { monitored.contains($0.provider) }
 
-        var lines: [String] = ["AgentSignalBar Sessions\n"]
+        var lines: [String] = ["AgentBridge Sessions\n"]
 
         if allSessions.isEmpty {
             lines.append("No active sessions currently tracked.")
@@ -219,7 +218,7 @@ public final class TelegramCommandRouter: @unchecked Sendable {
 
     public func generateHelpMessage() -> TelegramCommandResult {
         let text = """
-        AgentSignalBar Bot Commands:
+        AgentBridge Bot Commands:
 
         /status — Compact overview of monitored AI agents
         /quota — Model quota availability & reset windows

@@ -1814,9 +1814,10 @@ final class AgentSignalBarTests: XCTestCase {
 
         EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
         ConfigManager.shared.setTelegramEnabled(true)
+        ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
         ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
 
-        let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_unit_tg", title: "Unit Test Project", status: .done, lastDurationSeconds: 12)
+        let sess = AgentSessionInfo(provider: .claude, sessionId: "sess_unit_tg", title: "Unit Test Project", status: .done, turnId: "turn_unit", lastDurationSeconds: 300)
         AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess], processRunning: true)
 
         bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Unit Test Project")
@@ -1834,7 +1835,7 @@ final class AgentSignalBarTests: XCTestCase {
         let msg = TelegramMessage(message_id: 1, chat: chat, text: "/status")
         let res = await TelegramCommandRouter.shared.handleIncomingMessage(msg, configuredChatId: "1001")
         XCTAssertNotNil(res)
-        XCTAssertTrue(res!.text.contains("AgentSignalBar Status"))
+        XCTAssertTrue(res!.text.contains("AgentBridge Status"))
 
         // Unauthorized chat test
         let unauthMsg = TelegramMessage(message_id: 2, chat: TelegramChat(id: 9999), text: "/status")
@@ -1847,6 +1848,124 @@ final class AgentSignalBarTests: XCTestCase {
         let testRes = await bridge.sendTestNotification()
         XCTAssertFalse(testRes.success)
         XCTAssertEqual(testRes.safeSummary, "Failed — chat not found")
+
+        EnvConfigLoader.shared.reload()
+    }
+
+    func testM21BrandingAndIcons() throws {
+        let menu = MenuBarManager.shared.buildMenuForTesting()
+        let header = menu.items.first
+        XCTAssertEqual(header?.title, "AgentBridge — 1-Click Priority Monitor")
+
+        let quitItem = menu.items.last
+        XCTAssertEqual(quitItem?.title, "Quit AgentBridge")
+
+        // App icon exists in Resources
+        let fm = FileManager.default
+        XCTAssertTrue(fm.fileExists(atPath: "Resources/AppIcon.icns"))
+
+        // Chrome extension manifest
+        let manifestURL = URL(fileURLWithPath: "adapters/chrome-extension/manifest.json")
+        let data = try Data(contentsOf: manifestURL)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(json?["name"] as? String, "ChatGPT Webchat Monitor")
+
+        for sz in ["16", "32", "48", "128"] {
+            let p = "adapters/chrome-extension/icons/icon\(sz).png"
+            XCTAssertTrue(fm.fileExists(atPath: p))
+        }
+    }
+
+    func testM21FunEmojiConfigAndCustomization() throws {
+        let badges = ConfigManager.shared.config.statusBadges
+        XCTAssertEqual(badges.done.funEmoji, "🐶")
+        XCTAssertEqual(badges.working.funEmoji, "🤔")
+        XCTAssertEqual(badges.blocked.funEmoji, "🥶")
+        XCTAssertEqual(badges.overworking?.funEmoji, "🥵")
+        XCTAssertEqual(badges.idle.funEmoji, "🫥")
+        XCTAssertEqual(badges.off.funEmoji, "😴")
+        XCTAssertEqual(badges.quotaDepleted?.funEmoji, "🤯")
+        XCTAssertEqual(badges.quotaRestored?.funEmoji, "🥱")
+        XCTAssertEqual(badges.monitorUnavailable?.funEmoji, "😶🌫️")
+
+        // Customization
+        ConfigManager.shared.updateFunEmoji(for: "quotaRestored", emoji: "✨")
+        XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "✨")
+
+        ConfigManager.shared.updateFunEmoji(for: "monitorUnavailable", emoji: "⚡")
+        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "⚡")
+
+        // Reset
+        ConfigManager.shared.resetStatusBadgesToDefaults()
+        XCTAssertEqual(EffectiveDisplayStatus.quotaRestored.badge(theme: .funEmoji), "🥱")
+        XCTAssertEqual(EffectiveDisplayStatus.monitorUnavailable.badge(theme: .funEmoji), "😶🌫️")
+    }
+
+    func testM21TelegramNotificationPolicyV2AndOverrides() async throws {
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+        ConfigManager.shared.setTelegramDoneThresholdMinutes(5)
+        ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+
+        // 1. 30s Done without override -> suppressed
+        let sess30 = AgentSessionInfo(provider: .claude, sessionId: "s30", title: "Quick", status: .done, turnId: "t30", lastDurationSeconds: 30)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess30], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Quick")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(mock.getAllSentMessages().isEmpty)
+
+        // 2. 4m59s Done without override -> suppressed
+        let sess299 = AgentSessionInfo(provider: .claude, sessionId: "s299", title: "Almost", status: .done, turnId: "t299", lastDurationSeconds: 299)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess299], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Almost")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(mock.getAllSentMessages().isEmpty)
+
+        // 3. 5m Done without override -> delivered
+        let sess300 = AgentSessionInfo(provider: .claude, sessionId: "s300", title: "5m Done", status: .done, turnId: "t300", lastDurationSeconds: 300)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sess300], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "5m Done")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+
+        // 4. Unknown duration Done without override -> suppressed
+        let sessUnk = AgentSessionInfo(provider: .claude, sessionId: "sUnk", title: "Unk", status: .done, turnId: "tUnk", lastDurationSeconds: nil)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sessUnk], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Unk")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+
+        // 5. Per-session Notify Me override -> delivers 30s Done and auto-clears
+        bridge.setNotifyMeOverride(provider: .claude, sessionId: "sWatched")
+        XCTAssertTrue(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sWatched"))
+
+        let sessWatched = AgentSessionInfo(provider: .claude, sessionId: "sWatched", title: "Watched", status: .done, turnId: "tWatched", lastDurationSeconds: 30)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sessWatched], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Watched")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+        XCTAssertFalse(bridge.isNotifyMeOverrideActive(provider: .claude, sessionId: "sWatched"))
+
+        // Next turn on same session without override -> suppressed
+        let sessWatched2 = AgentSessionInfo(provider: .claude, sessionId: "sWatched", title: "Turn 2", status: .done, turnId: "tWatched2", lastDurationSeconds: 30)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sessWatched2], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .done, detail: "Turn 2")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+
+        // 6. Needs You ignores duration
+        let sessNeedsYou = AgentSessionInfo(provider: .claude, sessionId: "sNY", title: "Needs You", status: .blocked, turnId: "tNY", lastDurationSeconds: 5)
+        AgentStore.shared.syncSessions(for: .claude, activeSessions: [sessNeedsYou], processRunning: true)
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .blocked, detail: "Permission required")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 3)
+
+        // 7. App Close is silent
+        bridge.handleAgentStatusChange(agent: .claude, oldStatus: .working, newStatus: .off, detail: "Closed")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(mock.getAllSentMessages().count, 3)
 
         EnvConfigLoader.shared.reload()
     }

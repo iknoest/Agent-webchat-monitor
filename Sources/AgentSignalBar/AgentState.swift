@@ -8,7 +8,7 @@ public enum BadgeThemeMode: String, Codable, CaseIterable {
     public var displayName: String {
         switch self {
         case .classic: return "Classic Colored Balls (⚪🟡🟢🔴⚫)"
-        case .funEmoji: return "Fun Emojis (🫥🤔🥵🐶🥶😴🤯)"
+        case .funEmoji: return "Fun Emojis (🫥🤔🥵🐶🥶😴🤯🥱😶🌫️)"
         }
     }
 }
@@ -86,28 +86,29 @@ public enum AgentStatus: String, Codable, Sendable {
     case quotaExceeded = "quotaExceeded"
 
     public func badge(theme: BadgeThemeMode = .classic, thinkingDuration: TimeInterval? = nil, overworkThresholdMinutes: Int = 10) -> String {
+        let customBadges = ConfigManager.shared.config.statusBadges
         switch theme {
         case .classic:
             switch self {
-            case .off: return "⚫"
-            case .idle: return "⚪"
-            case .working: return "🟡"
-            case .done: return "🟢"
-            case .blocked: return "🔴"
-            case .quotaExceeded: return "⚫"
+            case .off: return customBadges.off.classic
+            case .idle: return customBadges.idle.classic
+            case .working: return customBadges.working.classic
+            case .done: return customBadges.done.classic
+            case .blocked: return customBadges.blocked.classic
+            case .quotaExceeded: return customBadges.quotaDepleted?.classic ?? "⚫"
             }
         case .funEmoji:
             switch self {
-            case .off: return "😴"
-            case .idle: return "🫥"
+            case .off: return customBadges.off.funEmoji
+            case .idle: return customBadges.idle.funEmoji
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
-                    return "🥵"
+                    return customBadges.overworking?.funEmoji ?? "🥵"
                 }
-                return "🤔"
-            case .done: return "🐶"
-            case .blocked: return "🥶"
-            case .quotaExceeded: return "🤯"
+                return customBadges.working.funEmoji
+            case .done: return customBadges.done.funEmoji
+            case .blocked: return customBadges.blocked.funEmoji
+            case .quotaExceeded: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
             }
         }
     }
@@ -186,18 +187,19 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
         case .classic:
             switch self {
             case .off: return customBadges.off.classic
-            case .idle, .quotaRestored: return customBadges.idle.classic
+            case .idle: return customBadges.idle.classic
+            case .quotaRestored: return customBadges.quotaRestored?.classic ?? customBadges.idle.classic
             case .working: return customBadges.working.classic
             case .done: return customBadges.done.classic
             case .blocked: return customBadges.blocked.classic
             case .quotaExhausted: return customBadges.quotaDepleted?.classic ?? "⦸"
-            case .monitorUnavailable: return "⚠️"
+            case .monitorUnavailable: return customBadges.monitorUnavailable?.classic ?? "⚠️"
             }
         case .funEmoji:
             switch self {
             case .off: return customBadges.off.funEmoji
             case .idle: return customBadges.idle.funEmoji
-            case .quotaRestored: return "🥱"
+            case .quotaRestored: return customBadges.quotaRestored?.funEmoji ?? "🥱"
             case .working:
                 if let dur = thinkingDuration, dur >= Double(overworkThresholdMinutes * 60) {
                     return customBadges.overworking?.funEmoji ?? "🥵"
@@ -206,7 +208,7 @@ public enum EffectiveDisplayStatus: String, Codable, Sendable {
             case .done: return customBadges.done.funEmoji
             case .blocked: return customBadges.blocked.funEmoji
             case .quotaExhausted: return customBadges.quotaDepleted?.funEmoji ?? "🤯"
-            case .monitorUnavailable: return "⚠️"
+            case .monitorUnavailable: return customBadges.monitorUnavailable?.funEmoji ?? "😶🌫️"
             }
         }
     }

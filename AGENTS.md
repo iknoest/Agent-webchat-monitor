@@ -1255,4 +1255,37 @@ Blockers: none
 
 [RELEASE] P0 Codex Current Version Lifecycle Truth & Source Health Restoration — antigravity — 2026-08-24T16:15:00+02:00
 
+## 2026-08-24 — antigravity — macos
+Status: DONE
+Phase: M2.1 — Identity & Notification UX
+Done:
+1. Product Naming & Internal Compatibility:
+   - Updated user-facing display branding to `AgentBridge` across MenuBar headers, tooltips, test alerts, Telegram headers (`AgentBridge Status`, `AgentBridge Quota`, `AgentBridge Sessions`, `AgentBridge Bot Commands`), and `Info.plist` (`CFBundleDisplayName = AgentBridge`, `CFBundleName = AgentBridge`).
+   - Strictly preserved internal compatibility identifiers: Swift module/type names (`AgentSignalBarCore`), bundle identifier (`com.ava.AgentSignalBar`), config directory (`~/.config/AgentSignalBar/`), local HTTP API port (`18888`).
+2. Main App Icon Asset (`diversity_2`):
+   - Created `scripts/generate_app_icon.swift` to render Material Symbols `diversity_2` squircle icon across 10 macOS resolutions and compiled `Resources/AppIcon.icns`.
+   - Updated `build_app.sh` to package `AppIcon.icns` into `AgentSignalBar.app/Contents/Resources/AppIcon.icns` with `CFBundleIconFile = AppIcon`.
+3. Chrome Extension Identity & Icons (`ecg_heart`):
+   - Created `scripts/generate_extension_icon.swift` to render Material Symbols `ecg_heart` icons at 16, 32, 48, 128px in `adapters/chrome-extension/icons/`.
+   - Updated `adapters/chrome-extension/manifest.json` with name `ChatGPT Webchat Monitor`, description referencing `AgentBridge`, and declared packaged `icons` and `action.default_icon`.
+4. Config-Driven Fun Emojis & Customization UI:
+   - Configured full canonical Fun emoji mapping: Done 🐶, Working 🤔, Needs You / Blocked 🥶, Overworking 🥵, Idle 🫥, Closed / Off 😴, Quota Exhausted 🤯, Quota Restored 🥱, Monitor Not Connected 😶🌫️.
+   - Updated user-facing wording to `Monitor Not Connected` with full explanatory legend text.
+   - Created native AppKit customization panel (`EmojiCustomizationController.swift`) accessible via `Settings & Preferences -> Appearance -> Customize Status Emoji…` with Reset to Defaults and persistent saving.
+5. Telegram Notification Policy v2 & Deduplication:
+   - Enforced high signal-to-noise policy: immediate alerts for genuine Needs You (`.blocked`), monitor disconnected (`⚠️`), and monitor restored (`✅`).
+   - Done notifications default to sending only when session runtime is `>= 5 minutes` (or configured threshold; suppressed when unknown or threshold is Off `0`).
+   - Implemented per-session one-shot override: `Notify Me on Telegram When Ready` menu action allowing terminal `.done` delivery below threshold, auto-clearing immediately upon successful notification.
+   - Configured threshold menu `Settings & Preferences -> Alerts -> Telegram Done Threshold` (`Off`, `1 min`, `3 min`, `5 min (Default)`, `10 min`, `15 min`), decoupled from Overworking threshold.
+6. Verification & Test Suite:
+   - Added JS Test 30 in `background_test.js` (30/30 passed).
+   - Added Tests 317 to 338 in `Stage1TestRunner` (338/338 passed).
+   - Added unit test cases in `AgentSignalBarTests.swift`.
+   - Built release bundle via `./build_app.sh` (clean exit 0).
+   - Verified `git diff --check` (clean exit 0).
+   - Relaunched repo-local `AgentSignalBar.app`.
+Verified: `swift run Stage1TestRunner` (338/338 passed), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0), local app relaunched cleanly.
+Next: Deliver comprehensive final milestone report to Ava in Traditional Chinese.
+Blockers: none
 
+[RELEASE] M2.1 — Identity & Notification UX — antigravity — 2026-08-24T16:50:00+02:00
