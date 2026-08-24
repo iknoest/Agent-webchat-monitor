@@ -7459,4 +7459,42 @@ runTest("402. P0-B1: Internal/subagent threads remain excluded") {
     try assert(query.contains("thread_source, 'user') != 'subagent'"), "Query must filter out subagents")
 }
 
-print("🎉 All 402 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1 Codex Rollout Tests Passed!")
+// 403. P0-B2: Live passthrough turn_id and UserMessage item_completed associate with current turn immediately
+runTest("403. P0-B2: Live passthrough turn_id and UserMessage item_completed associate with current turn immediately") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let tid = "thread_live_passthrough"
+    let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+
+    // Baseline
+    let baseLine = "{\"timestamp\":\"2026-08-24T21:29:00.000Z\",\"ordinal\":1,\"type\":\"session_meta\",\"payload\":{}}\n"
+    try baseLine.write(to: fileURL, atomically: true, encoding: .utf8)
+
+    let thread = AutoMonitor.CodexThreadInfo(id: tid, title: "Passthrough Test", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787600000000)
+    AutoMonitor.shared.resetCodexOffsetsForTesting()
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    // Set baseline offset
+    AutoMonitor.shared.setCodexOffsetForTesting(threadId: tid, offset: UInt64(baseLine.utf8.count))
+
+    // Append response_item with passthrough turn_id
+    let turnId = "turn_exact_live_123"
+    let append1 = "{\"timestamp\":\"2026-08-24T21:29:28.798Z\",\"ordinal\":264,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Prompt\"}],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"\(turnId)\",\"create_time\":1787606968.798342}}}\n"
+    let append2 = "{\"timestamp\":\"2026-08-24T21:29:28.799Z\",\"ordinal\":265,\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"thread_id\":\"\(tid)\",\"turn_id\":\"\(turnId)\",\"item\":{\"type\":\"UserMessage\",\"id\":\"um_1\"}}}\n"
+
+    let handle = try FileHandle(forWritingTo: fileURL)
+    handle.seekToEndOfFile()
+    handle.write((append1 + append2).data(using: .utf8)!)
+    try handle.close()
+
+    AutoMonitor.shared.processCodexRollout(thread: thread)
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let sess = sessions.first(where: { $0.sessionId == tid })
+    try assert(sess?.status == .working, "Session must transition to Working on user input passthrough / UserMessage")
+    try assert(sess?.turnId == turnId, "Session turnId must be resolved from passthrough/item_completed")
+}
+
+print("🎉 All 403 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")

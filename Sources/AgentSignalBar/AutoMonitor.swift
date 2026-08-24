@@ -1046,7 +1046,9 @@ public final class AutoMonitor: @unchecked Sendable {
             let topType = json["type"] as? String
             let payloadType = payload?["type"] as? String ?? topType
             let role = payload?["role"] as? String
-            let turnId = (payload?["turn_id"] as? String) ?? (json["turn_id"] as? String)
+            let passthrough = payload?["internal_chat_message_metadata_passthrough"] as? [String: Any]
+            let passthroughTurnId = passthrough?["turn_id"] as? String
+            let turnId = (payload?["turn_id"] as? String) ?? (json["turn_id"] as? String) ?? passthroughTurnId
             let durationMs = payload?["duration_ms"] as? Double
 
             if payloadType == "task_started" || payloadType == "turn_started" {
@@ -1069,8 +1071,8 @@ public final class AutoMonitor: @unchecked Sendable {
                     turnId: turnId,
                     durationMs: durationMs
                 )
-            } else if payloadType == "message" && role == "user" {
-                // User prompt starts new turn
+            } else if payloadType == "message" {
+                // User prompt or assistant message starts/continues turn
                 _ = AgentStore.shared.handleCodexRolloutEvent(
                     threadId: thread.id,
                     title: thread.title,
@@ -1084,14 +1086,16 @@ public final class AutoMonitor: @unchecked Sendable {
                 // In current Codex event_msg, item_completed payload carries turn_id and item (Reasoning / tool)
                 let item = payload?["item"] as? [String: Any]
                 let itemType = item?["type"] as? String
-                if itemType == "Reasoning" || itemType == "custom_tool_call" || itemType == "CommandExecution" || itemType == "Text" {
+                let itemTurnId = item?["turn_id"] as? String
+                let resolvedTurnId = turnId ?? itemTurnId
+                if itemType == "Reasoning" || itemType == "custom_tool_call" || itemType == "CommandExecution" || itemType == "Text" || itemType == "UserMessage" || itemType == "AgentMessage" {
                     _ = AgentStore.shared.handleCodexRolloutEvent(
                         threadId: thread.id,
                         title: thread.title,
                         cwd: thread.cwd,
                         rolloutPath: thread.rolloutPath,
                         eventType: "task_started",
-                        turnId: turnId,
+                        turnId: resolvedTurnId,
                         durationMs: nil
                     )
                 }
