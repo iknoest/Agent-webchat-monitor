@@ -7510,4 +7510,88 @@ runTest("404. P0-B2: Multi-line sqlite3 thread titles parsed correctly via JSON"
     try assert(!turns.isEmpty, "fetchCodexHistoryTurns must return turns from thread_history_1.sqlite")
 }
 
-print("🎉 All 404 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")
+// 405. P0-B2: Working Codex turn continuity across transient reconciliation/discovery misses
+runTest("405. P0-B2: Working Codex turn continuity across transient reconciliation/discovery misses") {
+    let tid = "thread_continuity_test"
+    let activeTurnId = "turn_active_continuity_1"
+
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .idle, "Initial status must be idle")
+
+    // 1. New Codex turn becomes Working
+    let handled = AgentStore.shared.handleCodexTurnState(
+        threadId: tid,
+        title: "Continuity Feature",
+        cwd: "/tmp",
+        rolloutPath: "/tmp/fake.jsonl",
+        status: .working,
+        turnId: activeTurnId,
+        thinkingStartTime: Date(),
+        isTestMode: true
+    )
+    try assert(handled)
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .working, "Status must be working")
+
+    // 2. One polling/reconciliation cycle temporarily lacks fresh active-session evidence (transient query miss / empty validThreadIds)
+    AgentStore.shared.reconcileCodexSessions(validThreadIds: [], historyTurns: [:])
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .working, "AgentBridge MUST remain Working on empty validThreadIds miss")
+
+    // 3. Reconciliation with older completed history turn (different turnId) must NOT demote active working turn
+    let olderHistory = [
+        tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: "turn_older_completed_0", status: "completed", startedAt: 1000, completedAt: 2000, durationMs: 1000)
+    ]
+    AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: olderHistory)
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .working, "AgentBridge MUST remain Working when older turn completed")
+
+    // 4. Authoritative inProgress evidence arrives
+    let inProgressHistory = [
+        tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: activeTurnId, status: "inProgress", startedAt: 3000, completedAt: nil, durationMs: nil)
+    ]
+    AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: inProgressHistory)
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .working, "AgentBridge MUST remain Working when inProgress confirmed")
+
+    // 5. Authoritative completion arrives matching active turnId -> Done normally
+    let completedHistory = [
+        tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: activeTurnId, status: "completed", startedAt: 3000, completedAt: 4000, durationMs: 1000)
+    ]
+    AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: completedHistory)
+    try assert(AgentStore.shared.getStatus(for: .codex).status == .done, "AgentBridge must transition to Done upon matching turn completion")
+}
+
+// 406. P0-B2: Newly discovered live thread rollout events are parsed without baseline offset skip
+runTest("406. P0-B2: Newly discovered live thread rollout events are parsed without baseline offset skip") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let tid = "thread_new_live_discovery"
+    let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+    let newTurnId = "turn_new_live_discovery_1"
+
+    // Simulate brand new rollout file created live before first discovery tick
+    let content = "{\"timestamp\":\"2026-08-25T00:00:00.000Z\",\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"thread_id\":\"\(tid)\",\"turn_id\":\"\(newTurnId)\"}}\n"
+    try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+    let thread = AutoMonitor.CodexThreadInfo(id: tid, title: "New Live Thread", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787610000000)
+    AutoMonitor.shared.resetCodexOffsetsForTesting()
+    AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+    // History turns does not yet have an entry (projection lag)
+    let historyTurns: [String: AutoMonitor.CodexHistoryTurnInfo] = [:]
+
+    // Simulate checkCodexLogAndProcess first discovery branch:
+    if AutoMonitor.shared.codexRolloutOffsets[thread.id] == nil {
+        if let turn = historyTurns[thread.id], turn.status == "completed" || turn.status == "failed" {
+            // Not hit
+        } else {
+            AutoMonitor.shared.processCodexRollout(thread: thread)
+        }
+    }
+
+    let sessions = AgentStore.shared.getSessions(for: .codex)
+    let sess = sessions.first(where: { $0.sessionId == tid })
+    try assert(sess?.status == .working, "Freshly created thread must be parsed from offset 0 and become Working, got \(String(describing: sess?.status))")
+    try assert(sess?.turnId == newTurnId, "Turn ID must match new live turn")
+}
+
+print("🎉 All 406 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout Tests Passed!")

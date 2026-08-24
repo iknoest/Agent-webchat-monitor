@@ -2117,5 +2117,84 @@ final class AgentSignalBarTests: XCTestCase {
         let workingSessions = sessions.filter { $0.status == .working }
         XCTAssertTrue(workingSessions.isEmpty, "Historical rollout content on restart must NOT create Working sessions")
     }
+
+    func testCodexWorkingTurnContinuityAcrossTransientReconciliationMisses() throws {
+        let tid = "thread_continuity_xctest"
+        let activeTurnId = "turn_active_continuity_xctest_1"
+
+        AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .idle, "Initial status must be idle")
+
+        // 1. New Codex turn becomes Working
+        let handled = AgentStore.shared.handleCodexTurnState(
+            threadId: tid,
+            title: "Continuity Feature",
+            cwd: "/tmp",
+            rolloutPath: "/tmp/fake.jsonl",
+            status: .working,
+            turnId: activeTurnId,
+            thinkingStartTime: Date(),
+            isTestMode: true
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .working, "Status must be working")
+
+        // 2. One polling/reconciliation cycle temporarily lacks fresh active-session evidence (transient query miss / empty validThreadIds)
+        AgentStore.shared.reconcileCodexSessions(validThreadIds: [], historyTurns: [:])
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .working, "AgentBridge MUST remain Working on empty validThreadIds miss")
+
+        // 3. Reconciliation with older completed history turn (different turnId) must NOT demote active working turn
+        let olderHistory = [
+            tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: "turn_older_completed_0", status: "completed", startedAt: 1000, completedAt: 2000, durationMs: 1000)
+        ]
+        AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: olderHistory)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .working, "AgentBridge MUST remain Working when older turn completed")
+
+        // 4. Authoritative inProgress evidence arrives
+        let inProgressHistory = [
+            tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: activeTurnId, status: "inProgress", startedAt: 3000, completedAt: nil, durationMs: nil)
+        ]
+        AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: inProgressHistory)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .working, "AgentBridge MUST remain Working when inProgress confirmed")
+
+        // 5. Authoritative completion arrives matching active turnId -> Done normally
+        let completedHistory = [
+            tid: AutoMonitor.CodexHistoryTurnInfo(threadId: tid, turnId: activeTurnId, status: "completed", startedAt: 3000, completedAt: 4000, durationMs: 1000)
+        ]
+        AgentStore.shared.reconcileCodexSessions(validThreadIds: [tid], historyTurns: completedHistory)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .codex).status, .done, "AgentBridge must transition to Done upon matching turn completion")
+    }
+
+    func testCodexNewThreadLiveDiscoveryBaselineOffsetHandling() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tid = "thread_new_live_xctest"
+        let fileURL = tempDir.appendingPathComponent("rollout_\(tid).jsonl")
+        let newTurnId = "turn_new_live_xctest_1"
+
+        let content = "{\"timestamp\":\"2026-08-25T00:00:00.000Z\",\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"thread_id\":\"\(tid)\",\"turn_id\":\"\(newTurnId)\"}}\n"
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let thread = AutoMonitor.CodexThreadInfo(id: tid, title: "New Live Thread", rolloutPath: fileURL.path, cwd: "/tmp", updatedAtMs: 1787610000000)
+        AutoMonitor.shared.resetCodexOffsetsForTesting()
+        AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+
+        let historyTurns: [String: AutoMonitor.CodexHistoryTurnInfo] = [:]
+
+        if AutoMonitor.shared.codexRolloutOffsets[thread.id] == nil {
+            if let turn = historyTurns[thread.id], turn.status == "completed" || turn.status == "failed" {
+                // Not hit
+            } else {
+                AutoMonitor.shared.processCodexRollout(thread: thread)
+            }
+        }
+
+        let sessions = AgentStore.shared.getSessions(for: .codex)
+        let sess = sessions.first(where: { $0.sessionId == tid })
+        XCTAssertEqual(sess?.status, .working, "Freshly created thread must be parsed from offset 0 and become Working")
+        XCTAssertEqual(sess?.turnId, newTurnId, "Turn ID must match new live turn")
+    }
 }
 #endif

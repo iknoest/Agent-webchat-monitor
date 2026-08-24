@@ -1452,3 +1452,25 @@ Next: Report review and status to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M2.1.1 Runtime Integrity & Test Isolation — antigravity — 2026-08-24T23:31:00+02:00
+
+## 2026-08-25 — antigravity — macos
+Status: DONE
+Phase: M2.1.1 P0-B2 Codex Working Lifecycle Continuity & Baseline Offset Repair
+Done:
+1. P0-B2 Codex Working Continuity & Query Miss Protection:
+   - Hardened `reconcileCodexSessions` in `AgentState.swift` with `guard !validThreadIds.isEmpty` so transient SQLite timeouts, lock contention, or empty query results never purge active `.working` / `.blocked` sessions.
+   - Fixed `reconcileCodexSessions` completion matching to require `activeTurnId == turnInfo.turnId` before transitioning to `.done`, preventing older completed historical turns from downgrading newer active working turns.
+   - Fixed `checkCodexLogAndProcess` in `AutoMonitor.swift` so `currentCodexSessions.isEmpty` only transitions status when not already idle/off, eliminating destructive `syncSessions(activeSessions: [])` downgrades.
+2. Dynamic New-Thread Baseline Offset Repair:
+   - Fixed baseline offset initialization in `AutoMonitor.swift`: when encountering a newly discovered thread whose history is `inProgress` or not yet recorded, `processCodexRollout` is invoked from offset 0 to capture `task_started` immediately without waiting for SQLite projection or skipping the start event.
+3. Tests & Verification:
+   - Added Test 405 (Working turn continuity across transient reconciliation misses) and Test 406 (dynamic new-thread discovery offset handling) in `Stage1TestRunner` (406/406 passed).
+   - Added `testCodexWorkingTurnContinuityAcrossTransientReconciliationMisses` and `testCodexNewThreadLiveDiscoveryBaselineOffsetHandling` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release bundle via `./build_app.sh` to `/Applications/AgentBridge.app`.
+   - Verified `git diff --check` clean.
+Verified: `swift run Stage1TestRunner` (406/406 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present full report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M2.1.1 P0-B2 Codex Working Lifecycle Continuity & Baseline Offset Repair — antigravity — 2026-08-25T00:37:00+02:00

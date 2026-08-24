@@ -1635,6 +1635,11 @@ public final class AgentStore: @unchecked Sendable {
         validThreadIds: Set<String>,
         historyTurns: [String: AutoMonitor.CodexHistoryTurnInfo]? = nil
     ) {
+        guard !validThreadIds.isEmpty else {
+            // Guard: If threads query failed or returned no threads, preserve existing tracked sessions
+            return
+        }
+
         lock.lock()
         var currentSessions = trackedSessions[.codex] ?? [:]
         var changed = false
@@ -1655,7 +1660,22 @@ public final class AgentStore: @unchecked Sendable {
 
             // 3. If session is currently marked .working, verify with authoritative history turns
             if session.status == .working, let turns = historyTurns, let turnInfo = turns[sessionId] {
-                if (turnInfo.status == "completed" || turnInfo.completedAt != nil) && (session.turnId == nil || session.turnId == turnInfo.turnId) {
+                // Authoritative completion invariant:
+                // Only mark .done if turnInfo.turnId matches session.turnId!
+                // If turnInfo.turnId is from an older completed turn and does not match the active session.turnId,
+                // do NOT downgrade the working session!
+                let turnIdMatches: Bool
+                if let activeTurnId = session.turnId, !activeTurnId.isEmpty {
+                    turnIdMatches = (activeTurnId == turnInfo.turnId)
+                } else {
+                    if let start = session.thinkingStartTime {
+                        turnIdMatches = Double(turnInfo.startedAt) >= (start.timeIntervalSince1970 - 1.0)
+                    } else {
+                        turnIdMatches = true
+                    }
+                }
+
+                if (turnInfo.status == "completed" || turnInfo.completedAt != nil) && turnIdMatches {
                     var updated = session
                     updated.status = .done
                     updated.turnId = turnInfo.turnId
@@ -1671,7 +1691,7 @@ public final class AgentStore: @unchecked Sendable {
                     updated.lastUpdated = now
                     currentSessions[sessionId] = updated
                     changed = true
-                } else if turnInfo.status == "failed" && (session.turnId == nil || session.turnId == turnInfo.turnId) {
+                } else if turnInfo.status == "failed" && turnIdMatches {
                     var updated = session
                     updated.status = .idle
                     updated.turnId = turnInfo.turnId

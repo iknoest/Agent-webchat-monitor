@@ -1174,11 +1174,18 @@ public final class AutoMonitor: @unchecked Sendable {
                 }
             }
 
-            // Establish baseline offset if first time seeing this thread in monitor (never replay historical rollout on restart)
+            // Incremental rollout stream processing
             if codexRolloutOffsets[thread.id] == nil {
-                if let attrs = try? FileManager.default.attributesOfItem(atPath: thread.rolloutPath),
-                   let size = attrs[.size] as? UInt64 {
-                    codexRolloutOffsets[thread.id] = size
+                // First time seeing this thread in monitor:
+                // If it is already marked completed or failed in history, fast-forward baseline to avoid historical replay on startup/restart
+                if let turn = historyTurns[thread.id], turn.status == "completed" || turn.status == "failed" {
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: thread.rolloutPath),
+                       let size = attrs[.size] as? UInt64 {
+                        codexRolloutOffsets[thread.id] = size
+                    }
+                } else {
+                    // Newly discovered thread in progress or fresh live thread: process rollout from 0 to capture task_started
+                    processCodexRollout(thread: thread)
                 }
             } else {
                 // Incrementally process rollout file for live events
@@ -1190,8 +1197,10 @@ public final class AutoMonitor: @unchecked Sendable {
 
         let currentCodexSessions = AgentStore.shared.getSessions(for: .codex)
         if currentCodexSessions.isEmpty {
-            AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop ready")
-            AgentStore.shared.syncSessions(for: .codex, activeSessions: [], processRunning: true)
+            let currentStatus = AgentStore.shared.getStatus(for: .codex).status
+            if currentStatus != .idle && currentStatus != .off {
+                AgentStore.shared.updateStatus(for: .codex, status: .idle, detail: "Codex Desktop ready")
+            }
         }
     }
 
