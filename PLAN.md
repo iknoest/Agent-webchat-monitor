@@ -52,22 +52,28 @@
 
 ---
 
+### Milestone 2.1 (M2.1) — Identity, Notification UX & App Canonicalization (CLOSED)
+- [x] **Final Product Naming**: AgentBridge (`/Applications/AgentBridge.app`)
+- [x] **Main App Icon**: Native `diversity_2` icon integration in `.icns` bundle
+- [x] **ChatGPT Webchat Monitor Extension**: `ecg_heart` Chrome extension icon and identity
+- [x] **Canonical Status Badges**: Fixed canonical Emoji mapping with exact `😶🌫️` (`U+1F636 U+200D U+1F32B U+FE0F`) and Classic Traffic Light (`⛔` Quota Exhausted, `⚠️` Monitor Not Connected)
+- [x] **Simplified Telegram Completion Alerts**: Default-all / persistent opt-out session completion model with Minimum Runtime threshold (Off, 1m, 3m, 5m, 10m, 15m)
+- [x] **High-Priority Telegram Alerts**: Independent Needs You, Monitor/Network Health Drops/Restorations, and Quota Depletion/Restoration alerts
+- [x] **Antigravity Permission Detection**: Provider-native permission prompt & input gate detection (`.blocked` Needs You)
+- [x] **Stable Env Discovery**: Durable `~/.config/AgentSignalBar/.env` loading and zero-exposure migration
+- [x] **Canonical App Cleanup**: Single `/Applications/AgentBridge.app` production installation with `.build/` staging and zero repo-root `.app` pollution
+
+---
+
 ## Next Roadmap Milestones
 
-### Milestone 2.1 (M2.1) — Identity & Notification UX
-- [ ] **Final Product Naming**
-- [ ] **Main App Icon**: `diversity_2` icon integration
-- [ ] **ChatGPT Webchat Monitor Icon**: `ecg_heart` Chrome extension icon
-- [ ] **Config-Driven Status Badges**: Customizable emoji mapping for monitor unavailable (`😶🌫️` default) and quota restored
-- [ ] **Telegram Done Notification Threshold**: Configurable thinking duration minimum for Done alerts + per-session override
-
-### Milestone 3 (M3) — Project Bridge
-- [ ] **Local Folder Canonical Project Identity**
-- [ ] **One Current ChatGPT Reviewer per Project**
-- [ ] **Reviewer Migration History & Thread Pairing**
-- [ ] **Agent Session Association by CWD / Workspace**
-- [ ] **Optional GitHub Repository Association**
-- [ ] **Project Switcher & Contextual Menu Navigation**
+### Milestone 3 (M3) — Project Bridge (M3.1 NEXT)
+- [ ] **M3.1**: Local Folder Canonical Project Identity & Config Storage
+- [ ] **M3.2**: One Current ChatGPT Reviewer per Project & Migration History
+- [ ] **M3.3**: Agent Session Association by CWD / Workspace
+- [ ] **M3.4**: Optional GitHub Repository Association
+- [ ] **M3.5**: Project Switcher & Contextual Menu Navigation
 
 ### Milestone 4 (M4) — Telegram → AI Routing
 - [ ] **Project-Aware Remote AI Routing**: Direct prompt/dispatch to active project context via Telegram after Project Bridge is established.
+
