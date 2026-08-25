@@ -76,7 +76,7 @@
 - [x] **M2.1.1-C: Antigravity Evidence-Driven Transcript Fallback**: Eliminated speculative wall-clock elapsed time heuristics (`timeSinceMod < 60s/120s`); lifecycle strictly mapped to explicit transcript step schema (`ask_question` / `WAITING_FOR_INPUT` -> Blocked; `RUNNING` / `IN_PROGRESS` / `USER_INPUT` / `GENERIC` / active tools -> Working; final `DONE` -> Done; insufficient evidence -> nil).
 
 ### Human Runtime Observations (PENDING / WATCH ONLY)
-- [ ] **AgentBridge Not Responding Recurrence**: Monitor activity in macOS Activity Monitor to ensure zero UI hangs.
+- [ ] **AgentBridge Not Responding Recurrence**: Monitor macOS Activity Monitor to ensure zero UI hangs.
 - [ ] **Orphan Telegram "Restored" Recurrence**: Monitor Telegram alerts to ensure zero spurious restoration alerts on network reconnect / browser restart.
 - [ ] **Antigravity >2 min Lifecycle Continuity**: Monitor long-running Antigravity turns to ensure continuous Working state across tool executions.
 
@@ -96,4 +96,3 @@
 
 ### Milestone 4 (M4) — Telegram → AI Routing
 - [ ] **Project-Aware Remote AI Routing**: Direct prompt/dispatch to active project context via Telegram after Project Bridge is established.
-
