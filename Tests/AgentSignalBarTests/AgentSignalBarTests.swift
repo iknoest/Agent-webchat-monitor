@@ -2235,5 +2235,68 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(elapsed, 0.25)
         XCTAssertLessThan(elapsed, 2.0)
     }
+
+    func testAntigravityTranscriptProbeHeuristicRemovalAndLifecycle() throws {
+        // A. DONE transcript with normal tool and mtime > 20s is NOT blocked
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let convId = UUID().uuidString
+        let convDir = tempDir.appendingPathComponent(convId)
+        let logDir = convDir.appendingPathComponent(".system_generated").appendingPathComponent("logs")
+        try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tPath = logDir.appendingPathComponent("transcript.jsonl")
+        let line = "{\"step_index\":10,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"echo hi\"}}]}\n"
+        try line.write(to: tPath, atomically: true, encoding: .utf8)
+
+        let pastDate = Date().addingTimeInterval(-35.0)
+        try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: convDir.path)
+
+        let result = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+        XCTAssertNotNil(result)
+        XCTAssertNotEqual(result?.status, .blocked)
+
+        // B. Explicit ask_question produces blocked status
+        let line2 = "{\"step_index\":12,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"ask_question\",\"args\":{\"questions\":[]}}]}\n"
+        try line2.write(to: tPath, atomically: true, encoding: .utf8)
+
+        let result2 = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+        XCTAssertNotNil(result2)
+        XCTAssertEqual(result2?.status, .blocked)
+
+        // C. Resolved permission followed by normal tool clears blocked
+        let sessId = "agy_test_xctest_\(UUID().uuidString.prefix(8))"
+        AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+
+        _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+            "event": "PermissionRequested",
+            "session_id": sessId,
+            "reason": "Permission approval required",
+            "tool_name": "run_command"
+        ], isTestMode: true)
+        XCTAssertEqual(AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })?.status, .blocked)
+
+        _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+            "event": "PreToolUse",
+            "session_id": sessId,
+            "tool_name": "run_command"
+        ], isTestMode: true)
+        XCTAssertEqual(AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })?.status, .working)
+
+        _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+            "event": "Stop",
+            "session_id": sessId
+        ], isTestMode: true)
+        XCTAssertEqual(AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })?.status, .done)
+
+        // D. Two sessions: one completed, one active -> aggregate not blocked
+        let sessId2 = "agy_test_xctest_active_\(UUID().uuidString.prefix(8))"
+        _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+            "event": "PreInvocation",
+            "session_id": sessId2
+        ], isTestMode: true)
+        XCTAssertEqual(AgentStore.shared.getStatus(for: .antigravity).status, .working)
+        XCTAssertNotEqual(AgentStore.shared.getStatus(for: .antigravity).effectiveDisplayStatus, .blocked)
+    }
 }
 #endif

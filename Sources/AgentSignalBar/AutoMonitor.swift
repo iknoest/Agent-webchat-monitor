@@ -687,12 +687,10 @@ public final class AutoMonitor: @unchecked Sendable {
                     return (active.id, title, .blocked, "Permission / Question gate (ask_question)", nil)
                 }
                 let timeSinceMod = now.timeIntervalSince(active.modDate)
-                if timeSinceMod > 20.0 {
-                    let firstTool = tools.first
-                    let toolName = (firstTool?["name"] as? String) ?? "Action"
-                    return (active.id, title, .blocked, "Permission approval required (\(toolName))", nil)
-                } else {
+                if timeSinceMod < 120.0 {
                     return (active.id, title, .working, nil, nil)
+                } else {
+                    return (active.id, title, .idle, nil, nil)
                 }
             } else {
                 let timeSinceMod = now.timeIntervalSince(active.modDate)

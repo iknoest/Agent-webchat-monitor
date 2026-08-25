@@ -1498,3 +1498,25 @@ Next: Present report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M2.1.1 Codex Subprocess Acquisition Deadlock Repair — antigravity — 2026-08-25T01:43:00+02:00
+
+## 2026-08-25 — antigravity — macos
+Status: DONE
+Phase: M2.1.1 Antigravity Stale Attention Needed Heuristic Removal
+Done:
+1. Removed Stale Blocked Heuristic from Transcript Probe:
+   - Eliminated `timeSinceMod > 20s -> .blocked` heuristic from `scanActiveAntigravityTranscript()` in `AutoMonitor.swift`.
+   - Prevented completed or normal tool executions in Antigravity transcripts from falsely synthesizing `[ATTENTION NEEDED]` / `🥶`.
+   - Preserved explicit authoritative `.blocked` generation for `tool_name == "ask_question"`, Notification Center AX banners, and HTTP hook `PermissionRequested`.
+2. PreToolUse Normal Execution Status Recovery:
+   - Updated `handleAntigravityHookEvent` in `AgentState.swift` for normal `PreToolUse` events to clear `attentionReason = nil` and ensure status is `.working`.
+3. Deterministic Regression Coverage:
+   - Added Tests 411 to 414 in `Stage1TestRunner` (414/414 passed).
+   - Added unit test in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app`.
+   - Live verified running app: Antigravity transitioned cleanly from `[ATTENTION NEEDED]` to `working` / `idle` without user permission interaction.
+Verified: `swift run Stage1TestRunner` (414/414 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), live `/status` query returning active Antigravity state without fake Attention Needed.
+Next: Present report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M2.1.1 Antigravity Stale Attention Needed Heuristic Removal — antigravity — 2026-08-25T02:14:00+02:00

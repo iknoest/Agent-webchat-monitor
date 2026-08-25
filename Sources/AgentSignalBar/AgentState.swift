@@ -1311,9 +1311,8 @@ public final class AgentStore: @unchecked Sendable {
                 let turnForNotification = session.turnId ?? "turn_perm_\(Int(now.timeIntervalSince1970 * 1000))"
                 session.turnId = turnForNotification
             } else {
-                if session.status != .blocked {
-                    session.status = .working
-                }
+                session.status = .working
+                session.attentionReason = nil
                 session.pendingToolName = toolName
                 session.pendingToolTime = now
                 if session.thinkingStartTime == nil, let evTs = eventTimestamp {

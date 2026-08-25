@@ -7638,4 +7638,118 @@ runTest("410. P0-B2: runProcessWithTimeout genuinely hung process times out and 
     try assert(elapsed >= 0.25 && elapsed < 2.0, "Timeout elapsed must be bounded around 0.3s-1.0s, got \(elapsed)s")
 }
 
-print("🎉 All 410 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout & Subprocess Deadlock Tests Passed!")
+// 411. P0-B2: AGY native transcript DONE with normal tool and mtime > 20s is NOT blocked
+runTest("411. P0-B2: AGY native transcript DONE with normal tool and mtime > 20s is NOT blocked") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let convId = UUID().uuidString
+    let convDir = tempDir.appendingPathComponent(convId)
+    let logDir = convDir.appendingPathComponent(".system_generated").appendingPathComponent("logs")
+    try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let tPath = logDir.appendingPathComponent("transcript.jsonl")
+    let line = "{\"step_index\":10,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"echo hi\"}}]}\n"
+    try line.write(to: tPath, atomically: true, encoding: .utf8)
+
+    // Set mtime to 35 seconds ago
+    let pastDate = Date().addingTimeInterval(-35.0)
+    try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: convDir.path)
+
+    let result = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(result != nil, "Scan result should not be nil")
+    try assert(result?.status != .blocked, "Status must NOT be blocked merely because mtime > 20s, got \(String(describing: result?.status))")
+}
+
+// 412. P0-B2: AGY explicit ask_question produces blocked status
+runTest("412. P0-B2: AGY explicit ask_question produces blocked status") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let convId = UUID().uuidString
+    let convDir = tempDir.appendingPathComponent(convId)
+    let logDir = convDir.appendingPathComponent(".system_generated").appendingPathComponent("logs")
+    try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let tPath = logDir.appendingPathComponent("transcript.jsonl")
+    let line = "{\"step_index\":12,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"ask_question\",\"args\":{\"questions\":[]}}]}\n"
+    try line.write(to: tPath, atomically: true, encoding: .utf8)
+
+    let result = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(result != nil, "Scan result should not be nil")
+    try assert(result?.status == .blocked, "Status must be blocked on explicit ask_question, got \(String(describing: result?.status))")
+    try assert(result?.reason?.contains("ask_question") == true, "Reason must indicate ask_question")
+}
+
+// 413. P0-B2: Resolved permission followed by normal tool execution clears blocked and does not re-block
+runTest("413. P0-B2: Resolved permission followed by normal tool execution clears blocked and does not re-block") {
+    let sessId = "agy_test_perm_resolve_\(UUID().uuidString.prefix(8))"
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+
+    // 1. Permission requested -> blocked
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "PermissionRequested",
+        "session_id": sessId,
+        "reason": "Permission approval required",
+        "tool_name": "run_command"
+    ], isTestMode: true)
+
+    let sess1 = AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })
+    try assert(sess1?.status == .blocked, "Session must be blocked on PermissionRequested")
+
+    // 2. Permission resolved / PreToolUse normal -> working
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "PreToolUse",
+        "session_id": sessId,
+        "tool_name": "run_command"
+    ], isTestMode: true)
+
+    let sess2 = AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })
+    try assert(sess2?.status == .working, "Session must transition to working on PreToolUse")
+    try assert(sess2?.attentionReason == nil, "Attention reason must be cleared")
+
+    // 3. PostToolUse -> working
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "PostToolUse",
+        "session_id": sessId,
+        "tool_name": "run_command"
+    ], isTestMode: true)
+
+    let sess3 = AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })
+    try assert(sess3?.status == .working, "Session must remain working on PostToolUse")
+
+    // 4. Stop -> done
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": sessId
+    ], isTestMode: true)
+
+    let sess4 = AgentStore.shared.getSessions(for: .antigravity).first(where: { $0.sessionId == sessId })
+    try assert(sess4?.status == .done, "Session must transition to done on Stop")
+    try assert(sess4?.attentionReason == nil, "Attention reason must remain nil")
+}
+
+// 414. P0-B2: Two AGY sessions (one completed, one normal) do not produce Attention Needed from stale disk inference
+runTest("414. P0-B2: Two AGY sessions (one completed, one normal) do not produce Attention Needed from stale disk inference") {
+    let sessId1 = "agy_test_sess_comp_\(UUID().uuidString.prefix(8))"
+    let sessId2 = "agy_test_sess_active_\(UUID().uuidString.prefix(8))"
+    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": sessId1
+    ], isTestMode: true)
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "Stop",
+        "session_id": sessId1
+    ], isTestMode: true)
+
+    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
+        "event": "PreInvocation",
+        "session_id": sessId2
+    ], isTestMode: true)
+
+    let status = AgentStore.shared.getStatus(for: .antigravity)
+    try assert(status.status == .working, "Provider aggregate must be working, got \(status.status)")
+    try assert(status.effectiveDisplayStatus != .blocked, "Provider aggregate must NOT be blocked")
+}
+
+print("🎉 All 414 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock & Antigravity Transcript Probe Tests Passed!")
