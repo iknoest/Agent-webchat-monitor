@@ -65,10 +65,23 @@
 
 ---
 
-### Milestone 2.1.1 (M2.1.1) — Runtime Integrity & Test Isolation (CLOSED)
+### Milestone 2.1.1 (M2.1.1) — Runtime Integrity & Lifecycle Authority (CLOSED)
+- [x] **M2.1.1 Implementation: CLOSED**
+- [x] **Automated Verification: ACCEPTED** (All 427 Swift tests, 30 JS tests, SPM test suite, and release packaging clean)
 - [x] **P0-A: Telegram Test Runtime Isolation**: Hard defense-in-depth isolation in `TestEnvironment`, blocking real Telegram network requests in `URLSessionTelegramTransport` and preventing production `.env` loading during test executions (`Stage1TestRunner` & `swift test`).
 - [x] **P0-B1: Codex Restart / Rollout Baseline Repair**: Tail baseline initialization for newly discovered rollout files on restart; full support for current observed event schema (`event_msg` with `item_completed`, `task_started`, `turn_started`, `response_item`); exclusion of historical replay from mutating lifecycle.
-- [x] **P0-B2: Codex Working Lifecycle Continuity & Baseline Offset Repair**: Fixed transient query/reconciliation miss wiping active sessions; protected Working sessions from older completed turn downgrade; fixed dynamic new-thread baseline offset handling.
+- [x] **P0-B2: Codex Working Lifecycle Continuity & Baseline Offset Repair**: Fixed transient query/reconciliation miss wiping active sessions; protected Working sessions from older completed turn downgrade; fixed dynamic new-thread baseline offset handling; concurrent subprocess stream draining preventing pipe buffer deadlocks.
+- [x] **M2.1.1-A: Main-Thread Privilege Probing Removal**: Converted privilege probing to cached stored property with asynchronous background refreshes, eliminating synchronous `sudo / pmset` subprocess launches from `MenuBarManager` UI rendering.
+- [x] **M2.1.1-B: Startup-Silent Health Notification Transitions**: Enforced strict `HealthAlertLifecycleState` transition model for Global Network Health and ChatGPT Web Monitor Health; startup baseline and re-baselining are silent; orphan "restored" alerts eliminated.
+- [x] **M2.1.1-C: Antigravity Evidence-Driven Transcript Fallback**: Eliminated speculative wall-clock elapsed time heuristics (`timeSinceMod < 60s/120s`); lifecycle strictly mapped to explicit transcript step schema (`ask_question` / `WAITING_FOR_INPUT` -> Blocked; `RUNNING` / `IN_PROGRESS` / `USER_INPUT` / `GENERIC` / active tools -> Working; final `DONE` -> Done; insufficient evidence -> nil).
+
+### Human Runtime Observations (PENDING / WATCH ONLY)
+- [ ] **AgentBridge Not Responding Recurrence**: Monitor activity in macOS Activity Monitor to ensure zero UI hangs.
+- [ ] **Orphan Telegram "Restored" Recurrence**: Monitor Telegram alerts to ensure zero spurious restoration alerts on network reconnect / browser restart.
+- [ ] **Antigravity >2 min Lifecycle Continuity**: Monitor long-running Antigravity turns to ensure continuous Working state across tool executions.
+
+### Parked Natural Human Acceptance
+- [ ] **Codex Natural Human Acceptance**: Parked pending natural human usage of Codex Desktop.
 
 ---
 
