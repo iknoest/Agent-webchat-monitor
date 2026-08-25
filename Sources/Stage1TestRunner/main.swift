@@ -8023,4 +8023,278 @@ runTest("427. M2.1.1-C5: >120s elapsed time alone cannot force Working -> Idle")
     try assert(res?.status == .working, "Step marked RUNNING must remain .working even after >120s, got \(String(describing: res?.status))")
 }
 
-print("🎉 All 427 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications & Antigravity Evidence-Driven Fallback Tests Passed!")
+// MARK: - Milestone 3.1: Project Registry Foundation Tests
+
+// 428. M3.1: Project Model path normalization (tilde, standardizing, trailing slashes)
+runTest("428. M3.1: Project Model path normalization (tilde, standardizing, trailing slashes)") {
+    let home = NSHomeDirectory()
+    let rawPath = "~/Projects/test-project/../test-project///"
+    let canonical = Project.canonicalizePath(rawPath)
+    let expected = "\(home)/Projects/test-project"
+    try assert(canonical == expected, "Path must expand tilde, standardize redundant segments, and strip trailing slashes. Got: \(canonical), Expected: \(expected)")
+
+    // Root path preservation
+    try assert(Project.canonicalizePath("/") == "/", "Root path / must remain /")
+    try assert(Project.canonicalizePath("") == "", "Empty path must return empty string")
+}
+
+// 429. M3.1: Symlink resolution canonicalizes to real target path for existing folders
+runTest("429. M3.1: Symlink resolution canonicalizes to real target path for existing folders") {
+    let fm = FileManager.default
+    let tempDir = fm.temporaryDirectory.appendingPathComponent("m31_symlink_test_\(UUID().uuidString)")
+    let targetDir = tempDir.appendingPathComponent("real_target_folder")
+    let symlinkDir = tempDir.appendingPathComponent("symlink_folder")
+
+    try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+    try fm.createSymbolicLink(at: symlinkDir, withDestinationURL: targetDir)
+
+    let canonicalTarget = Project.canonicalizePath(targetDir.path)
+    let canonicalSymlink = Project.canonicalizePath(symlinkDir.path)
+
+    try assert(canonicalSymlink == canonicalTarget, "Symlinked path must resolve to real canonical target path. Symlink: \(canonicalSymlink), Target: \(canonicalTarget)")
+
+    try? fm.removeItem(at: tempDir)
+}
+
+// 430. M3.1: Default project name resolution from canonical root basename
+runTest("430. M3.1: Default project name resolution from canonical root basename") {
+    let p1 = Project(rootPath: "/Users/ava/Projects/Agent-webchat monitor")
+    try assert(p1.name == "Agent-webchat monitor", "Default name must equal root basename, got: \(p1.name)")
+
+    let p2 = Project(name: "Custom Agent Project", rootPath: "/Users/ava/Projects/Agent-webchat monitor")
+    try assert(p2.name == "Custom Agent Project", "Explicit name must take precedence, got: \(p2.name)")
+
+    let p3 = Project(name: "   ", rootPath: "/Users/ava/Projects/MyRepo")
+    try assert(p3.name == "MyRepo", "Blank explicit name must fallback to folder basename, got: \(p3.name)")
+}
+
+// 431. M3.1: Project registration and duplicate registration prevention
+runTest("431. M3.1: Project registration and duplicate registration prevention") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_reg_431_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let p1 = try registry.registerProject(rootPath: "/Users/ava/Projects/AlphaApp")
+    try assert(registry.count == 1, "Expected 1 project registered")
+
+    // Re-registering with trailing slash and redundant dot
+    let p2 = try registry.registerProject(rootPath: "/Users/ava/Projects/AlphaApp/.")
+    try assert(registry.count == 1, "Duplicate canonical root must not create duplicate entry")
+    try assert(p1.id == p2.id, "Duplicate registration must return the existing project ID")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 432. M3.1: Project update when re-registering with explicit new name
+runTest("432. M3.1: Project update when re-registering with explicit new name") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_reg_432_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let p1 = try registry.registerProject(rootPath: "/Users/ava/Projects/AlphaApp", name: "Original Name")
+    try assert(p1.name == "Original Name")
+
+    let p2 = try registry.registerProject(rootPath: "/Users/ava/Projects/AlphaApp", name: "Renamed Alpha")
+    try assert(registry.count == 1)
+    try assert(p2.id == p1.id)
+    try assert(p2.name == "Renamed Alpha")
+    try assert(registry.getProject(byId: p1.id)?.name == "Renamed Alpha")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 433. M3.1: Persistence across reload (roundtrip serialize -> reload from disk)
+runTest("433. M3.1: Persistence across reload (roundtrip serialize -> reload from disk)") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_persist_433_\(UUID().uuidString).json")
+    let registry1 = ProjectRegistry(storageURL: storageURL)
+
+    let projectA = try registry1.registerProject(rootPath: "/Users/ava/Projects/AppA", name: "App A")
+    let projectB = try registry1.registerProject(rootPath: "/Users/ava/Projects/AppB", name: "App B")
+    try assert(registry1.count == 2)
+
+    // Instantiate a new registry instance pointing to the exact same file
+    let registry2 = ProjectRegistry(storageURL: storageURL)
+    try assert(registry2.count == 2, "Reloaded registry must have 2 projects")
+
+    let loadedA = registry2.getProject(byId: projectA.id)
+    let loadedB = registry2.getProject(byId: projectB.id)
+
+    try assert(loadedA != nil && loadedA?.name == "App A" && loadedA?.rootPath == "/Users/ava/Projects/AppA")
+    try assert(loadedB != nil && loadedB?.name == "App B" && loadedB?.rootPath == "/Users/ava/Projects/AppB")
+
+    // Lookup by root path
+    let byPath = registry2.getProject(byRootPath: "/Users/ava/Projects/AppA///")
+    try assert(byPath?.id == projectA.id, "Lookup by rootPath must normalize input path")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 434. M3.1: Longest-matching parent path resolution for nested project roots
+runTest("434. M3.1: Longest-matching parent path resolution for nested project roots") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_match_434_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let rootParent = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo", name: "Monorepo Root")
+    let subPkg = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo/packages/core", name: "Core Package")
+    let deepPkg = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo/packages/core/submodules/auth", name: "Auth Submodule")
+    let unrelated = try registry.registerProject(rootPath: "/Users/ava/Projects/unrelated", name: "Unrelated")
+
+    // 1. Path deep inside auth submodule -> matches deepPkg
+    let matchAuth = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/packages/core/submodules/auth/src/token.ts")
+    try assert(matchAuth?.id == deepPkg.id, "Longest matching ancestor root must win (deepPkg), got: \(String(describing: matchAuth?.name))")
+
+    // 2. Path in core package -> matches subPkg
+    let matchCore = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/packages/core/src/index.ts")
+    try assert(matchCore?.id == subPkg.id, "Path in core package must match subPkg, got: \(String(describing: matchCore?.name))")
+
+    // 3. Path in monorepo root -> matches rootParent
+    let matchRoot = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/README.md")
+    try assert(matchRoot?.id == rootParent.id, "Path in root must match rootParent, got: \(String(describing: matchRoot?.name))")
+
+    // 4. Exact match of project root -> matches project
+    let matchExact = registry.matchProject(forPath: "/Users/ava/Projects/unrelated")
+    try assert(matchExact?.id == unrelated.id, "Exact root path match must resolve correctly")
+
+    // 5. Completely external path -> returns nil
+    let matchExternal = registry.matchProject(forPath: "/private/tmp/other/file.txt")
+    try assert(matchExternal == nil, "External path must return nil")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 435. M3.1: Path prefix boundary matching safety (subpath vs prefix substring collision)
+runTest("435. M3.1: Path prefix boundary matching safety (subpath vs prefix substring collision)") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_prefix_435_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let appProj = try registry.registerProject(rootPath: "/Users/ava/Projects/app", name: "App")
+
+    // Substring collision: /Users/ava/Projects/app-extra has prefix "/Users/ava/Projects/app", but is NOT a child directory
+    let matchExtra = registry.matchProject(forPath: "/Users/ava/Projects/app-extra/main.swift")
+    try assert(matchExtra == nil, "Substring prefix collision (/app vs /app-extra) must not match")
+
+    // Genuine subpath matches
+    let matchChild = registry.matchProject(forPath: "/Users/ava/Projects/app/main.swift")
+    try assert(matchChild?.id == appProj.id, "Genuine child path must match")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 436. M3.1: Malformed / corrupted projects.json handling with backup preservation
+runTest("436. M3.1: Malformed / corrupted projects.json handling with backup preservation") {
+    let fm = FileManager.default
+    let tempDir = fm.temporaryDirectory.appendingPathComponent("m31_corrupt_\(UUID().uuidString)")
+    try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    let storageURL = tempDir.appendingPathComponent("projects.json")
+
+    // Write malformed JSON
+    let badJSON = "{ \"version\": 1, \"projects\": [ { incomplete json"
+    try badJSON.write(to: storageURL, atomically: true, encoding: .utf8)
+
+    let registry = ProjectRegistry(storageURL: storageURL)
+    try assert(registry.count == 0, "Corrupted config must fail safely and load 0 projects without crashing")
+
+    // Check backup file existence
+    let contents = try fm.contentsOfDirectory(atPath: tempDir.path)
+    let hasCorruptedBackup = contents.contains { $0.hasPrefix("projects.json.corrupted.") }
+    try assert(hasCorruptedBackup, "Registry must preserve backup copy of corrupted file")
+
+    // Verify recovery: subsequent valid registration can save normally
+    try registry.registerProject(rootPath: "/Users/ava/Projects/RecoveredProject")
+    try assert(registry.count == 1)
+
+    let registry2 = ProjectRegistry(storageURL: storageURL)
+    try assert(registry2.count == 1)
+    try assert(registry2.getAllProjects().first?.name == "RecoveredProject")
+
+    try? fm.removeItem(at: tempDir)
+}
+
+// 437. M3.1: Missing projects.json initialization without error
+runTest("437. M3.1: Missing projects.json initialization without error") {
+    let nonExistentURL = FileManager.default.temporaryDirectory.appendingPathComponent("non_existent_\(UUID().uuidString)/projects.json")
+    let registry = ProjectRegistry(storageURL: nonExistentURL)
+
+    try assert(registry.count == 0, "Non-existent file must initialize cleanly with 0 projects")
+    try assert(registry.getAllProjects().isEmpty)
+
+    // Saving creates parent directory and file cleanly
+    try registry.registerProject(rootPath: "/Users/ava/Projects/AutoCreated")
+    try assert(FileManager.default.fileExists(atPath: nonExistentURL.path), "Saving must create intermediate directories and storage file")
+
+    try? FileManager.default.removeItem(at: nonExistentURL.deletingLastPathComponent())
+}
+
+// 438. M3.1: Project removal by ID and by root path
+runTest("438. M3.1: Project removal by ID and by root path") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_remove_438_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let p1 = try registry.registerProject(rootPath: "/Users/ava/Projects/Alpha")
+    let p2 = try registry.registerProject(rootPath: "/Users/ava/Projects/Beta")
+    let p3 = try registry.registerProject(rootPath: "/Users/ava/Projects/Gamma")
+    try assert(registry.count == 3)
+
+    // Remove by ID
+    let removedP1 = try registry.removeProject(id: p1.id)
+    try assert(removedP1 == true)
+    try assert(registry.count == 2)
+    try assert(registry.getProject(byId: p1.id) == nil)
+    try assert(registry.getProject(byRootPath: "/Users/ava/Projects/Alpha") == nil)
+
+    // Remove by root path
+    let removedP2 = try registry.removeProject(byRootPath: "/Users/ava/Projects/Beta///")
+    try assert(removedP2 == true)
+    try assert(registry.count == 1)
+    try assert(registry.getProject(byId: p2.id) == nil)
+
+    // Remove non-existent ID
+    let removedNonExistent = try registry.removeProject(id: "non-existent-id")
+    try assert(removedNonExistent == false)
+
+    // Verify persistence of removals across reload
+    let registryReloaded = ProjectRegistry(storageURL: storageURL)
+    try assert(registryReloaded.count == 1)
+    try assert(registryReloaded.getProject(byId: p3.id)?.name == "Gamma")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+// 439. M3.1: Test isolation: test runtime uses isolated temp storage, never mutating production ~/.config/AgentSignalBar/projects.json
+runTest("439. M3.1: Test isolation: test runtime uses isolated temp storage, never mutating production ~/.config/AgentSignalBar/projects.json") {
+    try assert(TestEnvironment.isTestRuntime == true, "Must be running in test runtime")
+    let defaultURL = ProjectRegistry.defaultStorageURL
+    let home = NSHomeDirectory()
+    let prodPath = "\(home)/.config/AgentSignalBar/projects.json"
+
+    try assert(defaultURL.path != prodPath, "Default storage URL in test runtime must NOT point to production ~/.config/AgentSignalBar/projects.json")
+    try assert(defaultURL.path.contains("AgentSignalBarTest_projects_"), "Default storage URL in test runtime must be an isolated temporary file")
+}
+
+// 440. M3.1: Thread-safe concurrent access to ProjectRegistry
+runTest("440. M3.1: Thread-safe concurrent access to ProjectRegistry") {
+    let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_concurrency_440_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: storageURL)
+
+    let group = DispatchGroup()
+    let queue = DispatchQueue(label: "test.project.registry.concurrency", attributes: .concurrent)
+
+    for i in 0..<30 {
+        group.enter()
+        queue.async {
+            do {
+                _ = try registry.registerProject(rootPath: "/Users/ava/Projects/Project_\(i)", name: "Concurrent Project \(i)")
+                _ = registry.getAllProjects()
+                _ = registry.matchProject(forPath: "/Users/ava/Projects/Project_\(i)/src/file.swift")
+            } catch {
+                print("Concurrency error: \(error)")
+            }
+            group.leave()
+        }
+    }
+
+    _ = group.wait(timeout: .now() + 5.0)
+    try assert(registry.count == 30, "All 30 concurrent registrations must complete safely, got: \(registry.count)")
+
+    try? FileManager.default.removeItem(at: storageURL)
+}
+
+print("🎉 All 440 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback & M3.1 Project Registry Foundation Tests Passed!")

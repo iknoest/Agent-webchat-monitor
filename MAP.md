@@ -9,6 +9,8 @@ Sources/AgentSignalBar/AutoMonitor.swift — Background log & process monitor wi
 Sources/AgentSignalBar/AgentState.swift — Data structures and thread-safe state store for 4 agents with .off status and active summary filtering
 Sources/AgentSignalBar/MenuBarManager.swift — AppKit NSStatusItem indicator with relative timestamps and thinking duration metrics
 Sources/AgentSignalBar/NotificationManager.swift — Audio alert (NSSound) and macOS UserNotification dispatcher with osascript CLI fallback
+Sources/AgentSignalBar/ProjectModel.swift — Canonical Project data model and path canonicalization primitives (M3.1)
+Sources/AgentSignalBar/ProjectRegistry.swift — Durable thread-safe local Project Registry and path matching primitives (M3.1)
 Sources/AgentSignalBar/SleepManager.swift — Smart Clamshell Anti-Sleep manager with IOKit IOPMAssertion and caffeinate process execution
 Sources/AgentSignalBar/WindowFocuser.swift — Exact bundle ID (com.openai.codex / com.anthropic.claudefordesktop / com.google.antigravity) window manager
 adapters/chrome-extension/manifest.json — Native Manifest V3 Chrome Extension manifest with background service worker

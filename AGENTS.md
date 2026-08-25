@@ -1547,3 +1547,32 @@ Next: Present report in Traditional Chinese to Ava for review.
 Blockers: none
 
 [RELEASE] M2.1.1 Final Corrective Runtime Fixes — antigravity — 2026-08-25T11:44:00+02:00
+
+## 2026-08-25 — antigravity — macos
+Status: DONE
+Phase: M3.1 Local Folder Canonical Project Identity & Config Storage Foundation
+Done:
+1. Canonical Project Model (`Sources/AgentSignalBar/ProjectModel.swift`):
+   - Defined `Project` struct (`Identifiable, Codable, Sendable, Equatable, Hashable`) with stable `id: String` (UUID), `name: String`, `rootPath: String`, `createdAt: Date`, and `updatedAt: Date`.
+   - Implemented safe path canonicalization `Project.canonicalizePath(_:)` supporting tilde expansion, redundant component standardizing, symlink resolution for existing filesystem roots, and trailing slash stripping.
+   - Defined versioned container `ProjectRegistryData` (`version: 1`, `projects: [Project]`).
+2. Durable Thread-Safe Local Project Registry (`Sources/AgentSignalBar/ProjectRegistry.swift`):
+   - Implemented thread-safe `ProjectRegistry` with atomic persistence to `~/.config/AgentSignalBar/projects.json`.
+   - Full CRUD support: `registerProject(rootPath:name:)`, `removeProject(id:)`, `removeProject(byRootPath:)`, `getProject(byId:)`, `getProject(byRootPath:)`, `getAllProjects()`.
+   - Duplicate registration prevention: re-registering existing canonical root path updates name if provided and returns existing project without duplicate entries.
+   - Robust corruption recovery & missing file safety: missing storage initializes cleanly with 0 projects; malformed JSON preserves corrupted file copy (`projects.json.corrupted.<timestamp>`) and fails safely without data destruction or crash.
+   - Hard test isolation: `ProjectRegistry.defaultStorageURL` switches to isolated temporary file during test runtime, preventing test pollution of user `~/.config/AgentSignalBar/projects.json`.
+3. Deterministic Longest-Parent Path Matching Primitive:
+   - Implemented `matchProject(forPath:)` resolving the longest matching ancestor root path for nested projects (e.g. `/a/b/c/d` over `/a/b`) with strict boundary checking preventing false substring prefix matches (`/app` vs `/app-extra`).
+4. Automated Verification:
+   - Added Tests 428 to 440 in `Stage1TestRunner` covering path canonicalization, symlinks, duplicate prevention, reload persistence, longest-parent matching, boundary checks, corrupted file handling, missing file safety, project removal, test isolation, and concurrent access (440/440 passed).
+   - Added unit tests `testM31ProjectModelPathNormalizationAndSymlinks`, `testM31ProjectRegistrationAndDuplicatePrevention`, `testM31ProjectPersistenceAcrossReload`, `testM31NestedProjectRootsLongestParentMatch`, `testM31PathPrefixBoundaryMatchingSafety`, `testM31MalformedAndMissingStorageHandling`, `testM31ProjectRemoval`, `testM31ProductionStorageIsolationInTestRuntime` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+Verified: `branch=main` `commit=c4f20d1` `artifact=Sources/AgentSignalBar/ProjectModel.swift,Sources/AgentSignalBar/ProjectRegistry.swift`
+Tests: `swift run Stage1TestRunner` (440/440 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Blockers: none
+Parked: Codex natural human acceptance parked pending natural usage.
+Next: Present M3.1 completion report to Ava and await approval before M3.2.
+
+[RELEASE] M3.1 Local Folder Canonical Project Identity & Config Storage Foundation — antigravity — 2026-08-25T15:30:00+02:00

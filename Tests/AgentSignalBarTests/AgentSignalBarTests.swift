@@ -2400,5 +2400,156 @@ final class AgentSignalBarTests: XCTestCase {
         let resRunning = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
         XCTAssertEqual(resRunning?.status, .working)
     }
+
+    // MARK: - M3.1 Project Registry Tests
+
+    func testM31ProjectModelPathNormalizationAndSymlinks() throws {
+        let home = NSHomeDirectory()
+        let rawPath = "~/Projects/sample-app/../sample-app///"
+        let canonical = Project.canonicalizePath(rawPath)
+        XCTAssertEqual(canonical, "\(home)/Projects/sample-app")
+
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("xctest_symlink_\(UUID().uuidString)")
+        let targetDir = tempDir.appendingPathComponent("target_folder")
+        let symlinkDir = tempDir.appendingPathComponent("symlink_folder")
+
+        try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: symlinkDir, withDestinationURL: targetDir)
+
+        let targetCanonical = Project.canonicalizePath(targetDir.path)
+        let symlinkCanonical = Project.canonicalizePath(symlinkDir.path)
+        XCTAssertEqual(symlinkCanonical, targetCanonical)
+
+        try? fm.removeItem(at: tempDir)
+    }
+
+    func testM31ProjectRegistrationAndDuplicatePrevention() throws {
+        let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("xctest_reg_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: storageURL)
+
+        let p1 = try registry.registerProject(rootPath: "/Users/ava/Projects/MyApp")
+        XCTAssertEqual(registry.count, 1)
+
+        let p2 = try registry.registerProject(rootPath: "/Users/ava/Projects/MyApp/.")
+        XCTAssertEqual(registry.count, 1)
+        XCTAssertEqual(p1.id, p2.id)
+
+        let p3 = try registry.registerProject(rootPath: "/Users/ava/Projects/MyApp", name: "Renamed App")
+        XCTAssertEqual(registry.count, 1)
+        XCTAssertEqual(p3.name, "Renamed App")
+
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    func testM31ProjectPersistenceAcrossReload() throws {
+        let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("xctest_persist_\(UUID().uuidString).json")
+        let registry1 = ProjectRegistry(storageURL: storageURL)
+
+        let projectA = try registry1.registerProject(rootPath: "/Users/ava/Projects/AppA", name: "App A")
+        let projectB = try registry1.registerProject(rootPath: "/Users/ava/Projects/AppB", name: "App B")
+        XCTAssertEqual(registry1.count, 2)
+
+        let registry2 = ProjectRegistry(storageURL: storageURL)
+        XCTAssertEqual(registry2.count, 2)
+
+        let loadedA = registry2.getProject(byId: projectA.id)
+        let loadedB = registry2.getProject(byId: projectB.id)
+        XCTAssertEqual(loadedA?.name, "App A")
+        XCTAssertEqual(loadedB?.name, "App B")
+
+        let byPath = registry2.getProject(byRootPath: "/Users/ava/Projects/AppA///")
+        XCTAssertEqual(byPath?.id, projectA.id)
+
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    func testM31NestedProjectRootsLongestParentMatch() throws {
+        let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("xctest_match_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: storageURL)
+
+        let rootParent = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo", name: "Monorepo Root")
+        let subPkg = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo/packages/core", name: "Core Package")
+        let deepPkg = try registry.registerProject(rootPath: "/Users/ava/Projects/monorepo/packages/core/submodules/auth", name: "Auth Submodule")
+
+        let matchAuth = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/packages/core/submodules/auth/src/token.ts")
+        XCTAssertEqual(matchAuth?.id, deepPkg.id)
+
+        let matchCore = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/packages/core/src/index.ts")
+        XCTAssertEqual(matchCore?.id, subPkg.id)
+
+        let matchRoot = registry.matchProject(forPath: "/Users/ava/Projects/monorepo/README.md")
+        XCTAssertEqual(matchRoot?.id, rootParent.id)
+
+        let matchExternal = registry.matchProject(forPath: "/private/tmp/other/file.txt")
+        XCTAssertNil(matchExternal)
+
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    func testM31PathPrefixBoundaryMatchingSafety() throws {
+        let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("xctest_prefix_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: storageURL)
+
+        let appProj = try registry.registerProject(rootPath: "/Users/ava/Projects/app", name: "App")
+
+        let matchExtra = registry.matchProject(forPath: "/Users/ava/Projects/app-extra/main.swift")
+        XCTAssertNil(matchExtra)
+
+        let matchChild = registry.matchProject(forPath: "/Users/ava/Projects/app/main.swift")
+        XCTAssertEqual(matchChild?.id, appProj.id)
+
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    func testM31MalformedAndMissingStorageHandling() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("xctest_corrupt_\(UUID().uuidString)")
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let storageURL = tempDir.appendingPathComponent("projects.json")
+
+        // Corrupted content
+        try "INVALID JSON DATA {".write(to: storageURL, atomically: true, encoding: .utf8)
+        let registry = ProjectRegistry(storageURL: storageURL)
+        XCTAssertEqual(registry.count, 0)
+
+        let contents = try fm.contentsOfDirectory(atPath: tempDir.path)
+        XCTAssertTrue(contents.contains { $0.hasPrefix("projects.json.corrupted.") })
+
+        // Subsequent valid write
+        try registry.registerProject(rootPath: "/Users/ava/Projects/Recovered")
+        XCTAssertEqual(registry.count, 1)
+
+        try? fm.removeItem(at: tempDir)
+    }
+
+    func testM31ProjectRemoval() throws {
+        let storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("xctest_remove_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: storageURL)
+
+        let p1 = try registry.registerProject(rootPath: "/Users/ava/Projects/Alpha")
+        let p2 = try registry.registerProject(rootPath: "/Users/ava/Projects/Beta")
+        XCTAssertEqual(registry.count, 2)
+
+        let removed = try registry.removeProject(id: p1.id)
+        XCTAssertTrue(removed)
+        XCTAssertEqual(registry.count, 1)
+        XCTAssertNil(registry.getProject(byId: p1.id))
+
+        let removedPath = try registry.removeProject(byRootPath: "/Users/ava/Projects/Beta")
+        XCTAssertTrue(removedPath)
+        XCTAssertEqual(registry.count, 0)
+
+        try? FileManager.default.removeItem(at: storageURL)
+    }
+
+    func testM31ProductionStorageIsolationInTestRuntime() throws {
+        XCTAssertTrue(TestEnvironment.isTestRuntime)
+        let defaultURL = ProjectRegistry.defaultStorageURL
+        let home = NSHomeDirectory()
+        let prodPath = "\(home)/.config/AgentSignalBar/projects.json"
+        XCTAssertNotEqual(defaultURL.path, prodPath)
+        XCTAssertTrue(defaultURL.path.contains("AgentSignalBarTest_projects_"))
+    }
 }
 #endif

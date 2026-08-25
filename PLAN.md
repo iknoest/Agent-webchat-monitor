@@ -87,9 +87,9 @@
 
 ## Next Roadmap Milestones
 
-### Milestone 3 (M3) — Project Bridge (M3.1 NEXT)
-- [ ] **M3.1**: Local Folder Canonical Project Identity & Config Storage
-- [ ] **M3.2**: One Current ChatGPT Reviewer per Project & Migration History
+### Milestone 3 (M3) — Project Bridge
+- [x] **M3.1**: Local Folder Canonical Project Identity & Config Storage (`[x] Automated verified`: canonical project identity, path normalization, symlink resolution, durable atomic `~/.config/AgentSignalBar/projects.json` storage, longest-parent path matching, safe corruption recovery, test isolation)
+- [ ] **M3.2**: One Current ChatGPT Reviewer per Project & Migration History (NEXT)
 - [ ] **M3.3**: Agent Session Association by CWD / Workspace
 - [ ] **M3.4**: Optional GitHub Repository Association
 - [ ] **M3.5**: Project Switcher & Contextual Menu Navigation
