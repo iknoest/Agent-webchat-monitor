@@ -2298,5 +2298,107 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(AgentStore.shared.getStatus(for: .antigravity).status, .working)
         XCTAssertNotEqual(AgentStore.shared.getStatus(for: .antigravity).effectiveDisplayStatus, .blocked)
     }
+
+    func testM211CachedPrivilegeAndAsyncProbing() throws {
+        SleepManager.shared.setCachedPrivilegeForTesting(hasPrivilege: true, detail: "Cached Sudo Privilege")
+        XCTAssertTrue(SleepManager.shared.cachedPrivilege.hasPrivilege)
+        XCTAssertEqual(SleepManager.shared.cachedPrivilege.detail, "Cached Sudo Privilege")
+
+        let sig = MenuBarManager.shared.computeRenderSignature()
+        XCTAssertFalse(sig.isEmpty)
+        XCTAssertTrue(SleepManager.shared.isClosedLidModeEnabled)
+    }
+
+    func testM211StartupSilentNetworkHealthTransitions() throws {
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+
+        // 1. Initial healthy observation -> silent
+        bridge.handleNetworkHealthChange(isConnected: true)
+        var exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 0)
+
+        // 2. Confirmed drop -> 1 alert
+        bridge.handleNetworkHealthChange(isConnected: false)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+
+        // 3. Recovery -> 1 restored alert
+        bridge.handleNetworkHealthChange(isConnected: true)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+        XCTAssertTrue(mock.getAllSentMessages()[1].text.contains("AgentBridge connection restored"))
+
+        // 4. Repeated healthy -> silent
+        bridge.handleNetworkHealthChange(isConnected: true)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+    }
+
+    func testM211StartupSilentChatGPTHealthTransitions() throws {
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+        ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+        // 1. Initial healthy baseline -> silent
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+        var exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 0)
+
+        // 2. Confirmed disconnect -> 1 alert
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+
+        // 3. Confirmed reconnect -> 1 restored alert
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+        XCTAssertTrue(mock.getAllSentMessages()[1].text.contains("ChatGPT Web monitoring restored"))
+    }
+
+    func testM211AntigravityEvidenceDrivenTranscriptLifecycle() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_xctest_\(UUID().uuidString)")
+        let sessId = UUID().uuidString
+        let sessDir = tempDir.appendingPathComponent(sessId)
+        let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+
+        // 1. DONE transcript with run_command -> .done (not working)
+        let doneLines = [
+            "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Run task\"}",
+            "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{}}]}",
+            "{\"type\":\"GENERIC\",\"status\":\"DONE\",\"content\":\"Finished\"}",
+            "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"All complete\"}"
+        ].joined(separator: "\n")
+        try doneLines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+        let resDone = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+        XCTAssertEqual(resDone?.status, .done)
+
+        // 2. RUNNING step stays .working even after >120s
+        let runningLines = [
+            "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Long task\"}",
+            "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"RUNNING\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{}}]}"
+        ].joined(separator: "\n")
+        try runningLines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+        let pastDate = Date().addingTimeInterval(-200)
+        try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: sessDir.path)
+        try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: transcriptFile.path)
+
+        let resRunning = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+        XCTAssertEqual(resRunning?.status, .working)
+    }
 }
 #endif

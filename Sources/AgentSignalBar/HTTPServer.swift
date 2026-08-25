@@ -284,7 +284,7 @@ public final class HTTPServer: @unchecked Sendable {
                 "success": true,
                 "isClosedLidEnabled": SleepManager.shared.isClosedLidModeEnabled,
                 "isDisableSleepActive": SleepManager.shared.isDisableSleepActive,
-                "privilege": SleepManager.checkPrivilegeStatus().detail
+                "privilege": SleepManager.shared.cachedPrivilege.detail
             ]
             if let jsonData = try? JSONSerialization.data(withJSONObject: resp),
                let jsonStr = String(data: jsonData, encoding: .utf8) {

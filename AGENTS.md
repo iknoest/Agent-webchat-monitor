@@ -1520,3 +1520,30 @@ Next: Present report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M2.1.1 Antigravity Stale Attention Needed Heuristic Removal — antigravity — 2026-08-25T02:14:00+02:00
+
+## 2026-08-25 — antigravity — macos
+Status: DONE
+Phase: M2.1.1 Final Corrective Runtime Fixes (Main-Thread Privilege Probing, Startup-Silent Health Transitions, Antigravity Evidence-Driven Fallback)
+Done:
+1. Removed Synchronous Privilege Probing from Main-Thread Render Path:
+   - Converted `SleepManager.cachedPrivilegeStatus` into a cached stored property with `privilegeLock`.
+   - Updated `isClosedLidModeEnabled`, `MenuBarManager.swift` (menu construction and `computeRenderSignature`), and `HTTPServer.swift` to read cached privilege state with zero synchronous `sudo / pmset` subprocess launches during UI rendering.
+   - Initialized asynchronous background privilege probing (`refreshPrivilegeStatusAsync()`) on `init()` and settings toggles.
+2. Enforced Startup-Silent Health Notification Transitions:
+   - Implemented `HealthAlertLifecycleState` (`.unobserved`, `.confirmedHealthy`, `.initialUnavailable`, `.confirmedUnavailableAlertSent`) in `TelegramBridge.swift` for both Global Network Health and ChatGPT Web Monitor Health.
+   - Enforced contract: startup initial baseline observation is silent; confirmed healthy -> confirmed unavailable emits 1 unavailable alert; confirmed unavailable -> confirmed healthy emits 1 restored alert; process restart / unannounced baseline observation never emits spurious restored alerts.
+   - Set initial default `monitorHealth` to `.starting` in `AgentState.swift`.
+3. Removed Speculative Antigravity Disk-Fallback Lifecycle Inference:
+   - Completely removed all wall-clock elapsed-time conditionals (`timeSinceMod < 60s`, `timeSinceMod < 120s`, `timeSinceMod > N`) from `scanActiveAntigravityTranscript()` in `AutoMonitor.swift`.
+   - Mapped state strictly by explicit transcript step evidence (`ask_question` / `WAITING_FOR_INPUT` / `BLOCKED` -> `.blocked`; `RUNNING` / `IN_PROGRESS` / `USER_INPUT` / `GENERIC` / active non-ask tool -> `.working`; `PLANNER_RESPONSE` with `DONE` and no active tools -> `.done`; insufficient evidence -> `nil` without manufacturing transitions).
+4. Automated Verification:
+   - Added Tests 415 to 427 in `Stage1TestRunner` (427/427 passed).
+   - Added unit tests `testM211CachedPrivilegeAndAsyncProbing`, `testM211StartupSilentNetworkHealthTransitions`, `testM211StartupSilentChatGPTHealthTransitions`, `testM211AntigravityEvidenceDrivenTranscriptLifecycle` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified running binary PID 81948 via `curl -s http://127.0.0.1:18888/status`.
+Verified: `swift run Stage1TestRunner` (427/427 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0). Live `/status` endpoint verified.
+Next: Present report in Traditional Chinese to Ava for review.
+Blockers: none
+
+[RELEASE] M2.1.1 Final Corrective Runtime Fixes — antigravity — 2026-08-25T11:44:00+02:00

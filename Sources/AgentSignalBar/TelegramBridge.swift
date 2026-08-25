@@ -1,5 +1,12 @@
 import Foundation
 
+public enum HealthAlertLifecycleState: String, Sendable, Equatable {
+    case unobserved
+    case confirmedHealthy
+    case initialUnavailable
+    case confirmedUnavailableAlertSent
+}
+
 public final class TelegramBridge: @unchecked Sendable {
     public static let shared = TelegramBridge()
 
@@ -11,6 +18,33 @@ public final class TelegramBridge: @unchecked Sendable {
     private var lastUpdateId: Int64 = 0
     private var lastSentNotificationKeys: [String: Date] = [:]
     private var activeOverrides: [String: TelegramNotifyOverride] = [:]
+
+    private var networkNotificationState: HealthAlertLifecycleState = .unobserved
+    private var chatgptNotificationState: HealthAlertLifecycleState = .unobserved
+
+    public var currentNetworkNotificationState: HealthAlertLifecycleState {
+        lock.lock()
+        defer { lock.unlock() }
+        return networkNotificationState
+    }
+
+    public var currentChatGPTNotificationState: HealthAlertLifecycleState {
+        lock.lock()
+        defer { lock.unlock() }
+        return chatgptNotificationState
+    }
+
+    public func setNetworkNotificationStateForTesting(_ state: HealthAlertLifecycleState) {
+        lock.lock()
+        networkNotificationState = state
+        lock.unlock()
+    }
+
+    public func setChatGPTNotificationStateForTesting(_ state: HealthAlertLifecycleState) {
+        lock.lock()
+        chatgptNotificationState = state
+        lock.unlock()
+    }
 
     public struct TelegramNotifyOverride: Equatable, Sendable {
         public let provider: AgentID
@@ -326,33 +360,52 @@ public final class TelegramBridge: @unchecked Sendable {
 
         guard oldHealth != newHealth else { return }
 
-        let text: String
-        if newHealth == .disconnected {
-            text = """
-            ⚠️ ChatGPT Web monitoring unavailable
-            Chrome extension is not connected
-            """
-        } else if newHealth == .connected && oldHealth == .disconnected {
-            text = """
-            ✅ ChatGPT Web monitoring restored
-            """
-        } else {
-            return
-        }
+        var alertToSend: String? = nil
 
-        let dedupeKey = "chatgpt_monitor_health_\(newHealth.rawValue)"
         lock.lock()
-        if lastSentNotificationKeys[dedupeKey] != nil {
-            lock.unlock()
-            return
+        if newHealth == .connected {
+            switch chatgptNotificationState {
+            case .unobserved, .initialUnavailable:
+                // Initial baseline observation or initial unannounced baseline -> silent
+                chatgptNotificationState = .confirmedHealthy
+            case .confirmedUnavailableAlertSent:
+                // Confirmed unavailable episode -> confirmed healthy: send restored once
+                chatgptNotificationState = .confirmedHealthy
+                alertToSend = """
+                ✅ ChatGPT Web monitoring restored
+                """
+            case .confirmedHealthy:
+                break
+            }
+        } else if newHealth == .disconnected {
+            switch chatgptNotificationState {
+            case .unobserved:
+                if oldHealth == .connected {
+                    // Explicit transition from previously confirmed connected -> send unavailable once
+                    chatgptNotificationState = .confirmedUnavailableAlertSent
+                    alertToSend = """
+                    ⚠️ ChatGPT Web monitoring unavailable
+                    Chrome extension is not connected
+                    """
+                } else {
+                    // Initial unavailable observation without confirmed healthy -> silent
+                    chatgptNotificationState = .initialUnavailable
+                }
+            case .confirmedHealthy:
+                chatgptNotificationState = .confirmedUnavailableAlertSent
+                alertToSend = """
+                ⚠️ ChatGPT Web monitoring unavailable
+                Chrome extension is not connected
+                """
+            case .initialUnavailable, .confirmedUnavailableAlertSent:
+                break
+            }
+        } else if newHealth == .starting {
+            // Starting grace period -> silent
         }
-        if newHealth == .disconnected {
-            lastSentNotificationKeys.removeValue(forKey: "chatgpt_monitor_health_connected")
-        } else {
-            lastSentNotificationKeys.removeValue(forKey: "chatgpt_monitor_health_disconnected")
-        }
-        lastSentNotificationKeys[dedupeKey] = Date()
         lock.unlock()
+
+        guard let text = alertToSend else { return }
 
         Task { [weak self] in
             guard let self = self else { return }
@@ -374,21 +427,39 @@ public final class TelegramBridge: @unchecked Sendable {
         let config = EnvConfigLoader.shared.getTelegramConfig()
         guard config.isConfigured else { return }
 
-        let dedupeKey = "global_network_health_\(isConnected ? "connected" : "disconnected")"
+        var alertToSend: String? = nil
+
         lock.lock()
-        if lastSentNotificationKeys[dedupeKey] != nil {
-            lock.unlock()
-            return
-        }
         if isConnected {
-            lastSentNotificationKeys.removeValue(forKey: "global_network_health_disconnected")
+            switch networkNotificationState {
+            case .unobserved, .initialUnavailable:
+                // Initial baseline observation or initial unannounced baseline -> silent
+                networkNotificationState = .confirmedHealthy
+            case .confirmedUnavailableAlertSent:
+                // Confirmed unavailable episode -> confirmed healthy: send restored once
+                networkNotificationState = .confirmedHealthy
+                alertToSend = "✅ AgentBridge connection restored"
+            case .confirmedHealthy:
+                // Repeated healthy -> no spam
+                break
+            }
         } else {
-            lastSentNotificationKeys.removeValue(forKey: "global_network_health_connected")
+            switch networkNotificationState {
+            case .unobserved:
+                // Startup / initial baseline observation of unavailable -> silent
+                networkNotificationState = .initialUnavailable
+            case .confirmedHealthy:
+                // Confirmed healthy -> confirmed unavailable: send unavailable once
+                networkNotificationState = .confirmedUnavailableAlertSent
+                alertToSend = "🌐 AgentBridge connection unavailable"
+            case .initialUnavailable, .confirmedUnavailableAlertSent:
+                // Repeated unavailable -> no spam
+                break
+            }
         }
-        lastSentNotificationKeys[dedupeKey] = Date()
         lock.unlock()
 
-        let text = isConnected ? "✅ AgentBridge connection restored" : "🌐 AgentBridge connection unavailable"
+        guard let text = alertToSend else { return }
 
         Task { [weak self] in
             guard let self = self else { return }
@@ -459,6 +530,8 @@ public final class TelegramBridge: @unchecked Sendable {
         activeOverrides.removeAll()
         lastDeliveryResult = nil
         lastUpdateId = 0
+        networkNotificationState = .unobserved
+        chatgptNotificationState = .unobserved
         stopPolling()
     }
 }

@@ -400,7 +400,7 @@ public struct AgentInfo: Codable {
         revision: Int? = nil,
         turnId: String? = nil,
         isQuotaRestored: Bool = false,
-        monitorHealth: MonitorHealth = .connected
+        monitorHealth: MonitorHealth = .starting
     ) {
         self.id = id
         self.status = status

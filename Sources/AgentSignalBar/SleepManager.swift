@@ -47,16 +47,51 @@ public final class SleepManager: @unchecked Sendable {
     private var timer: Timer?
     private var timerExpiryDate: Date?
 
+    private var cachedPrivilegeStatus: (hasPrivilege: Bool, detail: String) = (false, "Unchecked")
+    private let privilegeLock = NSLock()
+
+    public var cachedPrivilege: (hasPrivilege: Bool, detail: String) {
+        privilegeLock.lock()
+        defer { privilegeLock.unlock() }
+        return cachedPrivilegeStatus
+    }
+
+    public func setCachedPrivilegeForTesting(hasPrivilege: Bool, detail: String) {
+        privilegeLock.lock()
+        cachedPrivilegeStatus = (hasPrivilege, detail)
+        privilegeLock.unlock()
+    }
+
+    public func refreshPrivilegeStatusAsync(completion: (@Sendable () -> Void)? = nil) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            let priv = SleepManager.checkPrivilegeStatus()
+            self.privilegeLock.lock()
+            self.cachedPrivilegeStatus = priv
+            self.privilegeLock.unlock()
+            completion?()
+        }
+    }
+
+    public func refreshPrivilegeStatusSync() {
+        let priv = SleepManager.checkPrivilegeStatus()
+        privilegeLock.lock()
+        cachedPrivilegeStatus = priv
+        privilegeLock.unlock()
+    }
+
     public var isClosedLidModeEnabled: Bool {
         get {
             if let explicit = ConfigManager.shared.config.isClosedLidEnabled {
                 return explicit
             }
-            let priv = SleepManager.checkPrivilegeStatus()
-            return priv.hasPrivilege
+            privilegeLock.lock()
+            defer { privilegeLock.unlock() }
+            return cachedPrivilegeStatus.hasPrivilege
         }
         set {
             ConfigManager.shared.setClosedLidEnabled(newValue)
+            refreshPrivilegeStatusAsync()
             updateSleepAssertionState()
         }
     }
@@ -81,6 +116,9 @@ public final class SleepManager: @unchecked Sendable {
         AgentStore.shared.addObserver(id: "SleepManager") { [weak self] _, _, _, _ in
             self?.updateSleepAssertionState()
         }
+
+        // Asynchronously prime cached privilege status outside the main render path
+        refreshPrivilegeStatusAsync()
     }
 
     public func evaluateSmartAutoRequirement() -> (shouldKeepAwake: Bool, reason: String) {
@@ -176,7 +214,7 @@ public final class SleepManager: @unchecked Sendable {
     public func getDebugInfo() -> [String: Any] {
         let minBatt = ConfigManager.shared.config.minBatteryPercentForClosedLid ?? 20
         let power = SleepManager.getPowerState(minBatteryPercent: minBatt)
-        let priv = SleepManager.checkPrivilegeStatus()
+        let priv = cachedPrivilege
 
         return [
             "mode": mode.rawValue,

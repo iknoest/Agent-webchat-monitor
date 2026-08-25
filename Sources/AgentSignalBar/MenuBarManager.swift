@@ -797,7 +797,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         // Closed-Lid / Clamshell Prevention (pmset) Submenu Item
         sleepSubmenu.addItem(NSMenuItem.separator())
         let isClosedLid = SleepManager.shared.isClosedLidModeEnabled
-        let privStatus = SleepManager.checkPrivilegeStatus()
+        let privStatus = SleepManager.shared.cachedPrivilege
         let privTag = privStatus.hasPrivilege ? "" : " [Requires Sudoers Setup]"
         let closedLidTitle = isClosedLid ? "Closed-Lid / Clamshell Mode (pmset): ON\(privTag)" : "Closed-Lid / Clamshell Mode (pmset): OFF\(privTag)"
         let closedLidItem = NSMenuItem(title: closedLidTitle, action: #selector(toggleClosedLidModeClicked), keyEquivalent: "")

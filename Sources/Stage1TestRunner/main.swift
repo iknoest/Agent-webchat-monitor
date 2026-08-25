@@ -6772,9 +6772,14 @@ runTest("362. P0-B: Network path unavailable emits exactly one global Telegram a
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
 
+    // Establish healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
     bridge.handleNetworkHealthChange(isConnected: false)
 
-    let exp = Date().addingTimeInterval(0.1)
+    exp = Date().addingTimeInterval(0.1)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let msgs = mock.getAllSentMessages()
@@ -6789,8 +6794,13 @@ runTest("363. P0-B: Network path restoration emits exactly one Telegram alert") 
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
 
-    bridge.handleNetworkHealthChange(isConnected: false)
+    // Establish healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
     var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    bridge.handleNetworkHealthChange(isConnected: false)
+    exp = Date().addingTimeInterval(0.05)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     bridge.handleNetworkHealthChange(isConnected: true)
@@ -6809,11 +6819,16 @@ runTest("364. P0-B: Repeated same network status does not spam Telegram") {
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
 
+    // Establish healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
     bridge.handleNetworkHealthChange(isConnected: false)
     bridge.handleNetworkHealthChange(isConnected: false)
     bridge.handleNetworkHealthChange(isConnected: false)
 
-    let exp = Date().addingTimeInterval(0.1)
+    exp = Date().addingTimeInterval(0.1)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let msgs = mock.getAllSentMessages()
@@ -7212,9 +7227,14 @@ runTest("387. Monitor/network health alerts bypass completion mute") {
     EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
     ConfigManager.shared.setTelegramEnabled(true)
 
+    // Establish healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
     bridge.handleNetworkHealthChange(isConnected: false)
 
-    let exp = Date().addingTimeInterval(0.1)
+    exp = Date().addingTimeInterval(0.1)
     while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
 
     let msgs = mock.getAllSentMessages()
@@ -7727,29 +7747,280 @@ runTest("413. P0-B2: Resolved permission followed by normal tool execution clear
     try assert(sess4?.attentionReason == nil, "Attention reason must remain nil")
 }
 
-// 414. P0-B2: Two AGY sessions (one completed, one normal) do not produce Attention Needed from stale disk inference
-runTest("414. P0-B2: Two AGY sessions (one completed, one normal) do not produce Attention Needed from stale disk inference") {
-    let sessId1 = "agy_test_sess_comp_\(UUID().uuidString.prefix(8))"
-    let sessId2 = "agy_test_sess_active_\(UUID().uuidString.prefix(8))"
-    AgentStore.shared.syncSessions(for: .antigravity, activeSessions: [], processRunning: true)
+// 415. M2.1.1-A: Privilege status is cached and computeRenderSignature does not invoke synchronous subprocesses
+runTest("415. M2.1.1-A: Privilege status is cached and computeRenderSignature does not invoke synchronous subprocesses") {
+    SleepManager.shared.setCachedPrivilegeForTesting(hasPrivilege: true, detail: "Cached Sudo Privilege")
+    try assert(SleepManager.shared.cachedPrivilege.hasPrivilege == true)
+    try assert(SleepManager.shared.cachedPrivilege.detail == "Cached Sudo Privilege")
 
-    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
-        "event": "PreInvocation",
-        "session_id": sessId1
-    ], isTestMode: true)
-    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
-        "event": "Stop",
-        "session_id": sessId1
-    ], isTestMode: true)
-
-    _ = AgentStore.shared.handleAntigravityHookEvent(json: [
-        "event": "PreInvocation",
-        "session_id": sessId2
-    ], isTestMode: true)
-
-    let status = AgentStore.shared.getStatus(for: .antigravity)
-    try assert(status.status == .working, "Provider aggregate must be working, got \(status.status)")
-    try assert(status.effectiveDisplayStatus != .blocked, "Provider aggregate must NOT be blocked")
+    let sig = MenuBarManager.shared.computeRenderSignature()
+    try assert(!sig.isEmpty)
+    try assert(SleepManager.shared.isClosedLidModeEnabled == true)
 }
 
-print("🎉 All 414 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock & Antigravity Transcript Probe Tests Passed!")
+// 416. M2.1.1-B1: Network Health startup baseline healthy is silent
+runTest("416. M2.1.1-B1: Network Health startup baseline healthy is silent") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // Startup / initial baseline observation of healthy network
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.isEmpty, "Initial healthy network observation must be silent, got \(msgs.count)")
+}
+
+// 417. M2.1.1-B2: Network Health initial unavailable baseline does not produce restored notification on connect
+runTest("417. M2.1.1-B2: Network Health initial unavailable baseline does not produce restored notification on connect") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // Initial unavailable baseline at startup (e.g. offline on launch)
+    bridge.handleNetworkHealthChange(isConnected: false)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgsAfterDrop = mock.getAllSentMessages()
+    try assert(msgsAfterDrop.isEmpty, "Initial unavailable baseline at startup must be silent, got \(msgsAfterDrop.count)")
+
+    // Connecting afterwards must NOT send 'restored' since no unavailable alert was broadcast
+    bridge.handleNetworkHealthChange(isConnected: true)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgsAfterConnect = mock.getAllSentMessages()
+    try assert(msgsAfterConnect.isEmpty, "First connection after initial unavailable baseline must not send restored alert, got \(msgsAfterConnect.count)")
+}
+
+// 418. M2.1.1-B3: Network Health confirmed healthy -> unavailable -> healthy emits exactly one unavailable and one restored
+runTest("418. M2.1.1-B3: Network Health confirmed healthy -> unavailable -> healthy emits exactly one unavailable and one restored") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // 1. Initial healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().isEmpty)
+
+    // 2. Confirmed drop
+    bridge.handleNetworkHealthChange(isConnected: false)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    let dropMsgs = mock.getAllSentMessages()
+    try assert(dropMsgs.count == 1, "Expected 1 unavailable alert, got \(dropMsgs.count)")
+    try assert(dropMsgs[0].text.contains("🌐 AgentBridge connection unavailable"))
+
+    // 3. Confirmed recovery
+    bridge.handleNetworkHealthChange(isConnected: true)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    let restoreMsgs = mock.getAllSentMessages()
+    try assert(restoreMsgs.count == 2, "Expected 2 total alerts, got \(restoreMsgs.count)")
+    try assert(restoreMsgs[1].text.contains("✅ AgentBridge connection restored"))
+}
+
+// 419. M2.1.1-B4: Network Health repeated healthy observations do not spam
+runTest("419. M2.1.1-B4: Network Health repeated healthy observations do not spam") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    bridge.handleNetworkHealthChange(isConnected: true)
+    bridge.handleNetworkHealthChange(isConnected: true)
+    bridge.handleNetworkHealthChange(isConnected: true)
+
+    let exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Repeated healthy network calls must not send alerts")
+}
+
+// 420. M2.1.1-B5: ChatGPT Monitor Health startup baseline is silent
+runTest("420. M2.1.1-B5: ChatGPT Monitor Health startup baseline is silent") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // Startup initial observation
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    let msgs = mock.getAllSentMessages()
+    try assert(msgs.isEmpty, "Initial healthy ChatGPT monitor observation must be silent, got \(msgs.count)")
+}
+
+// 421. M2.1.1-B6: ChatGPT Monitor Health initial unavailable baseline does not produce restored notification
+runTest("421. M2.1.1-B6: ChatGPT Monitor Health initial unavailable baseline does not produce restored notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // Startup initial disconnected observation (no prior confirmed connected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .disconnected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Initial unavailable baseline must be silent")
+
+    // Extension connects afterwards -> silent
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "First connection after unannounced baseline must not send restored")
+}
+
+// 422. M2.1.1-B7: ChatGPT Monitor Health confirmed connected -> disconnected -> connected emits unavailable then restored
+runTest("422. M2.1.1-B7: ChatGPT Monitor Health confirmed connected -> disconnected -> connected emits unavailable then restored") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // 1. Establish confirmed healthy
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().isEmpty)
+
+    // 2. Extension drops
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    let msgs1 = mock.getAllSentMessages()
+    try assert(msgs1.count == 1, "Must send 1 unavailable alert")
+    try assert(msgs1[0].text.contains("ChatGPT Web monitoring unavailable"))
+
+    // 3. Extension reconnects
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    let msgs2 = mock.getAllSentMessages()
+    try assert(msgs2.count == 2, "Must send 1 restored alert")
+    try assert(msgs2[1].text.contains("ChatGPT Web monitoring restored"))
+}
+
+// 423. M2.1.1-C1: DONE transcript containing prior run_command returns .done (not working / not blocked)
+runTest("423. M2.1.1-C1: DONE transcript containing prior run_command returns .done (not working / not blocked)") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_test_c1_\(UUID().uuidString)")
+    let sessId = UUID().uuidString
+    let sessDir = tempDir.appendingPathComponent(sessId)
+    let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+    let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+    let lines = [
+        "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Please run tests\"}",
+        "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"swift test\"}}]}",
+        "{\"type\":\"GENERIC\",\"status\":\"DONE\",\"content\":\"Executed successfully\"}",
+        "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"content\":\"All tests passed!\"}"
+    ].joined(separator: "\n")
+    try lines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+    let res = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(res != nil, "Scan must find active conversation")
+    try assert(res?.status == .done, "DONE transcript ending in final assistant response must be .done, got \(String(describing: res?.status))")
+    try assert(res?.reason == nil, "Attention reason must be nil")
+}
+
+// 424. M2.1.1-C2: Transcript with explicit ask_question or WAITING_FOR_INPUT returns .blocked
+runTest("424. M2.1.1-C2: Transcript with explicit ask_question or WAITING_FOR_INPUT returns .blocked") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_test_c2_\(UUID().uuidString)")
+    let sessId = UUID().uuidString
+    let sessDir = tempDir.appendingPathComponent(sessId)
+    let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+    let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+    let lines = [
+        "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Deploy to prod?\"}",
+        "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"WAITING_FOR_INPUT\",\"tool_calls\":[{\"name\":\"ask_question\",\"args\":{\"questions\":[{\"question\":\"Confirm deploy?\"}]}}]}"
+    ].joined(separator: "\n")
+    try lines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+    let res = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(res != nil, "Scan must find active conversation")
+    try assert(res?.status == .blocked, "ask_question tool call must evaluate to .blocked, got \(String(describing: res?.status))")
+    try assert(res?.reason?.contains("ask_question") == true)
+}
+
+// 425. M2.1.1-C3: Transcript with explicit running/in-progress or active non-ask tool returns .working
+runTest("425. M2.1.1-C3: Transcript with explicit running/in-progress or active non-ask tool returns .working") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_test_c3_\(UUID().uuidString)")
+    let sessId = UUID().uuidString
+    let sessDir = tempDir.appendingPathComponent(sessId)
+    let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+    let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+    let lines = [
+        "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Build the app\"}",
+        "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"./build.sh\"}}]}"
+    ].joined(separator: "\n")
+    try lines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+    let res = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(res != nil, "Scan must find active conversation")
+    try assert(res?.status == .working, "Active non-ask tool invocation awaiting execution must evaluate to .working, got \(String(describing: res?.status))")
+}
+
+// 426. M2.1.1-C4: Transcript with insufficient explicit lifecycle evidence does not manufacture transition
+runTest("426. M2.1.1-C4: Transcript with insufficient explicit lifecycle evidence does not manufacture transition") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_test_c4_\(UUID().uuidString)")
+    let sessId = UUID().uuidString
+    let sessDir = tempDir.appendingPathComponent(sessId)
+    let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+    let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+    let lines = [
+        "{\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"content\":\"System checkpoint 0\"}"
+    ].joined(separator: "\n")
+    try lines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+    let res = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(res == nil, "Insufficient explicit lifecycle evidence must return nil rather than manufacturing a transition")
+}
+
+// 427. M2.1.1-C5: >120s elapsed time alone cannot force Working -> Idle
+runTest("427. M2.1.1-C5: >120s elapsed time alone cannot force Working -> Idle") {
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("agy_test_c5_\(UUID().uuidString)")
+    let sessId = UUID().uuidString
+    let sessDir = tempDir.appendingPathComponent(sessId)
+    let logsDir = sessDir.appendingPathComponent(".system_generated/logs")
+    try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+
+    let transcriptFile = logsDir.appendingPathComponent("transcript.jsonl")
+    let lines = [
+        "{\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"content\":\"Start long task\"}",
+        "{\"type\":\"PLANNER_RESPONSE\",\"status\":\"RUNNING\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"sleep 300\"}}]}"
+    ].joined(separator: "\n")
+    try lines.write(to: transcriptFile, atomically: true, encoding: .utf8)
+
+    // Set file modification date to 300 seconds ago (simulating 5 minutes of tool execution)
+    let pastDate = Date().addingTimeInterval(-300)
+    try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: sessDir.path)
+    try FileManager.default.setAttributes([.modificationDate: pastDate], ofItemAtPath: transcriptFile.path)
+
+    let res = AutoMonitor.shared.scanActiveAntigravityTranscript(brainDir: tempDir.path)
+    try assert(res != nil, "Scan must find active conversation within 2 hour boundary")
+    try assert(res?.status == .working, "Step marked RUNNING must remain .working even after >120s, got \(String(describing: res?.status))")
+}
+
+print("🎉 All 427 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications & Antigravity Evidence-Driven Fallback Tests Passed!")

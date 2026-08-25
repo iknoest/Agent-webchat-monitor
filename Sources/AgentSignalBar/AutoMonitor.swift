@@ -672,43 +672,47 @@ public final class AutoMonitor: @unchecked Sendable {
         }
 
         let stepType = json["type"] as? String ?? ""
+        let statusStr = (json["status"] as? String)?.uppercased() ?? ""
         let toolCalls = json["tool_calls"] as? [[String: Any]]
 
         let folderName = (active.path as NSString).lastPathComponent
         let title = "[\(folderName.prefix(8))]"
 
+        // 1. Explicit Permission Gate / Waiting for User Input -> Blocked
+        let hasAskQuestion = toolCalls?.contains { t in
+            (t["name"] as? String) == "ask_question"
+        } ?? false
+
+        if hasAskQuestion || statusStr == "WAITING_FOR_INPUT" || statusStr == "BLOCKED" {
+            return (active.id, title, .blocked, "Permission / Question gate (ask_question)", nil)
+        }
+
+        // 2. Explicit Running / In-Progress Evidence -> Working
+        if statusStr == "RUNNING" || statusStr == "IN_PROGRESS" {
+            return (active.id, title, .working, nil, nil)
+        }
+
+        if stepType == "USER_INPUT" {
+            return (active.id, title, .working, nil, nil)
+        }
+
+        if stepType == "GENERIC" {
+            // Tool execution output: runtime processing tool response / model continuing
+            return (active.id, title, .working, nil, nil)
+        }
+
+        // 3. Planner Response Handling
         if stepType == "PLANNER_RESPONSE" {
             if let tools = toolCalls, !tools.isEmpty {
-                // Check if tool is ask_question or permission gate
-                let hasAskQuestion = tools.contains { t in
-                    (t["name"] as? String) == "ask_question"
-                }
-                if hasAskQuestion {
-                    return (active.id, title, .blocked, "Permission / Question gate (ask_question)", nil)
-                }
-                let timeSinceMod = now.timeIntervalSince(active.modDate)
-                if timeSinceMod < 120.0 {
-                    return (active.id, title, .working, nil, nil)
-                } else {
-                    return (active.id, title, .idle, nil, nil)
-                }
-            } else {
-                let timeSinceMod = now.timeIntervalSince(active.modDate)
-                if timeSinceMod < 120.0 {
-                    return (active.id, title, .done, nil, timeSinceMod)
-                } else {
-                    return (active.id, title, .idle, nil, nil)
-                }
-            }
-        } else if stepType == "USER_INPUT" {
-            return (active.id, title, .working, nil, nil)
-        } else if stepType == "GENERIC" {
-            let timeSinceMod = now.timeIntervalSince(active.modDate)
-            if timeSinceMod < 60.0 {
+                // Non-ask_question tool invocation waiting on tool execution
                 return (active.id, title, .working, nil, nil)
+            } else if statusStr == "DONE" {
+                // Final turn output completed without active tools
+                return (active.id, title, .done, nil, nil)
             }
         }
 
+        // 4. Insufficient explicit lifecycle evidence -> do not manufacture transition
         return nil
     }
 
