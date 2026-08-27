@@ -2596,5 +2596,72 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertNotNil(largeOut)
         XCTAssertEqual(largeOut?.count, 150000)
     }
+
+    func testTelegramHealthDeliveryConfirmationAndSleepRebaseline() throws {
+        let mock = MockTelegramTransport()
+        let bridge = TelegramBridge(transport: mock)
+        EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+        ConfigManager.shared.setTelegramEnabled(true)
+        ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+        // 1. Initial healthy baseline
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+        var exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 0)
+
+        // 2. Failed unavailable send does NOT arm restored
+        mock.shouldFailSendMessage = true
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 0)
+
+        // Recovery after failed send -> zero restored messages
+        mock.shouldFailSendMessage = false
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 0)
+
+        // 3. Successful unavailable send arms restored
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 1)
+
+        bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+        exp = Date().addingTimeInterval(0.05)
+        while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(mock.getAllSentMessages().count, 2)
+
+        // 4. Sleep rebaseline preserves .connected
+        let store = AgentStore.shared
+        let baseTime = Date()
+        store.recordChatGPTHeartbeat(date: baseTime)
+        store.setHostSleeping(true, now: baseTime)
+        let wake = baseTime.addingTimeInterval(3600)
+        store.setHostSleeping(false, now: wake)
+        let health = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: wake.addingTimeInterval(1.0))
+        XCTAssertEqual(health, .connected)
+
+        // 5. Pre-existing outage survives sleep/wake without false restored alert
+        let outageTime = wake.addingTimeInterval(70)
+        let disconnectedHealth = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: outageTime)
+        XCTAssertEqual(disconnectedHealth, .disconnected)
+        store.setMonitorHealth(for: .chatgpt, health: .disconnected)
+
+        // Sleep and wake while already disconnected
+        store.setHostSleeping(true, now: outageTime.addingTimeInterval(10))
+        XCTAssertEqual(store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: outageTime.addingTimeInterval(300)), .disconnected)
+
+        let secondWake = outageTime.addingTimeInterval(1800)
+        store.setHostSleeping(false, now: secondWake)
+        XCTAssertEqual(store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: secondWake.addingTimeInterval(1.0)), .disconnected)
+
+        // Real heartbeat post-wake restores monitor
+        store.recordChatGPTHeartbeat(date: secondWake.addingTimeInterval(2.0))
+        XCTAssertEqual(store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: secondWake.addingTimeInterval(3.0)), .connected)
+    }
 }
 #endif

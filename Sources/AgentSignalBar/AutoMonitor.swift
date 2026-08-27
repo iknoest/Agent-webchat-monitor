@@ -107,6 +107,23 @@ public final class AutoMonitor: @unchecked Sendable {
 
     public func start() {
         NetworkHealthMonitor.shared.start()
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            AgentStore.shared.setHostSleeping(true)
+        }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            AgentStore.shared.setHostSleeping(false)
+        }
+
         DispatchQueue.main.async { [weak self] in
             self?.timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
                 DispatchQueue.global(qos: .utility).async {

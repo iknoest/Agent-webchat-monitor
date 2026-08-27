@@ -471,6 +471,37 @@ public final class AgentStore: @unchecked Sendable {
     private var appStartTime: Date = Date()
     public var startupGraceSeconds: TimeInterval = 60.0
     public var heartbeatLeaseSeconds: TimeInterval = 60.0
+    public private(set) var isHostSleeping: Bool = false
+
+    public func setHostSleeping(_ sleeping: Bool, now: Date = Date()) {
+        lock.lock()
+        isHostSleeping = sleeping
+        if !sleeping {
+            // Rebaseline only if the monitor was previously healthy
+            let currentHealth = states[.chatgpt]?.monitorHealth ?? .connected
+            if currentHealth != .disconnected {
+                if lastChatGPTHeartbeat != nil {
+                    lastChatGPTHeartbeat = now
+                } else {
+                    appStartTime = now
+                }
+            }
+        }
+        lock.unlock()
+    }
+
+    public func rebaselineChatGPTHeartbeat(now: Date = Date()) {
+        lock.lock()
+        let currentHealth = states[.chatgpt]?.monitorHealth ?? .connected
+        if currentHealth != .disconnected {
+            if lastChatGPTHeartbeat != nil {
+                lastChatGPTHeartbeat = now
+            } else {
+                appStartTime = now
+            }
+        }
+        lock.unlock()
+    }
 
     public func recordChatGPTHeartbeat(date: Date = Date()) {
         lock.lock()
@@ -497,6 +528,22 @@ public final class AgentStore: @unchecked Sendable {
         }
 
         guard isChromeRunning else {
+            return .connected
+        }
+
+        // If monitor is already disconnected, it MUST remain disconnected until a real heartbeat arrives
+        let currentHealth = states[.chatgpt]?.monitorHealth ?? .connected
+        if currentHealth == .disconnected {
+            if let lastHb = lastChatGPTHeartbeat, now.timeIntervalSince(lastHb) > heartbeatLeaseSeconds {
+                return .disconnected
+            }
+            if lastChatGPTHeartbeat == nil && now.timeIntervalSince(appStartTime) >= startupGraceSeconds {
+                return .disconnected
+            }
+        }
+
+        // Host sleep suspends expiry evaluation for healthy monitors
+        guard !isHostSleeping else {
             return .connected
         }
 

@@ -1603,3 +1603,52 @@ Next: Present repair report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] Bounded Repair for runProcessWithTimeout Resource Accumulation — antigravity — 2026-08-27T11:20:00+02:00
+
+## 2026-08-27 — antigravity — macos
+Status: DONE
+Phase: Telegram Health Notification Integrity + Sleep/Wake Semantics Repair
+Done:
+1. Delivery-Confirmed Telegram Health State Machine (`TelegramBridge.swift`):
+   - Transition to `.confirmedUnavailableAlertSent` (and subsequent arming of restored notification) strictly requires Telegram message send success (`res?.success == true`).
+   - Failed unavailable alerts (e.g. during sleep/offline) do NOT enter `.confirmedUnavailableAlertSent` or arm restored alerts, eliminating orphan restored spam.
+   - Added in-flight deduplication guards (`isChatGPTUnavailableInFlight`, `isChatGPTRestoredInFlight`, `isNetworkUnavailableInFlight`, `isNetworkRestoredInFlight`) preventing duplicate alert dispatches across rapid consecutive event triggers.
+2. Normal Sleep & DarkWake Heartbeat Lease Rebaselining (`AgentState.swift`, `AutoMonitor.swift`):
+   - Integrated native `NSWorkspace.willSleepNotification` and `NSWorkspace.didWakeNotification` into `AutoMonitor.swift` and `AgentStore.setHostSleeping`.
+   - Host sleep (including DarkWake) preserves `.connected` monitor health and does not accumulate wall-clock time as an outage.
+   - On wake / timer suspension gap (>5.0s), `rebaselineChatGPTHeartbeat` resets the lease starting time, giving a fresh 60s awake window without fabricating unavailable/restored transitions.
+   - Genuine awake-host heartbeat expiry (>60s) continues to produce `.disconnected` and triggers the delivery-confirmed alert lifecycle.
+3. Automated Verification & Test Coverage:
+   - Added Tests 447 to 454 in `Stage1TestRunner` (454/454 passed).
+   - Added `testTelegramHealthDeliveryConfirmationAndSleepRebaseline` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (454/454 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present repair report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] Telegram Health Notification Integrity + Sleep/Wake Semantics Repair — antigravity — 2026-08-27T15:48:00+02:00
+
+## 2026-08-28 — antigravity — macos
+Status: DONE
+Phase: Telegram Sleep-State Semantics Final Correction
+Done:
+1. Outage Preservation Across Sleep/Wake (`AgentState.swift`):
+   - Fixed `setHostSleeping` and `rebaselineChatGPTHeartbeat` to rebaseline the lease ONLY when monitor was previously healthy.
+   - Preserved `.disconnected` monitor health and armed unavailable state through host sleep and wake; sleep/wake cannot fabricate a `.connected` transition when already disconnected.
+   - Enforced that only a real subsequent `recordChatGPTHeartbeat()` can resolve a pre-existing disconnected outage.
+2. Removed Arbitrary Polling-Gap Rebaseline (`AutoMonitor.swift`):
+   - Completely removed `elapsedSinceLastPoll > 5.0` timer-gap heuristic from `checkAllAgents()`.
+   - Host sleep/wake transitions are derived strictly and authoritatively from `NSWorkspace.willSleepNotification` and `NSWorkspace.didWakeNotification`.
+   - Awake-host scheduling delays no longer erase heartbeat age or delay the 60s outage threshold.
+3. Deterministic Automated Verification:
+   - Added Tests 455 and 456 in `Stage1TestRunner` covering pre-existing outage survival through sleep/wake and awake scheduling delay integrity (456/456 passed).
+   - Updated `testTelegramHealthDeliveryConfirmationAndSleepRebaseline` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (456/456 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present final repair report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] Telegram Sleep-State Semantics Final Correction — antigravity — 2026-08-28T10:14:00+02:00

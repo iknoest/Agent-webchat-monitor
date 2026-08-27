@@ -8402,4 +8402,285 @@ runTest("446. Subprocess Execution: Real sqlite3 and ps commands execute behavio
     try assert(sqlOut == "42", "sqlite3 in-memory query must return 42, got: \(String(describing: sqlOut))")
 }
 
-print("🎉 All 446 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation & Subprocess Non-Blocking Worker Reaping Tests Passed!")
+// 447. Telegram Health: ChatGPT unavailable send failure does NOT arm restored notification
+runTest("447. Telegram Health: ChatGPT unavailable send failure does NOT arm restored notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // 1. Establish confirmed healthy
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().isEmpty)
+
+    // 2. Drop occurs while offline (send fails)
+    mock.shouldFailSendMessage = true
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // No message delivered successfully
+    try assert(mock.getAllSentMessages().isEmpty, "Failed unavailable send must produce zero delivered messages")
+
+    // 3. Health recovers when connectivity returns
+    mock.shouldFailSendMessage = false
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // Must NOT emit orphan restored!
+    try assert(mock.getAllSentMessages().isEmpty, "Recovery after unconfirmed unavailable send must NOT emit orphan restored alert")
+}
+
+// 448. Telegram Health: ChatGPT unavailable send success arms exactly one restored notification
+runTest("448. Telegram Health: ChatGPT unavailable send success arms exactly one restored notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // 1. Establish confirmed healthy
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // 2. Disconnect succeeds in delivering unavailable alert
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 1, "Unavailable alert must be delivered")
+    try assert(mock.getAllSentMessages()[0].text.contains("ChatGPT Web monitoring unavailable"))
+
+    // 3. Connect succeeds in delivering restored alert
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 2, "Restored alert must be delivered once")
+    try assert(mock.getAllSentMessages()[1].text.contains("ChatGPT Web monitoring restored"))
+}
+
+// 449. Telegram Health: Repeated healthy transitions do not duplicate restored alert
+runTest("449. Telegram Health: Repeated healthy transitions do not duplicate restored alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // 1. Cycle healthy -> unavailable -> healthy
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 2)
+
+    // 2. Subsequent repeated connected calls
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 2, "Repeated healthy calls must never duplicate restored alerts")
+}
+
+// 450. Telegram Health: Network unavailable send failure does NOT produce orphan restored alert
+runTest("450. Telegram Health: Network unavailable send failure does NOT produce orphan restored alert") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+
+    // 1. Initial healthy baseline
+    bridge.handleNetworkHealthChange(isConnected: true)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // 2. Network drops, send fails
+    mock.shouldFailSendMessage = true
+    bridge.handleNetworkHealthChange(isConnected: false)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().isEmpty)
+
+    // 3. Network returns
+    mock.shouldFailSendMessage = false
+    bridge.handleNetworkHealthChange(isConnected: true)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().isEmpty, "Failed network unavailable send must NOT produce orphan restored alert")
+}
+
+// 451. Sleep/Wake: Normal sleep lifecycle prevents false ChatGPT monitor outage
+runTest("451. Sleep/Wake: Normal sleep lifecycle prevents false ChatGPT monitor outage") {
+    let store = AgentStore.shared
+    let baseTime = Date()
+    store.recordChatGPTHeartbeat(date: baseTime)
+
+    // Simulate 120 seconds passing while host is asleep
+    store.setHostSleeping(true, now: baseTime.addingTimeInterval(10))
+    let healthDuringSleep = store.checkChatGPTMonitorHealth(
+        isChromeRunning: true,
+        isMonitored: true,
+        now: baseTime.addingTimeInterval(120)
+    )
+    try assert(healthDuringSleep == .connected, "Monitor health during normal host sleep must remain .connected, got: \(healthDuringSleep)")
+
+    // Clean up
+    store.setHostSleeping(false, now: baseTime.addingTimeInterval(120))
+}
+
+// 452. Sleep/Wake: Wake and rebaseline alone does not fabricate restored or unavailable
+runTest("452. Sleep/Wake: Wake and rebaseline alone does not fabricate restored or unavailable") {
+    let store = AgentStore.shared
+    let baseTime = Date()
+    store.recordChatGPTHeartbeat(date: baseTime)
+
+    // Sleep for 30 minutes
+    store.setHostSleeping(true, now: baseTime)
+    let wakeTime = baseTime.addingTimeInterval(1800)
+    store.setHostSleeping(false, now: wakeTime)
+
+    // Immediately after waking, health is checked
+    let healthAtWake = store.checkChatGPTMonitorHealth(
+        isChromeRunning: true,
+        isMonitored: true,
+        now: wakeTime.addingTimeInterval(1.0)
+    )
+    try assert(healthAtWake == .connected, "Monitor health immediately after wake must remain .connected due to rebaselined lease, got: \(healthAtWake)")
+}
+
+// 453. Sleep/Wake: Genuine awake-host heartbeat expiry still produces unavailable
+runTest("453. Sleep/Wake: Genuine awake-host heartbeat expiry still produces unavailable") {
+    let store = AgentStore.shared
+    let baseTime = Date()
+    store.setHostSleeping(false, now: baseTime)
+    store.recordChatGPTHeartbeat(date: baseTime)
+
+    // Host remains awake, but 65s elapse with no new heartbeat (> 60s lease)
+    let expiredTime = baseTime.addingTimeInterval(65)
+    let healthExpired = store.checkChatGPTMonitorHealth(
+        isChromeRunning: true,
+        isMonitored: true,
+        now: expiredTime
+    )
+    try assert(healthExpired == .disconnected, "Heartbeat expiry while awake must return .disconnected, got: \(healthExpired)")
+}
+
+// 454. Sleep/Wake: Genuine recovery following successfully notified awake outage emits exactly one restored
+runTest("454. Sleep/Wake: Genuine recovery following successfully notified awake outage emits exactly one restored") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    // 1. Initial healthy state
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    // 2. Real awake outage occurs
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 1)
+    try assert(mock.getAllSentMessages()[0].text.contains("⚠️ ChatGPT Web monitoring unavailable"))
+
+    // 3. Heartbeat resumes
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 2)
+    try assert(mock.getAllSentMessages()[1].text.contains("✅ ChatGPT Web monitoring restored"))
+}
+
+// 455. Sleep/Wake: Pre-existing real outage survives sleep/wake without false restored notification
+runTest("455. Sleep/Wake: Pre-existing real outage survives sleep/wake without false restored notification") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
+
+    let store = AgentStore.shared
+    let baseTime = Date()
+    store.setHostSleeping(false, now: baseTime)
+    store.recordChatGPTHeartbeat(date: baseTime)
+
+    // 1. Initial healthy state established
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .starting, newHealth: .connected)
+    var exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().isEmpty)
+
+    // 2. Real outage occurs while awake (>60s)
+    let outageTime = baseTime.addingTimeInterval(70)
+    let healthOutage = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: outageTime)
+    try assert(healthOutage == .disconnected, "Monitor must be .disconnected after 70s without heartbeat")
+
+    store.setMonitorHealth(for: .chatgpt, health: .disconnected)
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .connected, newHealth: .disconnected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 1, "Unavailable alert must be delivered")
+    try assert(mock.getAllSentMessages()[0].text.contains("ChatGPT Web monitoring unavailable"))
+
+    // 3. Mac goes to sleep and then wakes up (NO new Chrome heartbeat has arrived)
+    store.setHostSleeping(true, now: outageTime.addingTimeInterval(10))
+    let sleepHealth = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: outageTime.addingTimeInterval(300))
+    try assert(sleepHealth == .disconnected, "Already-disconnected monitor must remain .disconnected during sleep")
+
+    let wakeTime = outageTime.addingTimeInterval(1800)
+    store.setHostSleeping(false, now: wakeTime)
+
+    // 4. Post-wake evaluation (still no heartbeat from Chrome)
+    let postWakeHealth = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: wakeTime.addingTimeInterval(1.0))
+    try assert(postWakeHealth == .disconnected, "Monitor must REMAIN .disconnected after wake when no new heartbeat exists")
+
+    store.setMonitorHealth(for: .chatgpt, health: postWakeHealth)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    try assert(mock.getAllSentMessages().count == 1, "Sleep and wake MUST NOT emit false restored notification")
+
+    // 5. Genuine Chrome heartbeat finally arrives after wake
+    store.recordChatGPTHeartbeat(date: wakeTime.addingTimeInterval(5.0))
+    bridge.handleChatGPTMonitorHealthChange(oldHealth: .disconnected, newHealth: .connected)
+    exp = Date().addingTimeInterval(0.05)
+    while Date() < exp { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+
+    try assert(mock.getAllSentMessages().count == 2, "Real heartbeat post-wake must emit exactly one restored notification")
+    try assert(mock.getAllSentMessages()[1].text.contains("ChatGPT Web monitoring restored"))
+}
+
+// 456. Sleep/Wake: Awake scheduling delay does NOT erase heartbeat age or delay 60s threshold
+runTest("456. Sleep/Wake: Awake scheduling delay does NOT erase heartbeat age or delay 60s threshold") {
+    let store = AgentStore.shared
+    let baseTime = Date()
+    store.setHostSleeping(false, now: baseTime)
+    store.recordChatGPTHeartbeat(date: baseTime)
+
+    // Simulate 30s elapsed while awake
+    let t30 = baseTime.addingTimeInterval(30)
+    let health30 = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: t30)
+    try assert(health30 == .connected, "At 30s monitor must still be connected (< 60s)")
+
+    // Simulate an awake polling delay (no sleep/wake events occur)
+    // At T=65, the original heartbeat from baseTime must expire without being erased
+    let t65 = baseTime.addingTimeInterval(65)
+    let health65 = store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: t65)
+    try assert(health65 == .disconnected, "Heartbeat must expire at 65s without being reset by awake timer delays")
+}
+
+print("🎉 All 456 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation & Sleep Outage Preservation Tests Passed!")

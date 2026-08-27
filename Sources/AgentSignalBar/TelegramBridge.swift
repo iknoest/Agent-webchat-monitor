@@ -21,6 +21,10 @@ public final class TelegramBridge: @unchecked Sendable {
 
     private var networkNotificationState: HealthAlertLifecycleState = .unobserved
     private var chatgptNotificationState: HealthAlertLifecycleState = .unobserved
+    private var isChatGPTUnavailableInFlight: Bool = false
+    private var isChatGPTRestoredInFlight: Bool = false
+    private var isNetworkUnavailableInFlight: Bool = false
+    private var isNetworkRestoredInFlight: Bool = false
 
     public var currentNetworkNotificationState: HealthAlertLifecycleState {
         lock.lock()
@@ -361,42 +365,52 @@ public final class TelegramBridge: @unchecked Sendable {
         guard oldHealth != newHealth else { return }
 
         var alertToSend: String? = nil
+        var isUnavailableAlert = false
+        var isRestoredAlert = false
 
         lock.lock()
         if newHealth == .connected {
+            isChatGPTUnavailableInFlight = false
             switch chatgptNotificationState {
             case .unobserved, .initialUnavailable:
                 // Initial baseline observation or initial unannounced baseline -> silent
                 chatgptNotificationState = .confirmedHealthy
             case .confirmedUnavailableAlertSent:
-                // Confirmed unavailable episode -> confirmed healthy: send restored once
-                chatgptNotificationState = .confirmedHealthy
+                // Confirmed unavailable episode -> confirmed healthy: dispatch restored once
+                guard !isChatGPTRestoredInFlight else { break }
+                isChatGPTRestoredInFlight = true
                 alertToSend = """
                 ✅ ChatGPT Web monitoring restored
                 """
+                isRestoredAlert = true
             case .confirmedHealthy:
                 break
             }
         } else if newHealth == .disconnected {
+            isChatGPTRestoredInFlight = false
             switch chatgptNotificationState {
             case .unobserved:
                 if oldHealth == .connected {
-                    // Explicit transition from previously confirmed connected -> send unavailable once
-                    chatgptNotificationState = .confirmedUnavailableAlertSent
+                    // Explicit transition from previously confirmed connected -> dispatch unavailable once
+                    guard !isChatGPTUnavailableInFlight else { break }
+                    isChatGPTUnavailableInFlight = true
                     alertToSend = """
                     ⚠️ ChatGPT Web monitoring unavailable
                     Chrome extension is not connected
                     """
+                    isUnavailableAlert = true
                 } else {
                     // Initial unavailable observation without confirmed healthy -> silent
                     chatgptNotificationState = .initialUnavailable
                 }
             case .confirmedHealthy:
-                chatgptNotificationState = .confirmedUnavailableAlertSent
+                guard !isChatGPTUnavailableInFlight else { break }
+                isChatGPTUnavailableInFlight = true
                 alertToSend = """
                 ⚠️ ChatGPT Web monitoring unavailable
                 Chrome extension is not connected
                 """
+                isUnavailableAlert = true
             case .initialUnavailable, .confirmedUnavailableAlertSent:
                 break
             }
@@ -418,6 +432,31 @@ public final class TelegramBridge: @unchecked Sendable {
             if let res = res {
                 self.lastDeliveryResult = res
             }
+
+            let sendSuccess = (res?.success == true)
+            self.lock.lock()
+            if isUnavailableAlert {
+                self.isChatGPTUnavailableInFlight = false
+                if sendSuccess {
+                    // Delivery confirmed: arm future restored alert ONLY upon successful delivery
+                    self.chatgptNotificationState = .confirmedUnavailableAlertSent
+                } else {
+                    // Delivery failed (e.g. offline during sleep): do NOT arm restored alert
+                    if self.chatgptNotificationState != .confirmedUnavailableAlertSent {
+                        self.chatgptNotificationState = .confirmedHealthy
+                    }
+                }
+            } else if isRestoredAlert {
+                self.isChatGPTRestoredInFlight = false
+                if sendSuccess {
+                    // Restored successfully delivered: disarm state back to confirmedHealthy
+                    self.chatgptNotificationState = .confirmedHealthy
+                } else {
+                    // Restored delivery failed: keep confirmedUnavailableAlertSent to allow retry on next connected event
+                    self.chatgptNotificationState = .confirmedUnavailableAlertSent
+                }
+            }
+            self.lock.unlock()
         }
     }
 
@@ -428,30 +467,38 @@ public final class TelegramBridge: @unchecked Sendable {
         guard config.isConfigured else { return }
 
         var alertToSend: String? = nil
+        var isUnavailableAlert = false
+        var isRestoredAlert = false
 
         lock.lock()
         if isConnected {
+            isNetworkUnavailableInFlight = false
             switch networkNotificationState {
             case .unobserved, .initialUnavailable:
                 // Initial baseline observation or initial unannounced baseline -> silent
                 networkNotificationState = .confirmedHealthy
             case .confirmedUnavailableAlertSent:
-                // Confirmed unavailable episode -> confirmed healthy: send restored once
-                networkNotificationState = .confirmedHealthy
+                // Confirmed unavailable episode -> confirmed healthy: dispatch restored once
+                guard !isNetworkRestoredInFlight else { break }
+                isNetworkRestoredInFlight = true
                 alertToSend = "✅ AgentBridge connection restored"
+                isRestoredAlert = true
             case .confirmedHealthy:
                 // Repeated healthy -> no spam
                 break
             }
         } else {
+            isNetworkRestoredInFlight = false
             switch networkNotificationState {
             case .unobserved:
                 // Startup / initial baseline observation of unavailable -> silent
                 networkNotificationState = .initialUnavailable
             case .confirmedHealthy:
-                // Confirmed healthy -> confirmed unavailable: send unavailable once
-                networkNotificationState = .confirmedUnavailableAlertSent
+                // Confirmed healthy -> confirmed unavailable: dispatch unavailable once
+                guard !isNetworkUnavailableInFlight else { break }
+                isNetworkUnavailableInFlight = true
                 alertToSend = "🌐 AgentBridge connection unavailable"
+                isUnavailableAlert = true
             case .initialUnavailable, .confirmedUnavailableAlertSent:
                 // Repeated unavailable -> no spam
                 break
@@ -472,6 +519,31 @@ public final class TelegramBridge: @unchecked Sendable {
             if let res = res {
                 self.lastDeliveryResult = res
             }
+
+            let sendSuccess = (res?.success == true)
+            self.lock.lock()
+            if isUnavailableAlert {
+                self.isNetworkUnavailableInFlight = false
+                if sendSuccess {
+                    // Delivery confirmed: arm future restored alert ONLY upon successful delivery
+                    self.networkNotificationState = .confirmedUnavailableAlertSent
+                } else {
+                    // Delivery failed (e.g. offline): do NOT arm restored alert
+                    if self.networkNotificationState != .confirmedUnavailableAlertSent {
+                        self.networkNotificationState = .confirmedHealthy
+                    }
+                }
+            } else if isRestoredAlert {
+                self.isNetworkRestoredInFlight = false
+                if sendSuccess {
+                    // Restored successfully delivered: disarm state back to confirmedHealthy
+                    self.networkNotificationState = .confirmedHealthy
+                } else {
+                    // Restored delivery failed: keep confirmedUnavailableAlertSent to allow retry
+                    self.networkNotificationState = .confirmedUnavailableAlertSent
+                }
+            }
+            self.lock.unlock()
         }
     }
 
