@@ -2551,5 +2551,50 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertNotEqual(defaultURL.path, prodPath)
         XCTAssertTrue(defaultURL.path.contains("AgentSignalBarTest_projects_"))
     }
+
+    func testSubprocessNonBlockingRepeatedExecutionAndReaping() throws {
+        let monitor = AutoMonitor.shared
+        monitor.resetProcessTracking()
+
+        // 1. Repeated 30 successful executions with clean reaping
+        for i in 1...30 {
+            let out = monitor.runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "echo xctest_iter_\(i)"],
+                timeoutSeconds: 1.0
+            )
+            XCTAssertEqual(out, "xctest_iter_\(i)")
+            XCTAssertTrue(monitor.lastSubprocessConfirmedReaped)
+            XCTAssertNil(monitor.unresolvedProcessPID)
+            let pid = monitor.lastSubprocessPID!
+            XCTAssertNotEqual(kill(pid, 0), 0)
+        }
+
+        // 2. Repeated 10 timeouts bounded with child killed
+        let t0 = Date()
+        for _ in 1...10 {
+            let out = monitor.runProcessWithTimeout(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "sleep 5"],
+                timeoutSeconds: 0.05
+            )
+            XCTAssertNil(out)
+            XCTAssertTrue(monitor.lastSubprocessConfirmedReaped)
+            XCTAssertNil(monitor.unresolvedProcessPID)
+            let pid = monitor.lastSubprocessPID!
+            XCTAssertNotEqual(kill(pid, 0), 0)
+        }
+        let elapsed = Date().timeIntervalSince(t0)
+        XCTAssertLessThan(elapsed, 5.0)
+
+        // 3. Large stdout streaming (>150 KB)
+        let largeOut = monitor.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "python3 -c \"import sys; sys.stdout.write('Z' * 150000)\""],
+            timeoutSeconds: 2.0
+        )
+        XCTAssertNotNil(largeOut)
+        XCTAssertEqual(largeOut?.count, 150000)
+    }
 }
 #endif

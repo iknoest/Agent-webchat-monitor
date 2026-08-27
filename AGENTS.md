@@ -1576,3 +1576,30 @@ Parked: Codex natural human acceptance parked pending natural usage.
 Next: Present M3.1 completion report to Ava and await approval before M3.2.
 
 [RELEASE] M3.1 Local Folder Canonical Project Identity & Config Storage Foundation — antigravity — 2026-08-25T15:30:00+02:00
+
+## 2026-08-27 — antigravity — macos
+Status: DONE
+Phase: Bounded Repair for runProcessWithTimeout Resource Accumulation
+Done:
+1. Eliminated Subprocess Worker Thread Leak:
+   - Refactored `runProcessWithTimeout` in `AutoMonitor.swift` to use `task.terminationHandler` and `pipe.fileHandleForReading.readabilityHandler`.
+   - Completely removed all blocking `DispatchQueue.global.async { task.waitUntilExit() }` and `readDataToEndOfFile()` worker dispatches.
+   - Guaranteed zero worker threads accumulate in GCD global thread pools across repeated timeouts, subprocess exits, or rapid polling loops.
+2. Bounded Reaping & Unreaped Containment:
+   - Preserved graceful SIGTERM with bounded wait and fallback to SIGKILL.
+   - Process death/reaping verified deterministically with non-blocking `waitpid(pid, &status, WNOHANG)` and `kill(pid, 0)`.
+   - Preserved `unresolvedProcessPID` containment guard blocking new spawns until dead.
+3. Stream Draining & Output Correctness:
+   - Preserved complete stdout capture and stderr buffer draining via `readabilityHandler` + final EOF read, eliminating pipe buffer deadlocks on >100KB outputs.
+   - Real `sqlite3` and `ps` queries continue to execute behaviorally intact.
+4. Deterministic Automated Verification:
+   - Added Tests 441 to 446 in `Stage1TestRunner` covering 50 repeated successful executions, 20 repeated timeouts, large stdout/stderr streaming (>140KB), unresolved blocking guard, and real query execution (446/446 passed).
+   - Added unit test `testSubprocessNonBlockingRepeatedExecutionAndReaping` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (446/446 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present repair report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] Bounded Repair for runProcessWithTimeout Resource Accumulation — antigravity — 2026-08-27T11:20:00+02:00

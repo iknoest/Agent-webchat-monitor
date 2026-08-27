@@ -8297,4 +8297,109 @@ runTest("440. M3.1: Thread-safe concurrent access to ProjectRegistry") {
     try? FileManager.default.removeItem(at: storageURL)
 }
 
-print("🎉 All 440 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback & M3.1 Project Registry Foundation Tests Passed!")
+// 441. Subprocess Zero-Worker Leak: Repeated 50 successful executions complete with clean PID reaping
+runTest("441. Subprocess Zero-Worker Leak: Repeated 50 successful executions complete with clean PID reaping") {
+    let monitor = AutoMonitor.shared
+    monitor.resetProcessTracking()
+
+    for i in 1...50 {
+        let out = monitor.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "echo iter_\(i)"],
+            timeoutSeconds: 1.0
+        )
+        try assert(out == "iter_\(i)", "Iteration \(i) must return exact echo output, got: \(String(describing: out))")
+        try assert(monitor.lastSubprocessConfirmedReaped == true, "Iteration \(i) must be confirmed reaped")
+        try assert(monitor.unresolvedProcessPID == nil, "Iteration \(i) must leave no unresolved PID")
+        let pid = monitor.lastSubprocessPID!
+        try assert(kill(pid, 0) != 0, "PID \(pid) must be dead after iteration \(i)")
+    }
+}
+
+// 442. Subprocess Zero-Worker Leak: Repeated 20 timeouts complete boundedly with clean child reaping
+runTest("442. Subprocess Zero-Worker Leak: Repeated 20 timeouts complete boundedly with clean child reaping") {
+    let monitor = AutoMonitor.shared
+    monitor.resetProcessTracking()
+
+    let t0 = Date()
+    for i in 1...20 {
+        let out = monitor.runProcessWithTimeout(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "sleep 10"],
+            timeoutSeconds: 0.05
+        )
+        try assert(out == nil, "Timed out iteration \(i) must return nil")
+        try assert(monitor.lastSubprocessConfirmedReaped == true, "Iteration \(i) must be confirmed reaped after timeout")
+        try assert(monitor.unresolvedProcessPID == nil, "Iteration \(i) must leave no unresolved PID")
+        let pid = monitor.lastSubprocessPID!
+        try assert(kill(pid, 0) != 0, "Timed out PID \(pid) must be killed and reaped")
+    }
+    let totalElapsed = Date().timeIntervalSince(t0)
+    try assert(totalElapsed < 10.0, "20 timeouts of 0.05s must finish well under 10.0s total, took: \(totalElapsed)s")
+}
+
+// 443. Subprocess Stream Draining: Large stdout (>140 KB) streams completely without pipe buffer hang
+runTest("443. Subprocess Stream Draining: Large stdout (>140 KB) streams completely without pipe buffer hang") {
+    let monitor = AutoMonitor.shared
+    let output = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "python3 -c \"import sys; sys.stdout.write('X' * 150000)\""],
+        timeoutSeconds: 2.0
+    )
+    try assert(output != nil, "Large output must not be nil")
+    try assert(output?.count == 150000, "Large output must have exact 150,000 bytes, got: \(output?.count ?? 0)")
+}
+
+// 444. Subprocess Stream Draining: Large stderr (>140 KB) with stdout completes without buffer deadlock
+runTest("444. Subprocess Stream Draining: Large stderr (>140 KB) with stdout completes without buffer deadlock") {
+    let monitor = AutoMonitor.shared
+    let output = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "python3 -c \"import sys; sys.stderr.write('Y' * 150000); sys.stdout.write('STDERR_DRAINED')\""],
+        timeoutSeconds: 2.0
+    )
+    try assert(output == "STDERR_DRAINED", "Output must match expected string when large stderr is drained")
+}
+
+// 445. Subprocess Lifecycle: Unresolved process blocks spawn and resumes after clear
+runTest("445. Subprocess Lifecycle: Unresolved process blocks spawn and resumes after clear") {
+    let monitor = AutoMonitor.shared
+    monitor.resetProcessTracking()
+
+    monitor.setUnresolvedProcessPIDForTesting(ProcessInfo.processInfo.processIdentifier)
+    let blocked = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/echo"),
+        arguments: ["test_blocked"],
+        timeoutSeconds: 0.5
+    )
+    try assert(blocked == nil, "Must return nil when unresolved process exists")
+    try assert(monitor.processSpawnBlockedCount >= 1, "Spawn blocked count must increment")
+
+    monitor.setUnresolvedProcessPIDForTesting(nil)
+    let resumed = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/echo"),
+        arguments: ["test_resumed"],
+        timeoutSeconds: 0.5
+    )
+    try assert(resumed == "test_resumed", "Must resume launch once unresolved PID is cleared")
+}
+
+// 446. Subprocess Execution: Real sqlite3 and ps commands execute behaviorally intact
+runTest("446. Subprocess Execution: Real sqlite3 and ps commands execute behaviorally intact") {
+    let monitor = AutoMonitor.shared
+    let psOut = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/bin/ps"),
+        arguments: ["-p", "\(ProcessInfo.processInfo.processIdentifier)", "-o", "pid="],
+        timeoutSeconds: 1.0
+    )
+    try assert(psOut?.trimmingCharacters(in: .whitespaces) == "\(ProcessInfo.processInfo.processIdentifier)", "ps command must return current PID")
+
+    let sqlOut = monitor.runProcessWithTimeout(
+        executableURL: URL(fileURLWithPath: "/usr/bin/sqlite3"),
+        arguments: [":memory:", "SELECT 42 AS answer;"],
+        timeoutSeconds: 1.0
+    )
+    try assert(sqlOut == "42", "sqlite3 in-memory query must return 42, got: \(String(describing: sqlOut))")
+}
+
+print("🎉 All 446 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation & Subprocess Non-Blocking Worker Reaping Tests Passed!")

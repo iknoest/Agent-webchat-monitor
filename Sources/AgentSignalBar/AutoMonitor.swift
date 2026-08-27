@@ -196,15 +196,15 @@ public final class AutoMonitor: @unchecked Sendable {
         processLock.lock()
         if let unPID = unresolvedProcessPID {
             // Check if previously unreaped process has now exited
-            if unPID > 0 && kill(unPID, 0) != 0 {
-                // Previously unreaped process has now exited! Clear unresolved state
-                unresolvedProcessPID = nil
-            } else {
+            if unPID > 0 && kill(unPID, 0) == 0 {
                 // Previously spawned process remains unreaped/unconfirmed! Block new process launch
                 processSpawnBlockedCount += 1
                 processLock.unlock()
                 print("⚠️ Subprocess launch blocked: Previous PID \(unPID) remains unreaped.")
                 return nil
+            } else {
+                // Previously unreaped process has now exited! Clear unresolved state
+                unresolvedProcessPID = nil
             }
         }
         processLock.unlock()
@@ -218,9 +218,50 @@ public final class AutoMonitor: @unchecked Sendable {
         task.standardOutput = stdoutPipe
         task.standardError = stderrPipe
 
+        var stdoutData = Data()
+        var stderrData = Data()
+        let dataLock = NSLock()
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                dataLock.lock()
+                stdoutData.append(chunk)
+                dataLock.unlock()
+            }
+        }
+
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if !chunk.isEmpty {
+                dataLock.lock()
+                stderrData.append(chunk)
+                dataLock.unlock()
+            }
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var isDone = false
+        let doneLock = NSLock()
+
+        task.terminationHandler = { _ in
+            doneLock.lock()
+            if !isDone {
+                isDone = true
+                doneLock.unlock()
+                semaphore.signal()
+            } else {
+                doneLock.unlock()
+            }
+        }
+
         do {
             try task.run()
         } catch {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            try? stdoutPipe.fileHandleForReading.close()
+            try? stderrPipe.fileHandleForReading.close()
             return nil
         }
 
@@ -230,83 +271,94 @@ public final class AutoMonitor: @unchecked Sendable {
         lastSubprocessConfirmedReaped = false
         processLock.unlock()
 
-        var stdoutData = Data()
-        var stderrData = Data()
+        let waitResult = semaphore.wait(timeout: .now() + timeoutSeconds)
 
-        let ioGroup = DispatchGroup()
+        if waitResult == .timedOut {
+            doneLock.lock()
+            isDone = true
+            doneLock.unlock()
 
-        ioGroup.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            ioGroup.leave()
-        }
-
-        ioGroup.enter()
-        DispatchQueue.global(qos: .utility).async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            ioGroup.leave()
-        }
-
-        let semaphore = DispatchSemaphore(value: 0)
-
-        // SINGLE background exit waiter
-        DispatchQueue.global(qos: .utility).async {
-            task.waitUntilExit()
-            semaphore.signal()
-        }
-
-        // 1. Initial bounded wait
-        if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
-            task.terminate() // Send SIGTERM
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
             try? stdoutPipe.fileHandleForReading.close()
             try? stderrPipe.fileHandleForReading.close()
+            task.terminationHandler = nil
+
+            task.terminate() // Send SIGTERM
 
             let sigtermTimeout = overrideSigtermWaitTimeoutSeconds ?? 0.2
-            // 2. Bounded wait on the SAME semaphore
-            if semaphore.wait(timeout: .now() + sigtermTimeout) == .timedOut {
-                if pid > 0 {
-                    kill(pid, SIGKILL)
-                }
+            let sigtermStart = Date()
+            var isExited = false
 
-                let finalTimeout = overrideFinalWaitTimeoutSeconds ?? 0.5
-                // 3. Final bounded wait on the SAME semaphore with EXPLICIT result handling
-                let reapWaitResult = semaphore.wait(timeout: .now() + finalTimeout)
-                let reapResult = (overrideFinalWaitResult == false) ? .timedOut : reapWaitResult
-                processLock.lock()
-                if reapResult == .success {
-                    lastSubprocessConfirmedReaped = true
-                    unresolvedProcessPID = nil
-                    processLock.unlock()
-                    print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and was confirmed terminated/reaped.")
-                } else {
-                    lastSubprocessConfirmedReaped = false
-                    unresolvedProcessPID = pid
-                    processLock.unlock()
-                    print("❌ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) failed to exit after SIGKILL (unresolved/unreaped).")
+            while Date().timeIntervalSince(sigtermStart) < sigtermTimeout {
+                var status: Int32 = 0
+                let wp = waitpid(pid, &status, WNOHANG)
+                if wp == pid || wp == -1 || kill(pid, 0) != 0 {
+                    isExited = true
+                    break
                 }
-            } else {
-                processLock.lock()
+                usleep(10000) // 10ms
+            }
+
+            if !isExited && pid > 0 {
+                kill(pid, SIGKILL)
+                let finalTimeout = overrideFinalWaitTimeoutSeconds ?? 0.5
+                let killStart = Date()
+                while Date().timeIntervalSince(killStart) < finalTimeout {
+                    var status: Int32 = 0
+                    let wp = waitpid(pid, &status, WNOHANG)
+                    if wp == pid || wp == -1 || kill(pid, 0) != 0 {
+                        isExited = true
+                        break
+                    }
+                    usleep(10000) // 10ms
+                }
+            }
+
+            let reapResult = (overrideFinalWaitResult == false) ? false : isExited
+            processLock.lock()
+            if reapResult {
                 lastSubprocessConfirmedReaped = true
                 unresolvedProcessPID = nil
                 processLock.unlock()
-                print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and terminated gracefully upon SIGTERM.")
+                print("⚠️ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) timed out after \(timeoutSeconds)s and was confirmed terminated/reaped.")
+            } else {
+                lastSubprocessConfirmedReaped = false
+                unresolvedProcessPID = pid
+                processLock.unlock()
+                print("❌ Subprocess \(executableURL.lastPathComponent) (PID \(pid)) failed to exit after SIGKILL (unresolved/unreaped).")
             }
-
-            _ = ioGroup.wait(timeout: .now() + 0.1)
             return nil
         }
 
-        // Task exited within timeout! Wait for I/O drain to finish
-        _ = ioGroup.wait(timeout: .now() + 0.5)
+        // Process exited within timeout!
+        doneLock.lock()
+        isDone = true
+        doneLock.unlock()
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+        let remOut = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let remErr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        try? stdoutPipe.fileHandleForReading.close()
+        try? stderrPipe.fileHandleForReading.close()
+        task.terminationHandler = nil
+
+        dataLock.lock()
+        stdoutData.append(remOut)
+        stderrData.append(remErr)
+        let finalOutData = stdoutData
+        dataLock.unlock()
+
+        _ = stderrData // Consumed to avoid unused variable warning
 
         processLock.lock()
         lastSubprocessConfirmedReaped = true
         unresolvedProcessPID = nil
         processLock.unlock()
 
-        _ = stderrData // Consumed to avoid unused variable warning
-
-        return String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(data: finalOutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
 
