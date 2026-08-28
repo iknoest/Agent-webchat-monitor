@@ -2704,5 +2704,61 @@ final class AgentSignalBarTests: XCTestCase {
         let result = group.wait(timeout: .now() + 5.0)
         XCTAssertEqual(result, .success, "Concurrent render and quota updates must finish without deadlock")
     }
+
+    func testProjectReviewerAssociationAndLifecycle() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        // 1. Register project
+        let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+        XCTAssertEqual(project.name, "AgentOS")
+        XCTAssertNil(project.currentReviewer)
+
+        // 2. Assign reviewer
+        let assigned = try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/g/g-p-12345/c/test-conv-001", title: "Architecture Chat")
+        XCTAssertEqual(assigned.currentReviewer?.conversationId, "test-conv-001")
+        XCTAssertEqual(assigned.currentReviewer?.chatgptProjectId, "g-p-12345")
+        XCTAssertEqual(assigned.currentReviewer?.title, "Architecture Chat")
+        XCTAssertEqual(assigned.reviewerHistory.count, 0)
+
+        // 3. Replace reviewer
+        let replaced = try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/test-conv-002", title: "New Session")
+        XCTAssertEqual(replaced.currentReviewer?.conversationId, "test-conv-002")
+        XCTAssertEqual(replaced.reviewerHistory.count, 1)
+        XCTAssertEqual(replaced.reviewerHistory[0].conversationId, "test-conv-001")
+
+        // 4. Persistence check
+        let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+        let reloaded = reloadedRegistry.getProject(byId: project.id)
+        XCTAssertEqual(reloaded?.currentReviewer?.conversationId, "test-conv-002")
+        XCTAssertEqual(reloaded?.reviewerHistory.count, 1)
+
+        // 5. Cardinality conflict
+        let projectB = try reloadedRegistry.registerProject(rootPath: "/Users/test/workspace/another-project", name: "Another")
+        XCTAssertThrowsError(try reloadedRegistry.assignReviewer(toProjectId: projectB.id, url: "https://chatgpt.com/c/test-conv-002")) { error in
+            guard let regError = error as? ProjectRegistryError,
+                  case .reviewerAlreadyAssigned(let convId, let existingId, let name) = regError else {
+                XCTFail("Expected reviewerAlreadyAssigned error, got \(error)")
+                return
+            }
+            XCTAssertEqual(convId, "test-conv-002")
+            XCTAssertEqual(existingId, project.id)
+            XCTAssertEqual(name, "AgentOS")
+        }
+
+        // 6. Live status check
+        let openTabs = [
+            ChatGPTTabInfo(tabId: 501, title: "Live Chat", url: "https://chatgpt.com/c/test-conv-002", status: "idle")
+        ]
+        let liveStatus = reloaded?.liveReviewerStatus(openTabs: openTabs)
+        XCTAssertEqual(liveStatus?.isCurrentlyObservable, true)
+        XCTAssertEqual(liveStatus?.activeTabId, 501)
+
+        let closedStatus = reloaded?.liveReviewerStatus(openTabs: [])
+        XCTAssertEqual(closedStatus?.isCurrentlyObservable, false)
+        XCTAssertNil(closedStatus?.activeTabId)
+    }
 }
 #endif

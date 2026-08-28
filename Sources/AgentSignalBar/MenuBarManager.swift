@@ -328,7 +328,13 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let netConnected = NetworkHealthMonitor.shared.isConnected
         let badgesSig = "\(cfg.statusBadges.done.funEmoji):\(cfg.statusBadges.working.funEmoji):\(cfg.statusBadges.blocked.funEmoji):\(cfg.statusBadges.overworking?.funEmoji ?? ""):\(cfg.statusBadges.idle.funEmoji):\(cfg.statusBadges.off.funEmoji):\(cfg.statusBadges.quotaDepleted?.funEmoji ?? ""):\(cfg.statusBadges.quotaRestored?.funEmoji ?? ""):\(cfg.statusBadges.monitorUnavailable?.funEmoji ?? "")"
 
-        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)"
+        var projectsSig = ""
+        for p in ProjectRegistry.shared.getAllProjects() {
+            let rev = p.currentReviewer
+            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count);"
+        }
+
+        return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)|\(projectsSig)"
     }
 
     // Compact Block Progress Bar Generator (e.g. [■■■■□□□□□□])
@@ -540,6 +546,43 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         tabSwitchItem.state = isTabArmed ? .on : .off
                         tabSwitchItem.representedObject = ["agent": AgentID.chatgpt, "tabId": tab.tabId as Any, "url": tab.url as Any]
                         submenu.addItem(tabSwitchItem)
+
+                        // M3.2: Contextual action to link this conversation to a registered Project
+                        if let parsed = ChatGPTURLParser.parseReviewerIdentity(from: tab.url) {
+                            let allProjects = ProjectRegistry.shared.getAllProjects()
+                            if !allProjects.isEmpty {
+                                let linkSubmenu = NSMenu()
+                                for proj in allProjects {
+                                    let isCurrent = proj.currentReviewer?.conversationId == parsed.conversationId
+                                    let isConflict = !isCurrent && allProjects.contains(where: { $0.id != proj.id && $0.currentReviewer?.conversationId == parsed.conversationId })
+                                    let itemTitle: String
+                                    if isCurrent {
+                                        itemTitle = "✓ \(proj.name) (Current Reviewer)"
+                                    } else if isConflict {
+                                        itemTitle = "⚠️ \(proj.name) (Assigned to Another Project)"
+                                    } else if proj.currentReviewer == nil {
+                                        itemTitle = "Set as Reviewer for \(proj.name)"
+                                    } else {
+                                        itemTitle = "Replace Reviewer for \(proj.name)"
+                                    }
+                                    let projLinkItem = NSMenuItem(title: itemTitle, action: (isCurrent || isConflict) ? nil : #selector(setProjectReviewerClicked(_:)), keyEquivalent: "")
+                                    projLinkItem.target = self
+                                    if isCurrent || isConflict {
+                                        projLinkItem.isEnabled = false
+                                    } else {
+                                        projLinkItem.representedObject = [
+                                            "projectId": proj.id,
+                                            "url": tab.url,
+                                            "title": tab.title
+                                        ]
+                                    }
+                                    linkSubmenu.addItem(projLinkItem)
+                                }
+                                let linkParent = NSMenuItem(title: "    Link as Project Reviewer…", action: nil, keyEquivalent: "")
+                                linkParent.submenu = linkSubmenu
+                                submenu.addItem(linkParent)
+                            }
+                        }
                     }
                 } else if displayStatus != .monitorUnavailable {
                     let noTabsItem = NSMenuItem(title: "No open ChatGPT tabs in Chrome", action: nil, keyEquivalent: "")
@@ -759,6 +802,141 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let refreshUsageItem = NSMenuItem(title: refreshUsageTitle, action: #selector(refreshUsageClicked), keyEquivalent: "r")
         refreshUsageItem.target = self
         menu.addItem(refreshUsageItem)
+
+        // 4. Registered Projects & ChatGPT Reviewers (M3.2)
+        let allProjects = ProjectRegistry.shared.getAllProjects()
+        let chatgptInfo = AgentStore.shared.getStatus(for: .chatgpt)
+        let openTabs = chatgptInfo.openTabs
+
+        let eligibleTabs = openTabs.compactMap { tab -> (tab: ChatGPTTabInfo, parsed: ParsedChatGPTReviewerIdentity)? in
+            guard let parsed = ChatGPTURLParser.parseReviewerIdentity(from: tab.url) else { return nil }
+            return (tab, parsed)
+        }
+        let activeOrFirstEligibleTab = eligibleTabs.first(where: { $0.tab.active == true }) ?? eligibleTabs.first
+
+        if !allProjects.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+
+            let projectsHdr = NSMenuItem(title: "Registered Projects & Reviewers (\(allProjects.count)):", action: nil, keyEquivalent: "")
+            projectsHdr.isEnabled = false
+            menu.addItem(projectsHdr)
+
+            for project in allProjects {
+                let liveStatus = project.liveReviewerStatus(openTabs: openTabs)
+                let reviewerSummary: String
+                if let reviewer = project.currentReviewer {
+                    let dispTitle = liveStatus?.liveTitle ?? reviewer.title ?? "Conversation (\(reviewer.conversationId.prefix(8)))"
+                    let obsTag = (liveStatus?.isCurrentlyObservable == true) ? "🟢 Open" : "⚪ Closed"
+                    reviewerSummary = "\(project.name) → \(dispTitle) [\(obsTag)]"
+                } else {
+                    reviewerSummary = "\(project.name) → (No Reviewer)"
+                }
+
+                let projItem = NSMenuItem(title: "  📁 \(reviewerSummary)", action: nil, keyEquivalent: "")
+                let projSubmenu = NSMenu()
+
+                // Project root path
+                let pathItem = NSMenuItem(title: "Root: \(project.rootPath)", action: nil, keyEquivalent: "")
+                pathItem.isEnabled = false
+                projSubmenu.addItem(pathItem)
+
+                projSubmenu.addItem(NSMenuItem.separator())
+
+                // Current Reviewer Details
+                if let reviewer = project.currentReviewer {
+                    let revHdr = NSMenuItem(title: "Current Reviewer:", action: nil, keyEquivalent: "")
+                    revHdr.isEnabled = false
+                    projSubmenu.addItem(revHdr)
+
+                    let titleStr = reviewer.title ?? reviewer.conversationId
+                    let revDetailItem = NSMenuItem(title: "  Title: \(titleStr)", action: nil, keyEquivalent: "")
+                    revDetailItem.isEnabled = false
+                    projSubmenu.addItem(revDetailItem)
+
+                    let convIdItem = NSMenuItem(title: "  ID: \(reviewer.conversationId)", action: nil, keyEquivalent: "")
+                    convIdItem.isEnabled = false
+                    projSubmenu.addItem(convIdItem)
+
+                    if let gId = reviewer.chatgptProjectId {
+                        let gItem = NSMenuItem(title: "  ChatGPT Project: \(gId)", action: nil, keyEquivalent: "")
+                        gItem.isEnabled = false
+                        projSubmenu.addItem(gItem)
+                    }
+
+                    let obsStatusStr = (liveStatus?.isCurrentlyObservable == true) ? "Currently open in Chrome" : "Closed / Not currently observable"
+                    let statusItem = NSMenuItem(title: "  Status: \(obsStatusStr)", action: nil, keyEquivalent: "")
+                    statusItem.isEnabled = false
+                    projSubmenu.addItem(statusItem)
+
+                    // Open / Focus in Chrome
+                    let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                    openRevItem.target = self
+                    openRevItem.representedObject = ["url": reviewer.url, "tabId": liveStatus?.activeTabId as Any]
+                    projSubmenu.addItem(openRevItem)
+
+                    // Unlink / Remove reviewer option
+                    let unlinkItem = NSMenuItem(title: "  Unlink Current Reviewer", action: #selector(removeProjectReviewerClicked(_:)), keyEquivalent: "")
+                    unlinkItem.target = self
+                    unlinkItem.representedObject = ["projectId": project.id]
+                    projSubmenu.addItem(unlinkItem)
+
+                    projSubmenu.addItem(NSMenuItem.separator())
+                }
+
+                // Explicit Assignment Action: "Set current ChatGPT conversation as reviewer"
+                if let eligible = activeOrFirstEligibleTab {
+                    let candidateConvId = eligible.parsed.conversationId
+                    let candidateTitle = eligible.tab.title
+
+                    let conflictingProject = allProjects.first(where: { $0.id != project.id && $0.currentReviewer?.conversationId == candidateConvId })
+
+                    if let conflict = conflictingProject {
+                        let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict.name)'", action: nil, keyEquivalent: "")
+                        conflictItem.isEnabled = false
+                        projSubmenu.addItem(conflictItem)
+                    } else if project.currentReviewer?.conversationId == candidateConvId {
+                        let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
+                        alreadyLinkedItem.isEnabled = false
+                        projSubmenu.addItem(alreadyLinkedItem)
+                    } else {
+                        let linkTitle = project.currentReviewer == nil ?
+                            "Set current ChatGPT conversation as reviewer ('\(candidateTitle)')" :
+                            "Replace Reviewer with '\(candidateTitle)'"
+                        let linkItem = NSMenuItem(title: linkTitle, action: #selector(setProjectReviewerClicked(_:)), keyEquivalent: "")
+                        linkItem.target = self
+                        linkItem.representedObject = [
+                            "projectId": project.id,
+                            "url": eligible.tab.url,
+                            "title": candidateTitle
+                        ]
+                        projSubmenu.addItem(linkItem)
+                    }
+                } else {
+                    let noEligibleItem = NSMenuItem(title: "Open a ChatGPT conversation in Chrome to set as Reviewer", action: nil, keyEquivalent: "")
+                    noEligibleItem.isEnabled = false
+                    projSubmenu.addItem(noEligibleItem)
+                }
+
+                // Previous Reviewer Association History
+                if !project.reviewerHistory.isEmpty {
+                    projSubmenu.addItem(NSMenuItem.separator())
+                    let histHdr = NSMenuItem(title: "Previous Reviewers (\(project.reviewerHistory.count)):", action: nil, keyEquivalent: "")
+                    histHdr.isEnabled = false
+                    projSubmenu.addItem(histHdr)
+
+                    for past in project.reviewerHistory.reversed().prefix(5) {
+                        let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
+                        let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                        pastItem.target = self
+                        pastItem.representedObject = ["url": past.url]
+                        projSubmenu.addItem(pastItem)
+                    }
+                }
+
+                projItem.submenu = projSubmenu
+                menu.addItem(projItem)
+            }
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1382,6 +1560,44 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         ConfigManager.shared.saveConfig(cfg)
         print("🖥️ Menu Bar View set to: detailed")
         updateTitleAndMenu()
+    }
+
+    @objc private func setProjectReviewerClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let url = dict["url"] as? String else {
+            return
+        }
+        let title = dict["title"] as? String
+
+        do {
+            try ProjectRegistry.shared.assignReviewer(toProjectId: projectId, url: url, title: title)
+            updateTitleAndMenu()
+        } catch {
+            print("⚠️ [MenuBarManager] Failed to assign reviewer: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Reviewer Assignment Failed"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc private func removeProjectReviewerClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String else {
+            return
+        }
+
+        do {
+            try ProjectRegistry.shared.removeReviewer(fromProjectId: projectId)
+            updateTitleAndMenu()
+        } catch {
+            print("⚠️ [MenuBarManager] Failed to remove reviewer: \(error.localizedDescription)")
+        }
     }
 
     @objc private func quitClicked() {

@@ -1,5 +1,26 @@
 import Foundation
 
+/// Errors produced during Project Registry and Reviewer operations.
+public enum ProjectRegistryError: Error, LocalizedError, Equatable {
+    case emptyPath
+    case projectNotFound(String)
+    case invalidConversationUrl(String)
+    case reviewerAlreadyAssigned(conversationId: String, existingProjectId: String, existingProjectName: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .emptyPath:
+            return "Project root path cannot be empty."
+        case .projectNotFound(let id):
+            return "Project with ID '\(id)' not found."
+        case .invalidConversationUrl(let url):
+            return "Cannot extract a valid ChatGPT conversation ID from URL: '\(url)'."
+        case .reviewerAlreadyAssigned(let convId, _, let name):
+            return "ChatGPT conversation '\(convId)' is already the current reviewer for Project '\(name)'."
+        }
+    }
+}
+
 /// Durable local Project Registry for managing canonical local project roots.
 public final class ProjectRegistry: @unchecked Sendable {
     public static let shared = ProjectRegistry()
@@ -63,7 +84,9 @@ public final class ProjectRegistry: @unchecked Sendable {
                     name: project.name,
                     rootPath: canonical,
                     createdAt: project.createdAt,
-                    updatedAt: project.updatedAt
+                    updatedAt: project.updatedAt,
+                    currentReviewer: project.currentReviewer,
+                    reviewerHistory: project.reviewerHistory
                 )
                 byId[normalizedProject.id] = normalizedProject
                 byPath[canonical] = normalizedProject.id
@@ -116,7 +139,7 @@ public final class ProjectRegistry: @unchecked Sendable {
     public func registerProject(rootPath: String, name: String? = nil) throws -> Project {
         let canonicalPath = Project.canonicalizePath(rootPath)
         guard !canonicalPath.isEmpty else {
-            throw NSError(domain: "ProjectRegistry", code: 1, userInfo: [NSLocalizedDescriptionKey: "Project root path cannot be empty."])
+            throw ProjectRegistryError.emptyPath
         }
 
         lock.lock()
@@ -179,6 +202,135 @@ public final class ProjectRegistry: @unchecked Sendable {
 
         try save()
         return true
+    }
+
+    // MARK: - Reviewer Management (M3.2)
+
+    /// Explicitly assigns a ChatGPT conversation as the current reviewer for a Project.
+    ///
+    /// - Parameters:
+    ///   - projectId: Target Project ID.
+    ///   - url: Full ChatGPT conversation URL (e.g. `https://chatgpt.com/c/12345`).
+    ///   - title: Optional last-known conversation title.
+    /// - Returns: The updated Project with currentReviewer and updated reviewerHistory.
+    @discardableResult
+    public func assignReviewer(
+        toProjectId projectId: String,
+        url: String,
+        title: String? = nil
+    ) throws -> Project {
+        guard let parsed = ChatGPTURLParser.parseReviewerIdentity(from: url) else {
+            throw ProjectRegistryError.invalidConversationUrl(url)
+        }
+
+        lock.lock()
+        guard var targetProject = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        // Cardinality check: Is this conversationId already currentReviewer for ANOTHER project?
+        for (otherId, otherProject) in projectsById where otherId != projectId {
+            if let existingRev = otherProject.currentReviewer, existingRev.conversationId == parsed.conversationId {
+                lock.unlock()
+                throw ProjectRegistryError.reviewerAlreadyAssigned(
+                    conversationId: parsed.conversationId,
+                    existingProjectId: otherId,
+                    existingProjectName: otherProject.name
+                )
+            }
+        }
+
+        // If the same conversation is already assigned to THIS project, update title/url if changed
+        if let current = targetProject.currentReviewer, current.conversationId == parsed.conversationId {
+            targetProject.currentReviewer?.url = parsed.canonicalUrl
+            if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                targetProject.currentReviewer?.title = t
+            }
+            if let gId = parsed.chatgptProjectId {
+                targetProject.currentReviewer?.chatgptProjectId = gId
+            }
+            targetProject.currentReviewer?.lastObservedAt = Date()
+            targetProject.updatedAt = Date()
+            projectsById[projectId] = targetProject
+            lock.unlock()
+            try save()
+            return targetProject
+        }
+
+        // Migration/Replacement: If targetProject already has a current reviewer, archive to history
+        if let oldReviewer = targetProject.currentReviewer {
+            let historyRecord = ReviewerHistoryRecord(
+                conversationId: oldReviewer.conversationId,
+                url: oldReviewer.url,
+                title: oldReviewer.title,
+                chatgptProjectId: oldReviewer.chatgptProjectId,
+                assignedAt: oldReviewer.assignedAt,
+                replacedAt: Date()
+            )
+            targetProject.reviewerHistory.append(historyRecord)
+        }
+
+        let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newReviewer = ProjectReviewer(
+            conversationId: parsed.conversationId,
+            url: parsed.canonicalUrl,
+            title: (cleanTitle?.isEmpty == false) ? cleanTitle : nil,
+            chatgptProjectId: parsed.chatgptProjectId,
+            assignedAt: Date(),
+            lastObservedAt: Date()
+        )
+
+        targetProject.currentReviewer = newReviewer
+        targetProject.updatedAt = Date()
+        projectsById[projectId] = targetProject
+        lock.unlock()
+
+        try save()
+        return targetProject
+    }
+
+    /// Removes current reviewer from a Project, archiving it to reviewerHistory.
+    @discardableResult
+    public func removeReviewer(fromProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var targetProject = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        if let oldReviewer = targetProject.currentReviewer {
+            let historyRecord = ReviewerHistoryRecord(
+                conversationId: oldReviewer.conversationId,
+                url: oldReviewer.url,
+                title: oldReviewer.title,
+                chatgptProjectId: oldReviewer.chatgptProjectId,
+                assignedAt: oldReviewer.assignedAt,
+                replacedAt: Date()
+            )
+            targetProject.reviewerHistory.append(historyRecord)
+            targetProject.currentReviewer = nil
+            targetProject.updatedAt = Date()
+            projectsById[projectId] = targetProject
+            lock.unlock()
+            try save()
+            return targetProject
+        }
+
+        lock.unlock()
+        return targetProject
+    }
+
+    /// Finds which project (if any) currently has the specified conversation ID as reviewer.
+    public func findProject(byReviewerConversationId conversationId: String) -> Project? {
+        lock.lock()
+        defer { lock.unlock() }
+        for project in projectsById.values {
+            if let rev = project.currentReviewer, rev.conversationId == conversationId {
+                return project
+            }
+        }
+        return nil
     }
 
     // MARK: - Query & Lookup

@@ -566,6 +566,7 @@ runTest("23. Native Antigravity Permission Detection, Correlation Lifecycle & Sm
     defer { store.purgeSyntheticAndStaleSessions(provider: .antigravity) }
 
     // Clear initial state
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
     store.purgeSyntheticAndStaleSessions(provider: .antigravity)
     AgentStore.shared.updateStatus(for: .claude, status: .idle)
     AgentStore.shared.updateStatus(for: .chatgpt, status: .idle)
@@ -741,6 +742,9 @@ runTest("26. Quota Exhausted Claude + Active AGY or ChatGPT Keeps Smart Auto Awa
     let usageStore = AgentUsageStore.shared
     let sleepMgr = SleepManager.shared
     sleepMgr.mode = .smartAuto
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: true)
 
     // Claude quota is exhausted
     let exhaustedUsage = AgentUsageData(
@@ -8842,11 +8846,6 @@ runTest("460. Rendering Invariant: overallSummary and compactSummary render corr
     let usageStore = AgentUsageStore.shared
 
     ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
-    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: false)
-    ConfigManager.shared.setAgentMonitored(.codex, monitored: false)
-    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: false)
-    ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
-
     agentStore.updateStatus(for: .claude, status: .idle, detail: "Claude active")
     let liveUsage = AgentUsageData(
         agent: .claude,
@@ -8862,4 +8861,308 @@ runTest("460. Rendering Invariant: overallSummary and compactSummary render corr
     try assert(summary.contains("CLD:⚪") || summary.contains("CLD:🫥") || summary.contains("⚪"), "Summary must reflect active Claude status")
 }
 
-print("🎉 All 460 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation & Store Deadlock Elimination Tests Passed!")
+// 461. Reviewer Assignment: Assigning an observed conversation to a registered Project
+runTest("461. Reviewer Assignment: Assigning an observed conversation to a registered Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_461_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+    let url = "https://chatgpt.com/c/67bd-abcd-1234-reviewer-test"
+    let title = "AgentOS Architecture Review"
+
+    let updated = try registry.assignReviewer(toProjectId: project.id, url: url, title: title)
+    try assert(updated.currentReviewer != nil)
+    try assert(updated.currentReviewer?.conversationId == "67bd-abcd-1234-reviewer-test")
+    try assert(updated.currentReviewer?.title == "AgentOS Architecture Review")
+    try assert(updated.currentReviewer?.url == "https://chatgpt.com/c/67bd-abcd-1234-reviewer-test")
+    try assert(updated.reviewerHistory.isEmpty)
+}
+
+// 462. Reviewer Persistence: Assignment persists across registry reload/restart
+runTest("462. Reviewer Persistence: Assignment persists across registry reload/restart") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_462_\(UUID().uuidString).json")
+    let registry1 = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry1.resetForTesting() }
+
+    let project = try registry1.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+    try registry1.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/persistent-conv-id-999", title: "Persistent Reviewer")
+
+    // Simulate app restart by initializing a new ProjectRegistry from the same storage URL
+    let registry2 = ProjectRegistry(storageURL: testStorageURL)
+    let reloadedProject = registry2.getProject(byId: project.id)
+
+    try assert(reloadedProject != nil)
+    try assert(reloadedProject?.currentReviewer?.conversationId == "persistent-conv-id-999")
+    try assert(reloadedProject?.currentReviewer?.title == "Persistent Reviewer")
+    try assert(reloadedProject?.currentReviewer?.url == "https://chatgpt.com/c/persistent-conv-id-999")
+}
+
+// 463. Reviewer Replacement: Replacing reviewer updates current and preserves previous association history
+runTest("463. Reviewer Replacement: Replacing reviewer updates current and preserves previous association history") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_463_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    // First reviewer
+    try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/first-reviewer-111", title: "First Session")
+
+    // Second reviewer replaces first
+    let afterFirstReplacement = try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/second-reviewer-222", title: "Second Session")
+
+    try assert(afterFirstReplacement.currentReviewer?.conversationId == "second-reviewer-222")
+    try assert(afterFirstReplacement.reviewerHistory.count == 1)
+    try assert(afterFirstReplacement.reviewerHistory[0].conversationId == "first-reviewer-111")
+    try assert(afterFirstReplacement.reviewerHistory[0].title == "First Session")
+
+    // Third reviewer replaces second
+    let afterSecondReplacement = try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/third-reviewer-333", title: "Third Session")
+
+    try assert(afterSecondReplacement.currentReviewer?.conversationId == "third-reviewer-333")
+    try assert(afterSecondReplacement.reviewerHistory.count == 2)
+    try assert(afterSecondReplacement.reviewerHistory[1].conversationId == "second-reviewer-222")
+
+    // Verify history persists after reload
+    let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+    let reloaded = reloadedRegistry.getProject(byId: project.id)
+    try assert(reloaded?.reviewerHistory.count == 2)
+    try assert(reloaded?.reviewerHistory[0].conversationId == "first-reviewer-111")
+    try assert(reloaded?.reviewerHistory[1].conversationId == "second-reviewer-222")
+}
+
+// 464. Reviewer Cardinality: Same conversation cannot be current reviewer for two Projects
+runTest("464. Reviewer Cardinality: Same conversation cannot be current reviewer for two Projects") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_464_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let projectA = try registry.registerProject(rootPath: "/Users/test/workspace/project-alpha", name: "Project Alpha")
+    let projectB = try registry.registerProject(rootPath: "/Users/test/workspace/project-beta", name: "Project Beta")
+
+    let sharedUrl = "https://chatgpt.com/c/shared-reviewer-conversation-123"
+
+    // Assign to Project Alpha
+    try registry.assignReviewer(toProjectId: projectA.id, url: sharedUrl, title: "Shared Session")
+    try assert(registry.getProject(byId: projectA.id)?.currentReviewer?.conversationId == "shared-reviewer-conversation-123")
+
+    // Attempt to assign the same conversation as current reviewer for Project Beta must throw conflict error
+    var conflictDetected = false
+    do {
+        try registry.assignReviewer(toProjectId: projectB.id, url: sharedUrl, title: "Shared Session")
+    } catch let error as ProjectRegistryError {
+        switch error {
+        case .reviewerAlreadyAssigned(let convId, let existingProjId, let existingName):
+            try assert(convId == "shared-reviewer-conversation-123")
+            try assert(existingProjId == projectA.id)
+            try assert(existingName == "Project Alpha")
+            conflictDetected = true
+        default:
+            throw error
+        }
+    }
+
+    try assert(conflictDetected, "Must reject binding the same conversation as current reviewer for multiple projects")
+    try assert(registry.getProject(byId: projectB.id)?.currentReviewer == nil, "Project Beta must remain unassigned")
+}
+
+// 465. Multi-Tab Convergence: Same conversation appearing in multiple Chrome tabs resolves to one reviewer identity
+runTest("465. Multi-Tab Convergence: Same conversation appearing in multiple Chrome tabs resolves to one reviewer identity") {
+    let convId = "multi-tab-conv-888"
+    let url1 = "https://chatgpt.com/c/\(convId)"
+    let url2 = "https://chatgpt.com/c/\(convId)?model=gpt-4o"
+    let url3 = "https://chat.openai.com/c/\(convId)#bottom"
+
+    let id1 = ChatGPTURLParser.parseReviewerIdentity(from: url1)
+    let id2 = ChatGPTURLParser.parseReviewerIdentity(from: url2)
+    let id3 = ChatGPTURLParser.parseReviewerIdentity(from: url3)
+
+    try assert(id1?.conversationId == convId)
+    try assert(id2?.conversationId == convId)
+    try assert(id3?.conversationId == convId)
+
+    // Verify live status observer handles multiple open tabs of the same conversation cleanly
+    let project = Project(
+        id: "proj-1",
+        name: "TestProject",
+        rootPath: "/Users/test/workspace/proj",
+        currentReviewer: ProjectReviewer(conversationId: convId, url: url1, title: "Canonical Reviewer")
+    )
+
+    let openTabs = [
+        ChatGPTTabInfo(tabId: 101, title: "Reviewer Tab A", url: url1, status: "idle", active: false),
+        ChatGPTTabInfo(tabId: 102, title: "Reviewer Tab B (Active)", url: url2, status: "working", active: true)
+    ]
+
+    let liveStatus = project.liveReviewerStatus(openTabs: openTabs)
+    try assert(liveStatus?.isCurrentlyObservable == true)
+    try assert(liveStatus?.activeTabId == 101 || liveStatus?.activeTabId == 102)
+}
+
+// 466. Identity Invariant: Title changes do not change reviewer identity
+runTest("466. Identity Invariant: Title changes do not change reviewer identity") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_466_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/proj", name: "Proj")
+    let convUrl = "https://chatgpt.com/c/stable-conv-id-777"
+
+    try registry.assignReviewer(toProjectId: project.id, url: convUrl, title: "Original Title")
+    let p1 = registry.getProject(byId: project.id)
+    try assert(p1?.currentReviewer?.conversationId == "stable-conv-id-777")
+    try assert(p1?.currentReviewer?.title == "Original Title")
+
+    // Re-assigning with an updated title updates title without creating a duplicate history record
+    try registry.assignReviewer(toProjectId: project.id, url: convUrl, title: "Renamed Title by User")
+    let p2 = registry.getProject(byId: project.id)
+    try assert(p2?.currentReviewer?.conversationId == "stable-conv-id-777")
+    try assert(p2?.currentReviewer?.title == "Renamed Title by User")
+    try assert(p2?.reviewerHistory.isEmpty == true, "Updating title of the SAME conversation must not create a replacement history record")
+}
+
+// 467. Reviewer Observability: Unavailable/closed current reviewer remains associated
+runTest("467. Reviewer Observability: Unavailable/closed current reviewer remains associated") {
+    let project = Project(
+        id: "proj-1",
+        name: "TestProject",
+        rootPath: "/Users/test/workspace/proj",
+        currentReviewer: ProjectReviewer(conversationId: "closed-conv-id-555", url: "https://chatgpt.com/c/closed-conv-id-555", title: "Closed Reviewer")
+    )
+
+    // Open tabs contain other unrelated conversations or are completely empty
+    let emptyTabs: [ChatGPTTabInfo] = []
+    let unrelatedTabs = [
+        ChatGPTTabInfo(tabId: 201, title: "Unrelated Chat", url: "https://chatgpt.com/c/unrelated-chat-1", status: "idle")
+    ]
+
+    let liveStatusEmpty = project.liveReviewerStatus(openTabs: emptyTabs)
+    try assert(liveStatusEmpty?.isCurrentlyObservable == false)
+    try assert(liveStatusEmpty?.activeTabId == nil)
+    try assert(liveStatusEmpty?.canonicalUrl == "https://chatgpt.com/c/closed-conv-id-555")
+
+    let liveStatusUnrelated = project.liveReviewerStatus(openTabs: unrelatedTabs)
+    try assert(liveStatusUnrelated?.isCurrentlyObservable == false)
+    try assert(project.currentReviewer?.conversationId == "closed-conv-id-555", "Association must be preserved")
+}
+
+// 468. Silent Fallback Prevention: Unavailable reviewer does not silently fallback
+runTest("468. Silent Fallback Prevention: Unavailable reviewer does not silently fallback") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_468_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/proj", name: "Proj")
+    try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/past-reviewer-001", title: "Past Reviewer")
+    try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/current-reviewer-002", title: "Current Reviewer")
+
+    // The current reviewer conversation is closed in Chrome, but the past reviewer is currently open
+    let openTabs = [
+        ChatGPTTabInfo(tabId: 301, title: "Past Reviewer", url: "https://chatgpt.com/c/past-reviewer-001", status: "idle")
+    ]
+
+    let currentProject = registry.getProject(byId: project.id)!
+    let liveStatus = currentProject.liveReviewerStatus(openTabs: openTabs)
+
+    // Must report current reviewer as NOT observable, and must NOT silently switch currentReviewer back to past-reviewer-001
+    try assert(liveStatus?.isCurrentlyObservable == false)
+    try assert(currentProject.currentReviewer?.conversationId == "current-reviewer-002")
+    try assert(currentProject.reviewerHistory.count == 1)
+}
+
+// 469. Blank Page Guard: Blank ChatGPT page without conversation ID cannot be assigned
+runTest("469. Blank Page Guard: Blank ChatGPT page without conversation ID cannot be assigned") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_469_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/proj", name: "Proj")
+
+    let invalidUrls = [
+        "https://chatgpt.com/",
+        "https://chatgpt.com",
+        "https://chatgpt.com/gpts",
+        "https://chatgpt.com/g/g-p-12345",
+        "https://chat.openai.com/",
+        ""
+    ]
+
+    for badUrl in invalidUrls {
+        try assert(ChatGPTURLParser.parseReviewerIdentity(from: badUrl) == nil, "Blank or non-conversation URL '\(badUrl)' must return nil")
+        var errorThrown = false
+        do {
+            try registry.assignReviewer(toProjectId: project.id, url: badUrl)
+        } catch ProjectRegistryError.invalidConversationUrl {
+            errorThrown = true
+        }
+        try assert(errorThrown, "Assigning invalid URL '\(badUrl)' must throw invalidConversationUrl error")
+    }
+}
+
+// 470. Project-Style URL Parsing: /g/g-p-.../c/<conversation-id> extracts conversation ID and project metadata
+runTest("470. Project-Style URL Parsing: /g/g-p-.../c/<conversation-id> extracts conversation ID and project metadata") {
+    let projectUrl = "https://chatgpt.com/g/g-p-67890abcdef-agent-os/c/conv-custom-gpt-999?model=gpt-4o#focus"
+    let parsed = ChatGPTURLParser.parseReviewerIdentity(from: projectUrl)
+
+    try assert(parsed != nil)
+    try assert(parsed?.conversationId == "conv-custom-gpt-999")
+    try assert(parsed?.chatgptProjectId == "g-p-67890abcdef-agent-os")
+    try assert(parsed?.canonicalUrl == "https://chatgpt.com/g/g-p-67890abcdef-agent-os/c/conv-custom-gpt-999")
+}
+
+// 471. Canonical URL Parsing: Ordinary /c/<conversation-id> and query parameter normalization
+runTest("471. Canonical URL Parsing: Ordinary /c/<conversation-id> and query parameter normalization") {
+    let normalUrl = "https://chatgpt.com/c/67bd-normal-conv-123"
+    let parsedNormal = ChatGPTURLParser.parseReviewerIdentity(from: normalUrl)
+    try assert(parsedNormal?.conversationId == "67bd-normal-conv-123")
+    try assert(parsedNormal?.chatgptProjectId == nil)
+    try assert(parsedNormal?.canonicalUrl == "https://chatgpt.com/c/67bd-normal-conv-123")
+
+    let openaiLegacyUrl = "https://chat.openai.com/c/openai-legacy-456?utm_source=test#step"
+    let parsedLegacy = ChatGPTURLParser.parseReviewerIdentity(from: openaiLegacyUrl)
+    try assert(parsedLegacy?.conversationId == "openai-legacy-456")
+    try assert(parsedLegacy?.canonicalUrl == "https://chatgpt.com/c/openai-legacy-456")
+}
+
+// 472. Data Privacy Invariant: No conversation content, transcript, or auth secrets are persisted
+runTest("472. Data Privacy Invariant: No conversation content, transcript, or auth secrets are persisted") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_472_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+    try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/secret-test-conv", title: "Secret Discussion")
+
+    let savedData = try Data(contentsOf: testStorageURL)
+    let jsonString = String(data: savedData, encoding: .utf8) ?? ""
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(ProjectRegistryData.self, from: savedData)
+
+    // Verify stored metadata matches registered project and reviewer
+    try assert(decoded.projects.count == 1)
+    try assert(decoded.projects[0].name == "AgentOS")
+    try assert(decoded.projects[0].rootPath == project.rootPath)
+    try assert(decoded.projects[0].currentReviewer?.conversationId == "secret-test-conv")
+    try assert(decoded.projects[0].currentReviewer?.title == "Secret Discussion")
+
+    // Verify absence of sensitive content fields in raw persisted JSON
+    try assert(!jsonString.contains("messages"))
+    try assert(!jsonString.contains("transcript"))
+    try assert(!jsonString.contains("bearer"))
+    try assert(!jsonString.contains("token"))
+    try assert(!jsonString.contains("cookie"))
+    try assert(!jsonString.contains("prompt"))
+}
+
+print("🎉 All 472 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination & M3.2 ChatGPT Reviewer Association Tests Passed!")

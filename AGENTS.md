@@ -1671,3 +1671,31 @@ Next: Present repair report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] Eliminate AgentStore <-> AgentUsageStore Lock Inversion Deadlock — antigravity — 2026-08-28T16:42:00+02:00
+
+## 2026-08-28 — antigravity — macos
+Status: DONE
+Phase: M3.2 Current ChatGPT Reviewer Association + Minimal Explicit Linking UX
+Done:
+1. Canonical ChatGPT Reviewer Identity & URL Parsing (`ProjectModel.swift`):
+   - Implemented `ChatGPTURLParser` extracting canonical `conversationId`, optional `chatgptProjectId` (`g-p-...`), and normalized `canonicalUrl` from `/c/<id>` and `/g/<project>/c/<id>` URL forms (supporting query parameters and fragment anchors, rejecting blank pages).
+   - Defined `ProjectReviewer`, `ReviewerHistoryRecord`, and `ProjectReviewerLiveStatus` data models.
+2. Durable Project Reviewer Lifecycle & Cardinality Enforcement (`ProjectRegistry.swift`):
+   - Implemented `assignReviewer(toProjectId:url:title:)`, `removeReviewer(fromProjectId:)`, and `findProject(byReviewerConversationId:)`.
+   - Enforced 1-to-1 cardinality invariant: a conversation cannot be the current reviewer for multiple projects; attempts reject with `ProjectRegistryError.reviewerAlreadyAssigned`.
+   - Implemented migration history archival: replacing or unassigning a reviewer pushes previous record into `reviewerHistory` without mutating ChatGPT or storing transcripts/content.
+   - Enforced restart persistence and backwards-compatible JSON decoding.
+3. Minimal Explicit Linking UX (`MenuBarManager.swift`):
+   - Added "Registered Projects & Reviewers" section in macOS menu bar, rendering project name, reviewer title, open/closed status tag (`[🟢 Open]` / `[⚪ Closed]`), root path, Jump to Reviewer in Chrome, and prior migration history list.
+   - Added contextual "Set current ChatGPT conversation as reviewer ('<title>')" / "Replace Reviewer with '<title>'" actions for registered projects and "Link as Project Reviewer…" on open ChatGPT tabs.
+   - Included projects and reviewer state signatures in `computeRenderSignature()` for zero-delay menu updates.
+4. Deterministic Automated Verification:
+   - Added Tests 461 to 472 in `Stage1TestRunner` covering assignment, persistence across reloads, replacement migration history, 1-to-1 cardinality conflicts, multi-tab convergence, title update invariants, closed reviewer preservation, silent fallback prevention, blank page rejection, project-style URL parsing, canonical URL normalization, and raw JSON data privacy (472/472 passed).
+   - Added `testProjectReviewerAssociationAndLifecycle` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (472/472 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present M3.2 report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.2 Current ChatGPT Reviewer Association + Minimal Explicit Linking UX — antigravity — 2026-08-28T17:34:00+02:00
