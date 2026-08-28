@@ -2663,5 +2663,46 @@ final class AgentSignalBarTests: XCTestCase {
         store.recordChatGPTHeartbeat(date: secondWake.addingTimeInterval(2.0))
         XCTAssertEqual(store.checkChatGPTMonitorHealth(isChromeRunning: true, isMonitored: true, now: secondWake.addingTimeInterval(3.0)), .connected)
     }
+
+    func testConcurrentRenderAndQuotaUpdateDeadlockFreedom() {
+        let usageStore = AgentUsageStore.shared
+        let agentStore = AgentStore.shared
+
+        ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+        ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+        agentStore.updateStatus(for: .copilot, status: .idle, detail: "Test idle")
+
+        let iterations = 300
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            for _ in 0..<iterations {
+                _ = agentStore.overallSummary()
+                _ = agentStore.compactSummary()
+            }
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            for i in 0..<iterations {
+                let usage = AgentUsageData(
+                    agent: .copilot,
+                    sessionLimitPercent: (i % 2 == 0) ? 100.0 : 25.0,
+                    sessionResetText: "resets 1h",
+                    isPercentUsed: true,
+                    isLiveSource: true,
+                    quotaSource: "test",
+                    freshness: "Fresh"
+                )
+                usageStore.updateUsage(for: .copilot, data: usage)
+            }
+            group.leave()
+        }
+
+        let result = group.wait(timeout: .now() + 5.0)
+        XCTAssertEqual(result, .success, "Concurrent render and quota updates must finish without deadlock")
+    }
 }
 #endif

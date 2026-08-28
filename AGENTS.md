@@ -1652,3 +1652,22 @@ Next: Present final repair report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] Telegram Sleep-State Semantics Final Correction — antigravity — 2026-08-28T10:14:00+02:00
+
+## 2026-08-28 — antigravity — macos
+Status: DONE
+Phase: Eliminate AgentStore <-> AgentUsageStore Lock Inversion Deadlock
+Done:
+1. Eliminated Cross-Store Lock Inversion Deadlock (`AgentUsageStore.swift`):
+   - Refactored `updateUsage` and `reloadFromConfig` in `AgentUsageStore.swift` to strictly dispatch all post-update side effects (`AgentStore.setQuotaRestored`, `AgentStore.reconcileQuotaRecovery`, `TelegramBridge.handleQuotaDepletionChange`, and `ConfigManager.saveConfig`) OUTSIDE `AgentUsageStore.lock`.
+   - Established strict one-way lock hierarchy: `AgentStore.lock` > `AgentUsageStore.lock`. `AgentUsageStore` methods never call into `AgentStore` while holding its internal mutex.
+2. Deterministic Automated Verification:
+   - Added Tests 457 to 460 in `Stage1TestRunner` covering high-throughput concurrent rendering vs quota update deadlock freedom (500 iterations across 3 threads), quota recovery lifecycle preservation, live data persistence, and rendering invariants (460/460 passed).
+   - Added `testConcurrentRenderAndQuotaUpdateDeadlockFreedom` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (460/460 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present repair report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] Eliminate AgentStore <-> AgentUsageStore Lock Inversion Deadlock — antigravity — 2026-08-28T16:42:00+02:00

@@ -186,10 +186,10 @@ public final class AgentUsageStore: @unchecked Sendable {
     }
 
     public func reloadFromConfig() {
+        let cfgQuotas = ConfigManager.shared.config.quotas ?? [:]
+
         lock.lock()
         defer { lock.unlock() }
-
-        let cfgQuotas = ConfigManager.shared.config.quotas ?? [:]
 
         for agent in AgentID.allCases {
             let q = cfgQuotas[agent.rawValue]
@@ -230,6 +230,12 @@ public final class AgentUsageStore: @unchecked Sendable {
     }
 
     public func updateUsage(for agent: AgentID, data: AgentUsageData) {
+        var shouldSetQuotaRestored = false
+        var shouldReconcileRecovery = false
+        var telegramDepletion: (isExhausted: Bool, resetText: String?)? = nil
+        var hasChanged = false
+        var toStoreForConfig: AgentUsageData? = nil
+
         lock.lock()
         let existing = usageData[agent]
 
@@ -246,34 +252,48 @@ public final class AgentUsageStore: @unchecked Sendable {
             toStore.lastSuccessfulRefresh = existing.lastSuccessfulRefresh
         }
 
-        let hasChanged = existing != toStore
+        hasChanged = existing != toStore
 
         if toStore.isLiveSource {
             let currentIsExhausted = toStore.isQuotaExhausted || toStore.availability == .quotaExhausted || (toStore.weeklyRemainingPercent ?? 100.0) <= 0.0 || (toStore.sessionRemainingPercent ?? 100.0) <= 0.0 || (!toStore.modelFamilies.isEmpty && toStore.modelFamilies.allSatisfy { $0.isExhausted })
             let wasExhausted = previousAuthoritativeExhausted[agent] ?? false
             if wasExhausted && !currentIsExhausted {
                 // Genuine positive recovery transition: previously exhausted -> now available
-                AgentStore.shared.setQuotaRestored(for: agent, restored: true)
-                AgentStore.shared.reconcileQuotaRecovery(for: agent)
-                TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: false, resetText: nil)
+                shouldSetQuotaRestored = true
+                shouldReconcileRecovery = true
+                telegramDepletion = (isExhausted: false, resetText: nil)
             } else if !wasExhausted && currentIsExhausted {
                 let resetInfo = toStore.sessionResetText ?? toStore.weeklyResetText
-                TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: true, resetText: resetInfo)
+                telegramDepletion = (isExhausted: true, resetText: resetInfo)
             } else if !currentIsExhausted {
-                AgentStore.shared.reconcileQuotaRecovery(for: agent)
+                shouldReconcileRecovery = true
             }
             previousAuthoritativeExhausted[agent] = currentIsExhausted
         }
 
         usageData[agent] = toStore
+        if hasChanged {
+            toStoreForConfig = toStore
+        }
         lock.unlock()
 
+        // Post-update side effects executed outside AgentUsageStore.lock to eliminate lock inversion
+        if shouldSetQuotaRestored {
+            AgentStore.shared.setQuotaRestored(for: agent, restored: true)
+        }
+        if shouldReconcileRecovery {
+            AgentStore.shared.reconcileQuotaRecovery(for: agent)
+        }
+        if let depletion = telegramDepletion {
+            TelegramBridge.shared.handleQuotaDepletionChange(agent: agent, isExhausted: depletion.isExhausted, resetText: depletion.resetText)
+        }
+
         // Only save to disk if values have genuinely changed
-        if hasChanged {
+        if let configData = toStoreForConfig {
             var cfg = ConfigManager.shared.config
             var currentQuotas = cfg.quotas ?? [:]
             var cfgFamilies: [ModelFamilyQuotaConfig] = []
-            for f in data.modelFamilies {
+            for f in configData.modelFamilies {
                 cfgFamilies.append(ModelFamilyQuotaConfig(
                     name: f.name,
                     sessionPercent: f.sessionLimitPercent,
@@ -284,14 +304,14 @@ public final class AgentUsageStore: @unchecked Sendable {
                 ))
             }
             currentQuotas[agent.rawValue] = AgentQuotaConfig(
-                sessionPercent: data.sessionLimitPercent,
-                sessionResetText: data.sessionResetText,
-                weeklyPercent: data.weeklyLimitPercent,
-                weeklyResetText: data.weeklyResetText,
-                extraMetricText: data.extraMetricText,
-                resetCardCount: data.resetCardCount,
-                resetCardExpiryText: data.resetCardExpiryText,
-                isPercentUsed: data.isPercentUsed,
+                sessionPercent: configData.sessionLimitPercent,
+                sessionResetText: configData.sessionResetText,
+                weeklyPercent: configData.weeklyLimitPercent,
+                weeklyResetText: configData.weeklyResetText,
+                extraMetricText: configData.extraMetricText,
+                resetCardCount: configData.resetCardCount,
+                resetCardExpiryText: configData.resetCardExpiryText,
+                isPercentUsed: configData.isPercentUsed,
                 modelFamilies: cfgFamilies.isEmpty ? nil : cfgFamilies
             )
             cfg.quotas = currentQuotas

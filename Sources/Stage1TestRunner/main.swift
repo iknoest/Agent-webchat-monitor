@@ -8683,4 +8683,183 @@ runTest("456. Sleep/Wake: Awake scheduling delay does NOT erase heartbeat age or
     try assert(health65 == .disconnected, "Heartbeat must expire at 65s without being reset by awake timer delays")
 }
 
-print("🎉 All 456 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation & Sleep Outage Preservation Tests Passed!")
+// 457. Concurrency: High-throughput concurrent render and quota updates execute without deadlock
+runTest("457. Concurrency: High-throughput concurrent render and quota updates execute without deadlock") {
+    let usageStore = AgentUsageStore.shared
+    let agentStore = AgentStore.shared
+
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+    agentStore.updateStatus(for: .copilot, status: .idle, detail: "Idle test")
+    agentStore.updateStatus(for: .claude, status: .idle, detail: "Idle test")
+
+    let iterations = 500
+    let group = DispatchGroup()
+
+    // Thread 1: Rapid rendering / overallSummary / compactSummary (holding AgentStore.lock, reading AgentUsageStore)
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+        for _ in 0..<iterations {
+            _ = agentStore.overallSummary()
+            _ = agentStore.compactSummary()
+        }
+        group.leave()
+    }
+
+    // Thread 2: Rapid quota updates with alternating recovery transitions (updating AgentUsageStore, triggering AgentStore side-effects)
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+        for i in 0..<iterations {
+            let isExhausted = (i % 2 == 0)
+            let usage = AgentUsageData(
+                agent: .copilot,
+                sessionLimitPercent: isExhausted ? 100.0 : 20.0,
+                sessionResetText: "resets in 2h",
+                weeklyLimitPercent: isExhausted ? 100.0 : 30.0,
+                weeklyResetText: "resets Monday",
+                isPercentUsed: true,
+                isLiveSource: true,
+                quotaSource: "test",
+                freshness: "Fresh"
+            )
+            usageStore.updateUsage(for: .copilot, data: usage)
+        }
+        group.leave()
+    }
+
+    // Thread 3: Rapid Claude quota updates concurrently
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+        for i in 0..<iterations {
+            let usage = AgentUsageData(
+                agent: .claude,
+                sessionLimitPercent: Double(i % 100),
+                sessionResetText: "resets in 1h",
+                isPercentUsed: true,
+                isLiveSource: true,
+                quotaSource: "test",
+                freshness: "Fresh"
+            )
+            usageStore.updateUsage(for: .claude, data: usage)
+        }
+        group.leave()
+    }
+
+    let waitResult = group.wait(timeout: .now() + 5.0)
+    try assert(waitResult == .success, "Concurrent render and quota updates must complete cleanly without deadlock within 5 seconds")
+}
+
+// 458. Quota Recovery: Exhausted -> Available transition properly sets quotaRestored and reconciles state outside lock
+runTest("458. Quota Recovery: Exhausted -> Available transition properly sets quotaRestored and reconciles state outside lock") {
+    let mock = MockTelegramTransport()
+    let bridge = TelegramBridge(transport: mock)
+    EnvConfigLoader.shared.setConfigForTesting(TelegramConfig(botToken: "tok", chatId: "1001"))
+    ConfigManager.shared.setTelegramEnabled(true)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: true)
+
+    let usageStore = AgentUsageStore.shared
+    let agentStore = AgentStore.shared
+
+    // 1. Mark exhausted
+    let exhaustedUsage = AgentUsageData(
+        agent: .copilot,
+        sessionLimitPercent: 100.0,
+        sessionResetText: "resets in 1h",
+        weeklyLimitPercent: 100.0,
+        weeklyResetText: "resets Monday",
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "test",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .copilot, data: exhaustedUsage)
+
+    // Verify availability is exhausted
+    try assert(usageStore.getUsage(for: .copilot)?.isQuotaExhausted == true)
+
+    // 2. Recovery update arrives
+    let recoveredUsage = AgentUsageData(
+        agent: .copilot,
+        sessionLimitPercent: 25.0,
+        sessionResetText: "resets in 1h",
+        weeklyLimitPercent: 30.0,
+        weeklyResetText: "resets Monday",
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "test",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .copilot, data: recoveredUsage)
+
+    // Verify recovery is reflected
+    let currentUsage = usageStore.getUsage(for: .copilot)
+    try assert(currentUsage?.isQuotaExhausted == false)
+    try assert(currentUsage?.availability == .available)
+    try assert(agentStore.getStatus(for: .copilot).isQuotaRestored == true)
+}
+
+// 459. Normal Quota Update: Live data storage and config fallback protection
+runTest("459. Normal Quota Update: Live data storage and config fallback protection") {
+    let usageStore = AgentUsageStore.shared
+
+    let liveData = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 42.0,
+        sessionResetText: "resets in 4h",
+        weeklyLimitPercent: 55.0,
+        weeklyResetText: "resets Fri",
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "live_api",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: liveData)
+
+    let stored = usageStore.getUsage(for: .claude)
+    try assert(stored?.isLiveSource == true)
+    try assert(stored?.sessionLimitPercent == 42.0)
+    try assert(stored?.freshness == "Fresh")
+
+    // Attempting to overwrite with a non-live fallback must be rejected
+    let fallbackData = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 10.0,
+        isPercentUsed: true,
+        isLiveSource: false,
+        quotaSource: "none",
+        sourceAuthority: "loaded_from_config"
+    )
+    usageStore.updateUsage(for: .claude, data: fallbackData)
+
+    let preserved = usageStore.getUsage(for: .claude)
+    try assert(preserved?.isLiveSource == true, "Live source must not be overwritten by non-live config fallback")
+    try assert(preserved?.sessionLimitPercent == 42.0)
+}
+
+// 460. Rendering Invariant: overallSummary and compactSummary render correctly with live usage
+runTest("460. Rendering Invariant: overallSummary and compactSummary render correctly with live usage") {
+    let agentStore = AgentStore.shared
+    let usageStore = AgentUsageStore.shared
+
+    ConfigManager.shared.setAgentMonitored(.claude, monitored: true)
+    ConfigManager.shared.setAgentMonitored(.chatgpt, monitored: false)
+    ConfigManager.shared.setAgentMonitored(.codex, monitored: false)
+    ConfigManager.shared.setAgentMonitored(.antigravity, monitored: false)
+    ConfigManager.shared.setAgentMonitored(.copilot, monitored: false)
+
+    agentStore.updateStatus(for: .claude, status: .idle, detail: "Claude active")
+    let liveUsage = AgentUsageData(
+        agent: .claude,
+        sessionLimitPercent: 15.0,
+        isPercentUsed: true,
+        isLiveSource: true,
+        quotaSource: "test",
+        freshness: "Fresh"
+    )
+    usageStore.updateUsage(for: .claude, data: liveUsage)
+
+    let summary = agentStore.overallSummary()
+    try assert(summary.contains("CLD:⚪") || summary.contains("CLD:🫥") || summary.contains("⚪"), "Summary must reflect active Claude status")
+}
+
+print("🎉 All 460 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation & Store Deadlock Elimination Tests Passed!")
