@@ -331,7 +331,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         var projectsSig = ""
         for p in ProjectRegistry.shared.getAllProjects() {
             let rev = p.currentReviewer
-            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count);"
+            let gitFullName = (p.gitRepository ?? p.liveGitRepository)?.fullName ?? ""
+            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count):\(gitFullName);"
         }
 
         return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)|\(projectsSig)"
@@ -852,6 +853,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 let pathItem = NSMenuItem(title: "Root: \(project.rootPath)", action: nil, keyEquivalent: "")
                 pathItem.isEnabled = false
                 projSubmenu.addItem(pathItem)
+
+                // Associated GitHub repository (M3.4)
+                if let gitRepo = project.gitRepository ?? project.liveGitRepository {
+                    let gitItem = NSMenuItem(title: "GitHub: \(gitRepo.fullName)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                    gitItem.target = self
+                    gitItem.representedObject = ["url": gitRepo.canonicalUrl]
+                    projSubmenu.addItem(gitItem)
+                }
 
                 projSubmenu.addItem(NSMenuItem.separator())
 

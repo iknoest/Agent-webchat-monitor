@@ -9537,4 +9537,272 @@ runTest("486. Provider Concrete CWD Verification: Claude, Antigravity, Codex, Co
     try assert(copilotSession.resolveProject(using: registry)?.id == targetProject.id)
 }
 
-print("🎉 All 486 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association & M3.3 CWD Session Association Tests Passed!")
+// 487. GitHub URL Parsing: SSH remote normalizes to owner/repo and canonical HTTPS URL
+runTest("487. GitHub URL Parsing: SSH remote normalizes to owner/repo and canonical HTTPS URL") {
+    let sshUrl = "git@github.com:iknoest/Agent-webchat-monitor.git"
+    let parsed = GitHubURLParser.parseRepository(from: sshUrl)
+    try assert(parsed != nil)
+    try assert(parsed?.owner == "iknoest")
+    try assert(parsed?.repository == "Agent-webchat-monitor")
+    try assert(parsed?.fullName == "iknoest/Agent-webchat-monitor")
+    try assert(parsed?.canonicalUrl == "https://github.com/iknoest/Agent-webchat-monitor")
+    try assert(parsed?.detectedRemoteName == "origin")
+
+    let sshProtocolUrl = "ssh://git@github.com/apple/swift.git"
+    let parsedProto = GitHubURLParser.parseRepository(from: sshProtocolUrl, remoteName: "upstream")
+    try assert(parsedProto?.fullName == "apple/swift")
+    try assert(parsedProto?.canonicalUrl == "https://github.com/apple/swift")
+    try assert(parsedProto?.detectedRemoteName == "upstream")
+}
+
+// 488. GitHub URL Parsing: HTTPS remote normalizes identically to SSH remote
+runTest("488. GitHub URL Parsing: HTTPS remote normalizes identically to SSH remote") {
+    let httpsUrl = "https://github.com/iknoest/Agent-webchat-monitor.git"
+    let parsed = GitHubURLParser.parseRepository(from: httpsUrl)
+    try assert(parsed != nil)
+    try assert(parsed?.owner == "iknoest")
+    try assert(parsed?.repository == "Agent-webchat-monitor")
+    try assert(parsed?.fullName == "iknoest/Agent-webchat-monitor")
+    try assert(parsed?.canonicalUrl == "https://github.com/iknoest/Agent-webchat-monitor")
+}
+
+// 489. GitHub URL Parsing: Optional .git suffix normalization
+runTest("489. GitHub URL Parsing: Optional .git suffix normalization") {
+    let urlWithoutGit = "https://github.com/torvalds/linux"
+    let parsedWithout = GitHubURLParser.parseRepository(from: urlWithoutGit)
+    try assert(parsedWithout?.fullName == "torvalds/linux")
+    try assert(parsedWithout?.canonicalUrl == "https://github.com/torvalds/linux")
+
+    let sshWithoutGit = "git@github.com:torvalds/linux"
+    let parsedSshWithout = GitHubURLParser.parseRepository(from: sshWithoutGit)
+    try assert(parsedSshWithout?.fullName == "torvalds/linux")
+}
+
+// 490. Non-GitHub Remote: GitLab, Bitbucket, local remotes produce no GitHub association
+runTest("490. Non-GitHub Remote: GitLab, Bitbucket, local remotes produce no GitHub association") {
+    try assert(GitHubURLParser.parseRepository(from: "git@gitlab.com:owner/repo.git") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://gitlab.com/owner/repo") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "git@bitbucket.org:owner/repo.git") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://bitbucket.org/owner/repo") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "/Users/ava/local-repo.git") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "file:///Users/ava/local-repo") == nil)
+}
+
+// 491. Non-Git Project: Project without Git repository remains fully valid
+runTest("491. Non-Git Project: Project without Git repository remains fully valid") {
+    let tempDir = NSTemporaryDirectory()
+    let nonGitFolder = "\(tempDir)/non_git_project_\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: nonGitFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: nonGitFolder) }
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_491_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: nonGitFolder, name: "Scratch Docs")
+    try assert(project.gitRepository == nil)
+    try assert(project.liveGitRepository == nil)
+    try assert(project.name == "Scratch Docs")
+}
+
+// 492. Malformed Remote: Malformed URLs and invalid identifiers fail closed
+runTest("492. Malformed Remote: Malformed URLs and invalid identifiers fail closed") {
+    try assert(GitHubURLParser.parseRepository(from: "") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "   ") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://github.com") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://github.com/") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://github.com/onlyowner") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "git@github.com:incomplete") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "https://github.com/owner/repo/extra/path") == nil)
+    try assert(GitHubURLParser.parseRepository(from: "git@github.com:owner/repo with spaces.git") == nil)
+}
+
+// 493. Invariant: Project identity and rootPath do not change when GitHub repository changes
+runTest("493. Invariant: Project identity and rootPath do not change when GitHub repository changes") {
+    let tempDir = NSTemporaryDirectory()
+    let repoFolder = "\(tempDir)/test_repo_493_\(UUID().uuidString)"
+    let gitFolder = "\(repoFolder)/.git"
+    try FileManager.default.createDirectory(atPath: gitFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: repoFolder) }
+
+    let initialConfig = """
+    [core]
+        bare = false
+    [remote "origin"]
+        url = https://github.com/initial-org/repo-one.git
+        fetch = +refs/heads/*:refs/remotes/origin/*
+    """
+    try initialConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_493_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: repoFolder, name: "RepoOne")
+    let originalId = project.id
+    let originalRoot = project.rootPath
+    try assert(project.gitRepository?.fullName == "initial-org/repo-one")
+
+    // Change Git remote on disk
+    let updatedConfig = """
+    [core]
+        bare = false
+    [remote "origin"]
+        url = https://github.com/new-org/repo-renamed.git
+        fetch = +refs/heads/*:refs/remotes/origin/*
+    """
+    try updatedConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let refreshed = try registry.refreshGitRepository(forProjectId: project.id)
+    try assert(refreshed.id == originalId, "Project ID must never change when GitHub repository changes")
+    try assert(refreshed.rootPath == originalRoot, "Project root path must never change when GitHub repository changes")
+    try assert(refreshed.gitRepository?.fullName == "new-org/repo-renamed")
+}
+
+// 494. Separation: M3.3 session->Project resolution remains based strictly on CWD, not GitHub repo
+runTest("494. Separation: M3.3 session->Project resolution remains based strictly on CWD, not GitHub repo") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_494_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p1 = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    // Session points to CWD
+    let session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-494",
+        title: "Working in AgentOS",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os/Sources"
+    )
+
+    // Resolution must use CWD longest-parent matching
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == p1.id)
+    try assert(matched?.name == "AgentOS")
+}
+
+// 495. Nested Isolation: Nested Project root does not inherit parent repository remotes
+runTest("495. Nested Isolation: Nested Project root does not inherit parent repository remotes") {
+    let tempDir = NSTemporaryDirectory()
+    let parentFolder = "\(tempDir)/parent_repo_\(UUID().uuidString)"
+    let childFolder = "\(parentFolder)/nested_subproject"
+    let parentGit = "\(parentFolder)/.git"
+    try FileManager.default.createDirectory(atPath: parentGit, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(atPath: childFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: parentFolder) }
+
+    let parentConfig = """
+    [remote "origin"]
+        url = https://github.com/monorepo-org/parent-monorepo.git
+    """
+    try parentConfig.write(toFile: "\(parentGit)/config", atomically: true, encoding: .utf8)
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_495_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let parentProj = try registry.registerProject(rootPath: parentFolder, name: "Parent Monorepo")
+    let childProj = try registry.registerProject(rootPath: childFolder, name: "Nested Subproject")
+
+    try assert(parentProj.gitRepository?.fullName == "monorepo-org/parent-monorepo")
+    // Child folder has no .git at its own root, must NOT inherit parent repo
+    try assert(childProj.gitRepository == nil)
+    try assert(childProj.liveGitRepository == nil)
+}
+
+// 496. Ambiguity Guard: Multiple conflicting GitHub remotes without origin fail closed
+runTest("496. Ambiguity Guard: Multiple conflicting GitHub remotes without origin fail closed") {
+    let remotesWithoutOrigin = [
+        "forkA": "https://github.com/alice/project.git",
+        "forkB": "https://github.com/bob/project.git"
+    ]
+    let resolvedAmbiguous = ProjectGitDetector.resolveAuthoritativeGitHubRemote(from: remotesWithoutOrigin)
+    try assert(resolvedAmbiguous == nil, "Multiple distinct remotes without origin must fail closed")
+
+    // With origin, origin takes precedence
+    let remotesWithOrigin = [
+        "origin": "https://github.com/canonical/project.git",
+        "forkA": "https://github.com/alice/project.git"
+    ]
+    let resolvedWithOrigin = ProjectGitDetector.resolveAuthoritativeGitHubRemote(from: remotesWithOrigin)
+    try assert(resolvedWithOrigin?.fullName == "canonical/project")
+}
+
+// 497. Data Privacy: Persisted Project JSON contains no credentials or authentication tokens
+runTest("497. Data Privacy: Persisted Project JSON contains no credentials or authentication tokens") {
+    let tempDir = NSTemporaryDirectory()
+    let repoFolder = "\(tempDir)/privacy_repo_\(UUID().uuidString)"
+    let gitFolder = "\(repoFolder)/.git"
+    try FileManager.default.createDirectory(atPath: gitFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: repoFolder) }
+
+    let gitConfig = """
+    [remote "origin"]
+        url = git@github.com:secure-org/confidential-project.git
+    """
+    try gitConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_497_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let proj = try registry.registerProject(rootPath: repoFolder, name: "Confidential")
+    try assert(proj.gitRepository?.fullName == "secure-org/confidential-project")
+
+    let savedData = try Data(contentsOf: testStorageURL)
+    let jsonString = String(data: savedData, encoding: .utf8) ?? ""
+
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(ProjectRegistryData.self, from: savedData)
+
+    try assert(decoded.projects.count == 1)
+    try assert(decoded.projects[0].gitRepository?.owner == "secure-org")
+    try assert(decoded.projects[0].gitRepository?.repository == "confidential-project")
+    try assert(decoded.projects[0].gitRepository?.canonicalUrl == "https://github.com/secure-org/confidential-project")
+
+    // Privacy invariants
+    try assert(!jsonString.contains("password"))
+    try assert(!jsonString.contains("secret"))
+    try assert(!jsonString.contains("token"))
+    try assert(!jsonString.contains("bearer"))
+    try assert(!jsonString.contains("cookie"))
+    try assert(!jsonString.contains("credential"))
+}
+
+// 498. Live Drift Refresh: Git remote change on disk updates Project metadata via refreshGitRepository
+runTest("498. Live Drift Refresh: Git remote change on disk updates Project metadata via refreshGitRepository") {
+    let tempDir = NSTemporaryDirectory()
+    let repoFolder = "\(tempDir)/drift_repo_\(UUID().uuidString)"
+    let gitFolder = "\(repoFolder)/.git"
+    try FileManager.default.createDirectory(atPath: gitFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: repoFolder) }
+
+    let initialConfig = """
+    [remote "origin"]
+        url = https://github.com/org-alpha/project-repo.git
+    """
+    try initialConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_498_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let initial = try registry.registerProject(rootPath: repoFolder, name: "Drift Test")
+    try assert(initial.gitRepository?.fullName == "org-alpha/project-repo")
+
+    // Update git config
+    let newConfig = """
+    [remote "origin"]
+        url = git@github.com:org-beta/project-repo.git
+    """
+    try newConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let refreshed = try registry.refreshGitRepository(forProjectId: initial.id)
+    try assert(refreshed.gitRepository?.owner == "org-beta")
+    try assert(refreshed.gitRepository?.canonicalUrl == "https://github.com/org-beta/project-repo")
+}
+
+print("🎉 All 498 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association & M3.4 GitHub Repository Association Tests Passed!")

@@ -171,6 +171,244 @@ public struct ProjectReviewerLiveStatus: Sendable, Equatable {
     }
 }
 
+// MARK: - GitHub Repository URL Parser & Identity (M3.4)
+
+/// Canonical identity representation of an associated GitHub repository.
+public struct ProjectGitHubRepository: Codable, Sendable, Equatable, Hashable {
+    /// Owner / organization name (e.g. "iknoest", "google", "apple").
+    public let owner: String
+
+    /// Repository name (e.g. "Agent-webchat-monitor").
+    public let repository: String
+
+    /// Normalized owner/repo identity string (e.g. "iknoest/Agent-webchat-monitor").
+    public var fullName: String {
+        return "\(owner)/\(repository)"
+    }
+
+    /// Canonical web URL (e.g. "https://github.com/iknoest/Agent-webchat-monitor").
+    public let canonicalUrl: String
+
+    /// Git remote name where this repository was detected (e.g. "origin").
+    public let detectedRemoteName: String
+
+    /// Timestamp when this repository association was detected/verified.
+    public let detectedAt: Date
+
+    public init(
+        owner: String,
+        repository: String,
+        canonicalUrl: String,
+        detectedRemoteName: String = "origin",
+        detectedAt: Date = Date()
+    ) {
+        self.owner = owner
+        self.repository = repository
+        self.canonicalUrl = canonicalUrl
+        self.detectedRemoteName = detectedRemoteName
+        self.detectedAt = detectedAt
+    }
+}
+
+/// Pure parser extracting normalized GitHub repository identity from remote URLs.
+public enum GitHubURLParser {
+    /// Parses a git remote URL into a canonical `ProjectGitHubRepository` if it points to GitHub.
+    ///
+    /// Supported formats:
+    /// - `git@github.com:owner/repo.git`
+    /// - `git@github.com:owner/repo`
+    /// - `https://github.com/owner/repo.git`
+    /// - `https://github.com/owner/repo`
+    /// - `http://github.com/owner/repo`
+    /// - `ssh://git@github.com/owner/repo.git`
+    /// - `ssh://git@github.com/owner/repo`
+    ///
+    /// Non-GitHub URLs (GitLab, Bitbucket, local filesystem paths, malformed URLs) return `nil`.
+    public static func parseRepository(from remoteUrl: String, remoteName: String = "origin") -> ProjectGitHubRepository? {
+        let trimmed = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // 1. SSH format: git@github.com:owner/repo(.git)
+        if trimmed.hasPrefix("git@github.com:") {
+            let pathPart = String(trimmed.dropFirst("git@github.com:".count))
+            return parseOwnerRepoPath(pathPart, remoteName: remoteName)
+        }
+
+        // 2. SSH protocol: ssh://git@github.com/owner/repo(.git)
+        if trimmed.hasPrefix("ssh://git@github.com/") {
+            let pathPart = String(trimmed.dropFirst("ssh://git@github.com/".count))
+            return parseOwnerRepoPath(pathPart, remoteName: remoteName)
+        }
+
+        // 3. HTTP / HTTPS / standard URL
+        if let url = URL(string: trimmed), let host = url.host?.lowercased() {
+            guard host == "github.com" || host == "www.github.com" else {
+                return nil
+            }
+
+            let components = url.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+            guard components.count == 2 else { return nil }
+
+            let owner = components[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            var repo = components[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if repo.hasSuffix(".git") {
+                repo = String(repo.dropLast(4))
+            }
+
+            guard isValidGitIdentifier(owner), isValidGitIdentifier(repo) else {
+                return nil
+            }
+
+            return ProjectGitHubRepository(
+                owner: owner,
+                repository: repo,
+                canonicalUrl: "https://github.com/\(owner)/\(repo)",
+                detectedRemoteName: remoteName
+            )
+        }
+
+        return nil
+    }
+
+    private static func parseOwnerRepoPath(_ path: String, remoteName: String) -> ProjectGitHubRepository? {
+        var cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanPath.hasPrefix("/") {
+            cleanPath = String(cleanPath.dropFirst())
+        }
+        let parts = cleanPath.split(separator: "/")
+        guard parts.count == 2 else { return nil }
+
+        let owner = String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+        var repo = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if repo.hasSuffix(".git") {
+            repo = String(repo.dropLast(4))
+        }
+
+        guard isValidGitIdentifier(owner), isValidGitIdentifier(repo) else {
+            return nil
+        }
+
+        return ProjectGitHubRepository(
+            owner: owner,
+            repository: repo,
+            canonicalUrl: "https://github.com/\(owner)/\(repo)",
+            detectedRemoteName: remoteName
+        )
+    }
+
+    private static func isValidGitIdentifier(_ string: String) -> Bool {
+        guard !string.isEmpty else { return false }
+        let invalidChars = CharacterSet(charactersIn: " \t\r\n/\\:?#@!$%^&*()[]{}|<>\"'")
+        return string.rangeOfCharacter(from: invalidChars) == nil
+    }
+}
+
+/// Detects local Git configuration and remotes for a project directory without blocking subprocesses.
+public enum ProjectGitDetector {
+    /// Inspects the local Git repository at `rootPath` and extracts its authoritative GitHub repository if present.
+    ///
+    /// Reads `.git/config` directly from disk (fast, isolated, zero subprocess execution).
+    /// Supports git submodules and worktree `.git` file pointers (`gitdir: ...`).
+    /// Follows remote selection rules:
+    /// - If `origin` remote exists and points to GitHub -> uses `origin`
+    /// - If only one remote exists and it points to GitHub -> uses it
+    /// - If multiple remotes exist and none is `origin`, or they point to conflicting distinct GitHub repos -> returns nil
+    /// - If rootPath has no .git -> returns nil
+    public static func detect(at rootPath: String) -> ProjectGitHubRepository? {
+        let canonicalRoot = Project.canonicalizePath(rootPath)
+        let gitPath = (canonicalRoot as NSString).appendingPathComponent(".git")
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: gitPath, isDirectory: &isDirectory) else {
+            return nil
+        }
+
+        let configFilePath: String
+        if isDirectory.boolValue {
+            configFilePath = (gitPath as NSString).appendingPathComponent("config")
+        } else {
+            // .git file (worktree or submodule): format "gitdir: <path>"
+            guard let content = try? String(contentsOfFile: gitPath, encoding: .utf8) else {
+                return nil
+            }
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("gitdir:") else { return nil }
+            var relOrAbs = trimmed.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !relOrAbs.hasPrefix("/") {
+                relOrAbs = (canonicalRoot as NSString).appendingPathComponent(String(relOrAbs))
+            }
+            configFilePath = (Project.canonicalizePath(relOrAbs) as NSString).appendingPathComponent("config")
+        }
+
+        guard FileManager.default.fileExists(atPath: configFilePath),
+              let configContent = try? String(contentsOfFile: configFilePath, encoding: .utf8) else {
+            return nil
+        }
+
+        let remotes = parseGitConfigFile(configContent)
+        return resolveAuthoritativeGitHubRemote(from: remotes)
+    }
+
+    /// Pure parser for git config format extracting remote names and their URLs.
+    public static func parseGitConfigFile(_ configContent: String) -> [String: String] {
+        var remotes: [String: String] = [:]
+        var currentSectionRemote: String? = nil
+
+        for line in configContent.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix(";") {
+                continue
+            }
+
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                let section = String(trimmed.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+                if section.hasPrefix("remote ") {
+                    let rawName = section.dropFirst("remote ".count).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let cleanName = rawName.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                    currentSectionRemote = cleanName
+                } else {
+                    currentSectionRemote = nil
+                }
+            } else if let current = currentSectionRemote, trimmed.hasPrefix("url") {
+                let parts = trimmed.split(separator: "=", maxSplits: 1)
+                if parts.count == 2 && parts[0].trimmingCharacters(in: .whitespacesAndNewlines) == "url" {
+                    let urlVal = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !urlVal.isEmpty {
+                        remotes[current] = urlVal
+                    }
+                }
+            }
+        }
+
+        return remotes
+    }
+
+    /// Resolves the authoritative GitHub repository from a dictionary of [remoteName: url].
+    public static func resolveAuthoritativeGitHubRemote(from remotes: [String: String]) -> ProjectGitHubRepository? {
+        guard !remotes.isEmpty else { return nil }
+
+        // 1. If "origin" exists and is a valid GitHub URL, it is authoritative by Git convention
+        if let originUrl = remotes["origin"], let parsed = GitHubURLParser.parseRepository(from: originUrl, remoteName: "origin") {
+            return parsed
+        }
+
+        // 2. Filter all remotes that point to GitHub
+        var githubRemotes: [ProjectGitHubRepository] = []
+        for (name, url) in remotes {
+            if let parsed = GitHubURLParser.parseRepository(from: url, remoteName: name) {
+                githubRemotes.append(parsed)
+            }
+        }
+
+        if githubRemotes.count == 1 {
+            return githubRemotes.first
+        }
+
+        // 3. If multiple distinct GitHub repos exist and neither is origin, fail closed (ambiguous)
+        return nil
+    }
+}
+
 // MARK: - Canonical Project Model
 
 /// Canonical representation of an explicitly registered local folder / project root.
@@ -196,6 +434,9 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
     /// Prior reviewer association migration history (M3.2).
     public var reviewerHistory: [ReviewerHistoryRecord]
 
+    /// Optional associated GitHub repository metadata (M3.4).
+    public var gitRepository: ProjectGitHubRepository?
+
     public init(
         id: String = UUID().uuidString,
         name: String? = nil,
@@ -203,7 +444,8 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         currentReviewer: ProjectReviewer? = nil,
-        reviewerHistory: [ReviewerHistoryRecord] = []
+        reviewerHistory: [ReviewerHistoryRecord] = [],
+        gitRepository: ProjectGitHubRepository? = nil
     ) {
         self.id = id
         let canonicalPath = Self.canonicalizePath(rootPath)
@@ -220,6 +462,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         self.updatedAt = updatedAt
         self.currentReviewer = currentReviewer
         self.reviewerHistory = reviewerHistory
+        self.gitRepository = gitRepository ?? ProjectGitDetector.detect(at: canonicalPath)
     }
 
     public init(from decoder: Decoder) throws {
@@ -232,6 +475,12 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         self.currentReviewer = try container.decodeIfPresent(ProjectReviewer.self, forKey: .currentReviewer)
         self.reviewerHistory = try container.decodeIfPresent([ReviewerHistoryRecord].self, forKey: .reviewerHistory) ?? []
+        self.gitRepository = try container.decodeIfPresent(ProjectGitHubRepository.self, forKey: .gitRepository)
+    }
+
+    /// Evaluates the live local Git repository status at the project root path.
+    public var liveGitRepository: ProjectGitHubRepository? {
+        return ProjectGitDetector.detect(at: rootPath)
     }
 
     /// Evaluates whether the current reviewer is actively open / observable among open Chrome tabs.

@@ -2807,5 +2807,48 @@ final class AgentSignalBarTests: XCTestCase {
         session.cwd = nil
         XCTAssertNil(session.resolveProject(using: registry))
     }
+
+    func testProjectGitHubRepositoryDetectionAndLifecycle() throws {
+        // 1. URL Parser
+        let sshParsed = GitHubURLParser.parseRepository(from: "git@github.com:iknoest/Agent-webchat-monitor.git")
+        XCTAssertEqual(sshParsed?.fullName, "iknoest/Agent-webchat-monitor")
+        XCTAssertEqual(sshParsed?.canonicalUrl, "https://github.com/iknoest/Agent-webchat-monitor")
+
+        let httpsParsed = GitHubURLParser.parseRepository(from: "https://github.com/iknoest/Agent-webchat-monitor")
+        XCTAssertEqual(httpsParsed?.fullName, "iknoest/Agent-webchat-monitor")
+
+        XCTAssertNil(GitHubURLParser.parseRepository(from: "git@gitlab.com:owner/repo.git"))
+        XCTAssertNil(GitHubURLParser.parseRepository(from: "https://bitbucket.org/owner/repo"))
+
+        // 2. Local Git repo detection
+        let tempDir = NSTemporaryDirectory()
+        let testRepoPath = "\(tempDir)/AgentSignalBarTest_git_repo_\(UUID().uuidString)"
+        let gitPath = "\(testRepoPath)/.git"
+        try FileManager.default.createDirectory(atPath: gitPath, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: testRepoPath) }
+
+        let gitConfig = """
+        [remote "origin"]
+            url = https://github.com/test-owner/test-repo.git
+        """
+        try gitConfig.write(toFile: "\(gitPath)/config", atomically: true, encoding: .utf8)
+
+        let detected = ProjectGitDetector.detect(at: testRepoPath)
+        XCTAssertEqual(detected?.fullName, "test-owner/test-repo")
+        XCTAssertEqual(detected?.canonicalUrl, "https://github.com/test-owner/test-repo")
+
+        // 3. Project Registry registration with auto-detected git repo
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m34_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let project = try registry.registerProject(rootPath: testRepoPath, name: "Test Git Project")
+        XCTAssertEqual(project.gitRepository?.fullName, "test-owner/test-repo")
+
+        // 4. Persistence across reload
+        let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+        let reloaded = reloadedRegistry.getProject(byId: project.id)
+        XCTAssertEqual(reloaded?.gitRepository?.fullName, "test-owner/test-repo")
+    }
 }
 #endif

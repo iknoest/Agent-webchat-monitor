@@ -1725,3 +1725,30 @@ Next: Present M3.3 report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M3.3 Agent Session Association by CWD / Workspace — antigravity — 2026-08-28T17:50:00+02:00
+
+## 2026-08-28 — antigravity — macos
+Status: DONE
+Phase: M3.4 Optional GitHub Repository Association
+Done:
+1. GitHub URL Parsing & Normalization (`ProjectModel.swift`):
+   - Implemented `GitHubURLParser` extracting canonical `owner`, `repository`, `fullName` (`owner/repo`), and `canonicalUrl` (`https://github.com/owner/repo`) from SSH (`git@github.com:...`, `ssh://git@github.com/...`) and HTTPS/HTTP (`https://github.com/...`) formats with optional `.git` suffix.
+   - Non-GitHub remotes (GitLab, Bitbucket, local filesystem paths, malformed URLs) strictly fail closed (`nil`).
+2. Local Git Configuration Detection (`ProjectModel.swift`):
+   - Implemented `ProjectGitDetector` reading `.git/config` (or `.git` file pointers for submodules and worktrees) directly from disk with 0 subprocess overhead and 0 freeze risk.
+   - Enforced authoritative remote convention: `origin` is primary; single GitHub remote is accepted; conflicting distinct remotes without origin fail closed.
+   - Preserved nested project isolation: subprojects without `.git` at their root never accidentally inherit parent repository remotes.
+3. Durable Project Integration & Menu UX (`ProjectModel.swift`, `ProjectRegistry.swift`, `MenuBarManager.swift`):
+   - Added optional `gitRepository: ProjectGitHubRepository?` to `Project` model and `projects.json` (auto-detected on registration, refreshable via `refreshGitRepository(forProjectId:)`, with zero credential/token storage).
+   - In "Registered Projects & Reviewers" menu, added `GitHub: <owner>/<repo>` item to Project submenus, providing 1-click open in default browser.
+   - Included repository identity in `computeRenderSignature()` for zero-delay menu bar re-rendering.
+4. Deterministic Automated Verification:
+   - Added Tests 487 to 498 in `Stage1TestRunner` covering SSH/HTTPS normalization, optional `.git` stripping, non-GitHub rejection, non-Git project validity, malformed URL rejection, Project ID/root invariance, M3.3 CWD independence, nested project isolation, ambiguous remote safety, JSON privacy invariants, and live disk drift refresh (498/498 passed).
+   - Added `testProjectGitHubRepositoryDetectionAndLifecycle` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (498/498 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present M3.4 report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.4 Optional GitHub Repository Association — antigravity — 2026-08-28T18:24:00+02:00

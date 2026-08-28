@@ -333,6 +333,30 @@ public final class ProjectRegistry: @unchecked Sendable {
         return nil
     }
 
+    /// Refreshes the local Git repository metadata for a project from disk (M3.4).
+    @discardableResult
+    public func refreshGitRepository(forProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        let detected = ProjectGitDetector.detect(at: project.rootPath)
+        if project.gitRepository != detected {
+            project.gitRepository = detected
+            project.updatedAt = Date()
+            projectsById[projectId] = project
+            projectsByCanonicalPath[project.rootPath] = project.id
+            lock.unlock()
+            try save()
+            return project
+        } else {
+            lock.unlock()
+            return project
+        }
+    }
+
     // MARK: - Query & Lookup
 
     /// Looks up a registered project by its unique ID.
