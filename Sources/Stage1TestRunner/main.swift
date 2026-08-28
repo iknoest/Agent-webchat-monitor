@@ -9165,4 +9165,376 @@ runTest("472. Data Privacy Invariant: No conversation content, transcript, or au
     try assert(!jsonString.contains("prompt"))
 }
 
-print("🎉 All 472 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination & M3.2 ChatGPT Reviewer Association Tests Passed!")
+// 473. CWD Match: Exact project root workspace matches registered Project
+runTest("473. CWD Match: Exact project root workspace matches registered Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_473_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-exact-001",
+        title: "Exact Root Session",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os"
+    )
+
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == project.id)
+    try assert(matched?.name == "AgentOS")
+}
+
+// 474. CWD Match: Descendant workspace matches registered Project
+runTest("474. CWD Match: Descendant workspace matches registered Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_474_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let session = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "sess-descendant-001",
+        title: "Deep Subdir Task",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os/Sources/AgentSignalBar/Core"
+    )
+
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == project.id)
+    try assert(matched?.name == "AgentOS")
+}
+
+// 475. CWD Match: Nested registered Projects choose deepest parent
+runTest("475. CWD Match: Nested registered Projects choose deepest parent") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_475_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let parent = try registry.registerProject(rootPath: "/Users/test/monorepo", name: "Monorepo Root")
+    let child = try registry.registerProject(rootPath: "/Users/test/monorepo/packages/sub-service", name: "Sub Service")
+
+    let sessionChild = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "sess-nested-001",
+        title: "Nested Service Feature",
+        status: .working,
+        cwd: "/Users/test/monorepo/packages/sub-service/src/components"
+    )
+
+    let sessionParent = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "sess-parent-001",
+        title: "Root Tooling",
+        status: .working,
+        cwd: "/Users/test/monorepo/scripts"
+    )
+
+    try assert(sessionChild.resolveProject(using: registry)?.id == child.id)
+    try assert(sessionParent.resolveProject(using: registry)?.id == parent.id)
+}
+
+// 476. Boundary Guard: Sibling/prefix collision does not falsely match
+runTest("476. Boundary Guard: Sibling/prefix collision does not falsely match") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_476_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let sessionSibling = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-sibling-001",
+        title: "Sibling Repo",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os-extra/src"
+    )
+
+    try assert(sessionSibling.resolveProject(using: registry) == nil)
+}
+
+// 477. Unassigned: Workspace outside registered roots resolves to Unassigned
+runTest("477. Unassigned: Workspace outside registered roots resolves to Unassigned") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_477_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let sessionOutside = AgentSessionInfo(
+        provider: .copilot,
+        sessionId: "sess-outside-001",
+        title: "Random Scratch",
+        status: .working,
+        cwd: "/tmp/scratchpad/test"
+    )
+
+    try assert(sessionOutside.resolveProject(using: registry) == nil)
+}
+
+// 478. Unassigned: Missing or empty workspace resolves to Unassigned
+runTest("478. Unassigned: Missing or empty workspace resolves to Unassigned") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_478_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let sessionNil = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-nil-001",
+        title: "No CWD Session",
+        status: .working,
+        cwd: nil
+    )
+
+    let sessionEmpty = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-empty-001",
+        title: "Empty CWD Session",
+        status: .working,
+        cwd: "   "
+    )
+
+    try assert(sessionNil.resolveProject(using: registry) == nil)
+    try assert(sessionEmpty.resolveProject(using: registry) == nil)
+}
+
+// 479. Canonical Normalization: Path normalization preserves matching across trailing slashes and relative tokens
+runTest("479. Canonical Normalization: Path normalization preserves matching across trailing slashes and relative tokens") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_479_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let sessionTrailing = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "sess-trailing-001",
+        title: "Trailing Slash",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os/Sources/../Sources/AgentSignalBar/"
+    )
+
+    try assert(sessionTrailing.resolveProject(using: registry)?.id == project.id)
+}
+
+// 480. Dynamic Reassociation: Session workspace change recomputes association dynamically
+runTest("480. Dynamic Reassociation: Session workspace change recomputes association dynamically") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_480_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let projectA = try registry.registerProject(rootPath: "/Users/test/workspace/project-a", name: "Project A")
+    let projectB = try registry.registerProject(rootPath: "/Users/test/workspace/project-b", name: "Project B")
+
+    var session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-dynamic-001",
+        title: "Switching Workspace",
+        status: .working,
+        cwd: "/Users/test/workspace/project-a/lib"
+    )
+
+    try assert(session.resolveProject(using: registry)?.id == projectA.id)
+
+    // Workspace changes
+    session.cwd = "/Users/test/workspace/project-b/src"
+    try assert(session.resolveProject(using: registry)?.id == projectB.id)
+
+    // Workspace changes to unregistered
+    session.cwd = "/var/tmp/unregistered"
+    try assert(session.resolveProject(using: registry) == nil)
+}
+
+// 481. Dynamic Removal: Removed Project dynamically clears association without stale references
+runTest("481. Dynamic Removal: Removed Project dynamically clears association without stale references") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_481_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "sess-removal-001",
+        title: "Transient Task",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os/submodule"
+    )
+
+    try assert(session.resolveProject(using: registry)?.id == project.id)
+
+    // Remove project
+    _ = try registry.removeProject(id: project.id)
+
+    // Association must dynamically resolve to nil
+    try assert(session.resolveProject(using: registry) == nil)
+}
+
+// 482. Nested Fallback: Parent Project becomes fallback if nested child Project is removed
+runTest("482. Nested Fallback: Parent Project becomes fallback if nested child Project is removed") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_482_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let parent = try registry.registerProject(rootPath: "/Users/test/monorepo", name: "Monorepo Parent")
+    let child = try registry.registerProject(rootPath: "/Users/test/monorepo/sub-service", name: "Sub Service")
+
+    let session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-fallback-001",
+        title: "Sub Service Worker",
+        status: .working,
+        cwd: "/Users/test/monorepo/sub-service/src"
+    )
+
+    try assert(session.resolveProject(using: registry)?.id == child.id)
+
+    // Remove child project
+    _ = try registry.removeProject(id: child.id)
+
+    // Now longest-parent match naturally falls back to parent
+    try assert(session.resolveProject(using: registry)?.id == parent.id)
+}
+
+// 483. Multi-Session Independence: Sessions across different Projects resolve independently
+runTest("483. Multi-Session Independence: Sessions across different Projects resolve independently") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_483_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p1 = try registry.registerProject(rootPath: "/Users/test/workspace/repo-1", name: "Repo 1")
+    let p2 = try registry.registerProject(rootPath: "/Users/test/workspace/repo-2", name: "Repo 2")
+
+    let s1 = AgentSessionInfo(provider: .claude, sessionId: "s1", title: "T1", status: .working, cwd: "/Users/test/workspace/repo-1/a")
+    let s2 = AgentSessionInfo(provider: .codex, sessionId: "s2", title: "T2", status: .working, cwd: "/Users/test/workspace/repo-2/b")
+    let s3 = AgentSessionInfo(provider: .copilot, sessionId: "s3", title: "T3", status: .working, cwd: "/Users/test/workspace/other")
+
+    try assert(s1.resolveProject(using: registry)?.id == p1.id)
+    try assert(s2.resolveProject(using: registry)?.id == p2.id)
+    try assert(s3.resolveProject(using: registry) == nil)
+}
+
+// 484. Multi-Session Convergence: Multiple sessions in same Project converge on same Project ID
+runTest("484. Multi-Session Convergence: Multiple sessions in same Project converge on same Project ID") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_484_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    let sClaude = AgentSessionInfo(provider: .claude, sessionId: "c1", title: "Claude Worker", status: .working, cwd: "/Users/test/workspace/agent-os/Sources")
+    let sCodex = AgentSessionInfo(provider: .codex, sessionId: "x1", title: "Codex Worker", status: .working, cwd: "/Users/test/workspace/agent-os/Tests")
+    let sAgy = AgentSessionInfo(provider: .antigravity, sessionId: "a1", title: "AGY Worker", status: .working, cwd: "/Users/test/workspace/agent-os")
+
+    try assert(sClaude.resolveProject(using: registry)?.id == project.id)
+    try assert(sCodex.resolveProject(using: registry)?.id == project.id)
+    try assert(sAgy.resolveProject(using: registry)?.id == project.id)
+}
+
+// 485. Separation of Concerns: ChatGPT reviewer is governed by M3.2 and never assigned via fake CWD
+runTest("485. Separation of Concerns: ChatGPT reviewer is governed by M3.2 and never assigned via fake CWD") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_485_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+    try registry.assignReviewer(toProjectId: project.id, url: "https://chatgpt.com/c/gpt-rev-485", title: "Reviewer 485")
+
+    let chatgptSession = AgentSessionInfo(
+        provider: .chatgpt,
+        sessionId: "tab-chatgpt-101",
+        title: "ChatGPT Active Tab",
+        status: .working,
+        cwd: nil // ChatGPT Web has no filesystem CWD
+    )
+
+    // ChatGPT session has no CWD and must resolve to nil via M3.3
+    try assert(chatgptSession.resolveProject(using: registry) == nil)
+
+    // But project reviewer relationship is preserved via M3.2
+    let updatedProj = registry.getProject(byId: project.id)
+    try assert(updatedProj?.currentReviewer?.conversationId == "gpt-rev-485")
+}
+
+// 486. Provider Concrete CWD Verification: Claude, Antigravity, Codex, Copilot real CWD payloads resolve Project
+runTest("486. Provider Concrete CWD Verification: Claude, Antigravity, Codex, Copilot real CWD payloads resolve Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_486_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let targetProject = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+    // 1. Claude Hook payload with CWD
+    let claudeHookPayload: [String: Any] = [
+        "event": "UserPromptSubmit",
+        "session_id": "claude-hook-session-486",
+        "cwd": "/Users/test/workspace/agent-os/Sources/AgentSignalBar"
+    ]
+    let claudeCwd = claudeHookPayload["cwd"] as? String
+    let claudeSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-hook-session-486",
+        title: "Claude Hook Session",
+        status: .working,
+        cwd: claudeCwd
+    )
+    try assert(claudeSession.resolveProject(using: registry)?.id == targetProject.id)
+
+    // 2. Antigravity Hook payload with CWD
+    let agyHookPayload: [String: Any] = [
+        "event": "PreInvocation",
+        "session_id": "agy-hook-session-486",
+        "cwd": "/Users/test/workspace/agent-os"
+    ]
+    let agyCwd = agyHookPayload["cwd"] as? String
+    let agySession = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-hook-session-486",
+        title: "AGY Hook Session",
+        status: .working,
+        cwd: agyCwd
+    )
+    try assert(agySession.resolveProject(using: registry)?.id == targetProject.id)
+
+    // 3. Codex Thread database row with CWD
+    let codexThreadCwd = "/Users/test/workspace/agent-os/Tests/AgentSignalBarTests"
+    let codexSession = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "codex-db-thread-486",
+        title: "Codex Thread Session",
+        status: .working,
+        cwd: codexThreadCwd
+    )
+    try assert(codexSession.resolveProject(using: registry)?.id == targetProject.id)
+
+    // 4. Copilot session store with CWD
+    let copilotSessionCwd = "/Users/test/workspace/agent-os/subfolder"
+    let copilotSession = AgentSessionInfo(
+        provider: .copilot,
+        sessionId: "copilot-db-session-486",
+        title: "Copilot DB Session",
+        status: .working,
+        cwd: copilotSessionCwd
+    )
+    try assert(copilotSession.resolveProject(using: registry)?.id == targetProject.id)
+}
+
+print("🎉 All 486 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association & M3.3 CWD Session Association Tests Passed!")

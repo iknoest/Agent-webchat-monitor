@@ -360,6 +360,32 @@ public struct AgentSessionInfo: Codable, Sendable {
         self.pendingToolTime = pendingToolTime
         self.cwd = cwd
     }
+
+    /// Dynamically resolves the registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3).
+    ///
+    /// Evaluated using `ProjectRegistry.matchProject(forPath:)` longest-parent matching.
+    /// Returns `nil` (Unassigned) if the session has no reliable CWD or is outside all registered roots.
+    public func resolveProject(using registry: ProjectRegistry = .shared) -> Project? {
+        guard let rawCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !rawCwd.isEmpty else {
+            return nil
+        }
+        return registry.matchProject(forPath: rawCwd)
+    }
+
+    /// Derived registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3).
+    public var associatedProject: Project? {
+        return resolveProject(using: .shared)
+    }
+
+    /// User-facing display name of the associated project, or "Unassigned".
+    public var associatedProjectName: String {
+        return associatedProject?.name ?? "Unassigned"
+    }
+
+    /// Unique ID of the associated project, or nil if unassigned.
+    public var associatedProjectId: String? {
+        return associatedProject?.id
+    }
 }
 
 public struct AgentInfo: Codable {
@@ -703,6 +729,22 @@ public final class AgentStore: @unchecked Sendable {
             result.append(contentsOf: dict.values)
         }
         return result
+    }
+
+    /// Dynamically resolves the derived Project for a given session.
+    public func project(forSession session: AgentSessionInfo, using registry: ProjectRegistry = .shared) -> Project? {
+        return session.resolveProject(using: registry)
+    }
+
+    /// Returns all active agent sessions across all providers that dynamically resolve to the specified Project ID (M3.3).
+    public func getSessions(forProjectId projectId: String, using registry: ProjectRegistry = .shared) -> [AgentSessionInfo] {
+        lock.lock()
+        var allSessions: [AgentSessionInfo] = []
+        for dict in trackedSessions.values {
+            allSessions.append(contentsOf: dict.values)
+        }
+        lock.unlock()
+        return allSessions.filter { $0.resolveProject(using: registry)?.id == projectId }
     }
 
     public func syncSessions(for provider: AgentID, activeSessions: [AgentSessionInfo], processRunning: Bool = true) {

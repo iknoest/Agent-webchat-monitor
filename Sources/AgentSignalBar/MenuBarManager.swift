@@ -298,7 +298,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         var sessionsStr = ""
         for s in AgentStore.shared.getAllSessions() {
-            sessionsStr += "\(s.provider.rawValue):\(s.sessionId):\(s.status.rawValue):\(s.title); "
+            sessionsStr += "\(s.provider.rawValue):\(s.sessionId):\(s.status.rawValue):\(s.title):\(s.cwd ?? ""):\(s.associatedProjectId ?? ""); "
         }
         var stateDetails = ""
         for agent in AgentID.allCases {
@@ -626,10 +626,23 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
                     for s in providerSessions {
                         let sBadge = s.status.statusDot(theme: currentTheme)
-                        let subItem = NSMenuItem(title: "  \(sBadge) [\(s.status.statusTitle)] \(s.title)", action: nil, keyEquivalent: "")
+                        let projTag: String
+                        if let proj = s.associatedProject {
+                            projTag = " · 📁 \(proj.name)"
+                        } else {
+                            projTag = ""
+                        }
+                        let subItem = NSMenuItem(title: "  \(sBadge) [\(s.status.statusTitle)] \(s.title)\(projTag)", action: nil, keyEquivalent: "")
                         subItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: s.status, availability: effAvail))
                         subItem.isEnabled = false
                         submenu.addItem(subItem)
+
+                        if let rawCwd = s.cwd, !rawCwd.isEmpty {
+                            let projName = s.associatedProject?.name ?? "Unassigned"
+                            let cwdItem = NSMenuItem(title: "     Project: \(projName)  (CWD: \(rawCwd))", action: nil, keyEquivalent: "")
+                            cwdItem.isEnabled = false
+                            submenu.addItem(cwdItem)
+                        }
                     }
                 }
 
@@ -930,6 +943,22 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         pastItem.target = self
                         pastItem.representedObject = ["url": past.url]
                         projSubmenu.addItem(pastItem)
+                    }
+                }
+
+                // M3.3: Active Agent Sessions in this Project (Derived by CWD/Workspace)
+                let projectSessions = AgentStore.shared.getSessions(forProjectId: project.id)
+                if !projectSessions.isEmpty {
+                    projSubmenu.addItem(NSMenuItem.separator())
+                    let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(projectSessions.count)):", action: nil, keyEquivalent: "")
+                    sessHdr.isEnabled = false
+                    projSubmenu.addItem(sessHdr)
+
+                    for sess in projectSessions {
+                        let sessBadge = sess.status.statusDot(theme: currentTheme)
+                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(sess.provider.displayName): \(sess.title)", action: nil, keyEquivalent: "")
+                        sessItem.isEnabled = false
+                        projSubmenu.addItem(sessItem)
                     }
                 }
 

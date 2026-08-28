@@ -2760,5 +2760,52 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(closedStatus?.isCurrentlyObservable, false)
         XCTAssertNil(closedStatus?.activeTabId)
     }
+
+    func testAgentSessionProjectAssociationAndDynamicLifecycle() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m33_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        // 1. Register projects
+        let parent = try registry.registerProject(rootPath: "/Users/test/monorepo", name: "Monorepo Parent")
+        let child = try registry.registerProject(rootPath: "/Users/test/monorepo/sub-package", name: "Sub Package")
+
+        // 2. Child session matches deepest parent
+        var session = AgentSessionInfo(
+            provider: .claude,
+            sessionId: "sess-m33-001",
+            title: "Worker Task",
+            status: .working,
+            cwd: "/Users/test/monorepo/sub-package/src/index.ts"
+        )
+        XCTAssertEqual(session.resolveProject(using: registry)?.id, child.id)
+        XCTAssertEqual(session.resolveProject(using: registry)?.name, "Sub Package")
+
+        // 3. Parent session matches root
+        let parentSession = AgentSessionInfo(
+            provider: .codex,
+            sessionId: "sess-m33-002",
+            title: "Root Tool",
+            status: .working,
+            cwd: "/Users/test/monorepo/scripts"
+        )
+        XCTAssertEqual(parentSession.resolveProject(using: registry)?.id, parent.id)
+
+        // 4. Session workspace change dynamically re-evaluates
+        session.cwd = "/Users/test/monorepo/scripts/build.sh"
+        XCTAssertEqual(session.resolveProject(using: registry)?.id, parent.id)
+
+        // 5. Remove child -> dynamically falls back to parent
+        session.cwd = "/Users/test/monorepo/sub-package/src/index.ts"
+        _ = try registry.removeProject(id: child.id)
+        XCTAssertEqual(session.resolveProject(using: registry)?.id, parent.id)
+
+        // 6. Outside / Missing CWD -> Unassigned (nil)
+        session.cwd = "/tmp/other"
+        XCTAssertNil(session.resolveProject(using: registry))
+        session.cwd = nil
+        XCTAssertNil(session.resolveProject(using: registry))
+    }
 }
 #endif

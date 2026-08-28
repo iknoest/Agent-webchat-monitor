@@ -1699,3 +1699,29 @@ Next: Present M3.2 report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M3.2 Current ChatGPT Reviewer Association + Minimal Explicit Linking UX — antigravity — 2026-08-28T17:34:00+02:00
+
+## 2026-08-28 — antigravity — macos
+Status: DONE
+Phase: M3.3 Agent Session Association by CWD / Workspace
+Done:
+1. Dynamic Derived Project Resolution (`AgentState.swift`):
+   - Added `resolveProject(using:)`, `associatedProject`, `associatedProjectName`, and `associatedProjectId` on `AgentSessionInfo` dynamically matching reliable `session.cwd` against `ProjectRegistry.matchProject(forPath:)` longest-parent matching.
+   - Added `project(forSession:using:)` and `getSessions(forProjectId:using:)` to `AgentStore` enabling dynamic cross-provider project session queries with zero duplicate persistence.
+2. Menu Visibility & Minimal Linking UX (`MenuBarManager.swift`):
+   - Tracked workspace sessions under each provider (Claude, Codex, Antigravity, Copilot) now render `· 📁 <Project Name>` on session title rows and `Project: <Project Name> (CWD: <path>)` sub-items.
+   - Project submenus under "Registered Projects & Reviewers" now list active agent sessions derived to each project.
+   - Included `session.cwd` and `session.associatedProjectId` in `computeRenderSignature()` for zero-delay menu bar re-rendering upon CWD or project updates.
+3. Provider Evidence & Separation of Concerns:
+   - Verified reliable CWD ingestion across all 4 local agent providers: Claude Code (hook payload / session update), Antigravity (hook payload), Codex Desktop (`threads.cwd` sqlite column), and GitHub Copilot (`sessions.cwd` db / `session.yaml`).
+   - Kept ChatGPT Web strictly separate: ChatGPT sessions have no filesystem CWD and project relationships are governed exclusively by M3.2 Current Reviewer association.
+4. Deterministic Automated Verification:
+   - Added Tests 473 to 486 in `Stage1TestRunner` covering exact root match, descendant match, nested longest-parent selection, boundary/prefix collision protection, unassigned resolution for outside/missing CWDs, canonical normalization, dynamic workspace reassociation, dynamic project removal fallback, multi-session independence, multi-session convergence, ChatGPT separation, and concrete provider CWD payloads (486/486 passed).
+   - Added `testAgentSessionProjectAssociationAndDynamicLifecycle` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (486/486 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present M3.3 report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.3 Agent Session Association by CWD / Workspace — antigravity — 2026-08-28T17:50:00+02:00
