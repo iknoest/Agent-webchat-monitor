@@ -516,6 +516,74 @@ public struct ProjectWorkstream: Identifiable, Codable, Sendable, Equatable, Has
     }
 }
 
+// MARK: - Recent Session Snapshot (M3.7 Recent Session Continuity)
+
+/// Lightweight metadata snapshot of the most-recent agent session for a Project/Workstream/Provider (M3.7).
+/// Captures context for inactive sessions without storing transcripts, prompts, or sensitive payloads.
+public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, Hashable {
+    public let id: String
+    public let provider: AgentID
+    public let sessionId: String
+    public let title: String
+    public let cwd: String?
+    public let projectId: String
+    public let workstreamId: String?
+    public let lastStatus: AgentStatus
+    public let lastUpdated: Date
+    public let lastDurationSeconds: Double?
+    public let webLink: String?
+    public let targetTabId: Int?
+
+    public init(
+        id: String = UUID().uuidString,
+        provider: AgentID,
+        sessionId: String,
+        title: String,
+        cwd: String?,
+        projectId: String,
+        workstreamId: String? = nil,
+        lastStatus: AgentStatus,
+        lastUpdated: Date = Date(),
+        lastDurationSeconds: Double? = nil,
+        webLink: String? = nil,
+        targetTabId: Int? = nil
+    ) {
+        self.id = id
+        self.provider = provider
+        self.sessionId = sessionId
+        self.title = title
+        self.cwd = cwd
+        self.projectId = projectId
+        self.workstreamId = workstreamId
+        self.lastStatus = lastStatus
+        self.lastUpdated = lastUpdated
+        self.lastDurationSeconds = lastDurationSeconds
+        self.webLink = webLink
+        self.targetTabId = targetTabId
+    }
+
+    /// Creates a snapshot from a live AgentSessionInfo and resolved project/workstream identities.
+    public static func from(
+        session: AgentSessionInfo,
+        projectId: String,
+        workstreamId: String? = nil
+    ) -> ProjectRecentSession {
+        return ProjectRecentSession(
+            provider: session.provider,
+            sessionId: session.sessionId,
+            title: session.title.isEmpty ? session.sessionId : session.title,
+            cwd: session.cwd,
+            projectId: projectId,
+            workstreamId: workstreamId,
+            lastStatus: session.status,
+            lastUpdated: session.lastUpdated,
+            lastDurationSeconds: session.lastDurationSeconds,
+            webLink: session.webLink,
+            targetTabId: session.targetTabId
+        )
+    }
+}
+
 // MARK: - Core Project Entity (M3.1 / M3.6 Multi-Workspace & Workstream Model)
 
 /// Represents a logical project boundary containing one or more workspaces, workstreams, and sessions.
@@ -534,6 +602,9 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
 
     /// Optional associated GitHub repository metadata (M3.4).
     public var gitRepository: ProjectGitHubRepository?
+
+    /// Bounded snapshot of the most-recent agent sessions per (Workstream × Provider) or (Project × Provider) (M3.7).
+    public var recentSessions: [ProjectRecentSession]
 
     /// Timestamp when the project was registered.
     public let createdAt: Date
@@ -588,12 +659,15 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         workspaces: [ProjectWorkspace] = [],
         workstreams: [ProjectWorkstream] = [],
         gitRepository: ProjectGitHubRepository? = nil,
+        recentSessions: [ProjectRecentSession] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.workspaces = workspaces
         self.workstreams = workstreams
+        self.gitRepository = gitRepository
+        self.recentSessions = recentSessions
         self.createdAt = createdAt
         self.updatedAt = updatedAt
 
@@ -624,7 +698,8 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         updatedAt: Date = Date(),
         currentReviewer: ProjectReviewer? = nil,
         reviewerHistory: [ReviewerHistoryRecord] = [],
-        gitRepository: ProjectGitHubRepository? = nil
+        gitRepository: ProjectGitHubRepository? = nil,
+        recentSessions: [ProjectRecentSession] = []
     ) {
         let canonicalPath = Self.canonicalizePath(rootPath)
         let primaryWs = ProjectWorkspace(path: canonicalPath, name: nil, isPrimary: true, createdAt: createdAt)
@@ -641,6 +716,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         self.id = id
         self.workspaces = [primaryWs]
         self.workstreams = [defaultWs]
+        self.recentSessions = recentSessions
         self.createdAt = createdAt
         self.updatedAt = updatedAt
 
@@ -662,6 +738,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         case workspaces
         case workstreams
         case gitRepository
+        case recentSessions
         case createdAt
         case updatedAt
         // Legacy v1 keys:
@@ -677,6 +754,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         self.gitRepository = try container.decodeIfPresent(ProjectGitHubRepository.self, forKey: .gitRepository)
+        self.recentSessions = try container.decodeIfPresent([ProjectRecentSession].self, forKey: .recentSessions) ?? []
 
         // 1. Decode or migrate Workspaces
         if let decodedWorkspaces = try container.decodeIfPresent([ProjectWorkspace].self, forKey: .workspaces), !decodedWorkspaces.isEmpty {
@@ -724,6 +802,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         try container.encode(workspaces, forKey: .workspaces)
         try container.encode(workstreams, forKey: .workstreams)
         try container.encodeIfPresent(gitRepository, forKey: .gitRepository)
+        try container.encode(recentSessions, forKey: .recentSessions)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }

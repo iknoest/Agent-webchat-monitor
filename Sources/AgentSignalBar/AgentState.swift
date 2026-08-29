@@ -775,6 +775,9 @@ public final class AgentStore: @unchecked Sendable {
         let now = Date()
 
         for var session in activeSessions {
+            // M3.7: Continuously preserve lightweight recent session snapshot
+            ProjectRegistry.shared.recordRecentSession(from: session)
+
             let key = session.sessionId
             if session.turnId == nil || session.turnId?.isEmpty == true {
                 session.turnId = "\(session.sessionId)_turn_\(session.status.rawValue)"
@@ -1068,6 +1071,7 @@ public final class AgentStore: @unchecked Sendable {
 
             // Prune ended sessions immediately upon SessionEnd
             if session.sensorReason?.contains("SessionEnd") == true || session.sourceEvidence.contains("SessionEnd") {
+                ProjectRegistry.shared.recordRecentSession(from: session)
                 currentSessions.removeValue(forKey: sessionId)
                 changed = true
                 continue
@@ -1075,6 +1079,7 @@ public final class AgentStore: @unchecked Sendable {
 
             // Prune completed (.done) or idle (.idle) sessions older than maxAgeSeconds (5 minutes)
             if now.timeIntervalSince(session.lastUpdated) > maxAgeSeconds {
+                ProjectRegistry.shared.recordRecentSession(from: session)
                 currentSessions.removeValue(forKey: sessionId)
                 changed = true
             }
@@ -1099,6 +1104,7 @@ public final class AgentStore: @unchecked Sendable {
                 currentDict.removeValue(forKey: key)
                 changed = true
             } else if session.status == .idle && (session.sensorReason?.contains("SessionEnd") == true || session.sourceEvidence.contains("SessionEnd")) {
+                ProjectRegistry.shared.recordRecentSession(from: session)
                 currentDict.removeValue(forKey: key)
                 changed = true
             }
@@ -1259,6 +1265,10 @@ public final class AgentStore: @unchecked Sendable {
             session.thinkingStartTime = nil
             session.sourceEvidence = "Claude Hook: SessionEnd"
             session.sensorReason = "Claude Hook: SessionEnd"
+
+            // M3.7: Capture last-known metadata snapshot before active removal
+            ProjectRegistry.shared.recordRecentSession(from: session)
+
             // Immediate cleanup upon SessionEnd
             currentSessions.removeValue(forKey: sessionId)
             trackedSessions[.claude] = currentSessions
@@ -1520,6 +1530,10 @@ public final class AgentStore: @unchecked Sendable {
             session.thinkingStartTime = nil
             session.sourceEvidence = "Antigravity Hook: SessionEnd"
             session.sensorReason = "Antigravity Hook: SessionEnd"
+
+            // M3.7: Capture last-known metadata snapshot before active removal
+            ProjectRegistry.shared.recordRecentSession(from: session)
+
             currentSessions.removeValue(forKey: sessionId)
             trackedSessions[.antigravity] = currentSessions
             lock.unlock()
@@ -1846,6 +1860,7 @@ public final class AgentStore: @unchecked Sendable {
 
             // Prune completed (.done) or idle (.idle) sessions older than maxAgeSeconds (5 minutes)
             if now.timeIntervalSince(session.lastUpdated) > maxAgeSeconds {
+                ProjectRegistry.shared.recordRecentSession(from: session)
                 currentSessions.removeValue(forKey: sessionId)
                 changed = true
             }

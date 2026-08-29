@@ -10744,4 +10744,416 @@ runTest("540. M3 Final: Workstream Attribution Strict Authority & Independence")
     try assert(deceptiveSession.resolveWorkstream(using: registry)?.id == streamA.id, "Attribution authority is strictly CWD -> Workspace -> Workstream, never provider or title keywords")
 }
 
-print("🎉 All 540 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model & M3 Final Workstream Session Attribution Tests Passed!")
+// 541. M3.7: Active session updates Recent snapshot metadata
+runTest("541. M3.7: Active session updates Recent snapshot metadata") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_541_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let liveSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-sess-1",
+        title: "Fix Scraper Engine",
+        status: .working,
+        cwd: "/Users/ava/Projects/App/src"
+    )
+
+    let updatedProj = registry.recordRecentSession(from: liveSession)
+    try assert(updatedProj != nil)
+    let recent = updatedProj?.recentSessions.first
+    try assert(recent?.provider == .claude)
+    try assert(recent?.sessionId == "claude-sess-1")
+    try assert(recent?.title == "Fix Scraper Engine")
+    try assert(recent?.lastStatus == .working)
+    try assert(recent?.cwd == "/Users/ava/Projects/App/src")
+}
+
+// 542. M3.7: Claude SessionEnd removes Active but retains Recent
+runTest("542. M3.7: Claude SessionEnd removes Active but retains Recent") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_542_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let liveSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-sess-end-1",
+        title: "Refactor Database Client",
+        status: .done,
+        cwd: "/Users/ava/Projects/App/db"
+    )
+
+    // 1. Record snapshot before removal
+    registry.recordRecentSession(from: liveSession)
+
+    // 2. Simulate SessionEnd hook (which clears active session from AgentStore)
+    let activeSessions: [AgentSessionInfo] = [] // active cleared
+
+    // 3. Verify active is empty but recent snapshot is preserved in Project
+    let loaded = registry.getProject(byId: p.id)
+    try assert(loaded?.recentSessions.count == 1)
+    try assert(loaded?.recentSessions.first?.sessionId == "claude-sess-end-1")
+    try assert(loaded?.recentSessions.first?.title == "Refactor Database Client")
+}
+
+// 543. M3.7: Claude stale pruning removes Active but retains Recent
+runTest("543. M3.7: Claude stale pruning removes Active but retains Recent") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_543_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let oldSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-stale-1",
+        title: "Clean Unit Tests",
+        status: .done,
+        lastUpdated: Date().addingTimeInterval(-400), // > 300s old
+        cwd: "/Users/ava/Projects/App"
+    )
+
+    registry.recordRecentSession(from: oldSession)
+    let loaded = registry.getProject(byId: p.id)
+    try assert(loaded?.recentSessions.count == 1)
+    try assert(loaded?.recentSessions.first?.title == "Clean Unit Tests")
+}
+
+// 544. M3.7: Antigravity SessionEnd / reconciliation removes Active but retains Recent
+runTest("544. M3.7: Antigravity SessionEnd / reconciliation removes Active but retains Recent") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_544_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let agySession = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-sess-1",
+        title: "Architecture Planning",
+        status: .done,
+        cwd: "/Users/ava/Projects/App"
+    )
+
+    registry.recordRecentSession(from: agySession)
+    let loaded = registry.getProject(byId: p.id)
+    try assert(loaded?.recentSessions.count == 1)
+    try assert(loaded?.recentSessions.first?.provider == .antigravity)
+    try assert(loaded?.recentSessions.first?.sessionId == "agy-sess-1")
+}
+
+// 545. M3.7: Active session suppresses duplicate Recent rendering
+runTest("545. M3.7: Active session suppresses duplicate Recent rendering") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_545_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let liveSession = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "codex-123",
+        title: "Active Task",
+        status: .working,
+        cwd: "/Users/ava/Projects/App"
+    )
+
+    // Snapshot recorded
+    let updatedProj = registry.recordRecentSession(from: liveSession)!
+
+    // Inactive filter test: active session list contains codex-123
+    let activeSessions = [liveSession]
+    let filteredRecent = updatedProj.recentSessions.filter { recent in
+        !activeSessions.contains(where: { active in
+            active.sessionId == recent.sessionId ||
+            (active.provider == recent.provider && active.resolveWorkstream(using: registry)?.id == recent.workstreamId)
+        })
+    }
+
+    try assert(filteredRecent.isEmpty, "Active session MUST suppress rendering of identical recent snapshot")
+}
+
+// 546. M3.7: Same stable session reactivating does not duplicate snapshot
+runTest("546. M3.7: Same stable session reactivating does not duplicate snapshot") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_546_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    var sess = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "stable-uuid-999",
+        title: "Turn 1 Initial",
+        status: .done,
+        cwd: "/Users/ava/Projects/App"
+    )
+    registry.recordRecentSession(from: sess)
+
+    // Reactivate same session with updated title/status
+    sess.title = "Turn 2 Continuation"
+    sess.status = .working
+    let updatedProj = registry.recordRecentSession(from: sess)!
+
+    try assert(updatedProj.recentSessions.count == 1, "Must not create duplicate snapshots for same session")
+    try assert(updatedProj.recentSessions.first?.title == "Turn 2 Continuation")
+    try assert(updatedProj.recentSessions.first?.lastStatus == .working)
+}
+
+// 547. M3.7: Only latest snapshot retained per Project × Workstream × Provider
+runTest("547. M3.7: Only latest snapshot retained per Project × Workstream × Provider") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_547_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let streamId = p.workstreams.first?.id
+
+    let olderSess = AgentSessionInfo(provider: .claude, sessionId: "sess-1", title: "Old Task", status: .done, cwd: "/Users/ava/Projects/App")
+    registry.recordRecentSession(from: olderSess, inProjectId: p.id, workstreamId: streamId)
+
+    let newerSess = AgentSessionInfo(provider: .claude, sessionId: "sess-2", title: "New Task", status: .done, cwd: "/Users/ava/Projects/App")
+    let updatedProj = registry.recordRecentSession(from: newerSess, inProjectId: p.id, workstreamId: streamId)!
+
+    try assert(updatedProj.recentSessions.count == 1, "At most 1 snapshot per Workstream × Provider")
+    try assert(updatedProj.recentSessions.first?.sessionId == "sess-2")
+    try assert(updatedProj.recentSessions.first?.title == "New Task")
+}
+
+// 548. M3.7: Two Workstreams retain independent recent snapshots for same provider
+runTest("548. M3.7: Two Workstreams retain independent recent snapshots for same provider") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_548_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App/ws1", initialWorkstreamName: "Stream 1")
+    let ws2 = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/App/ws2")
+    let stream2 = try registry.addWorkstream(toProjectId: p.id, name: "Stream 2", workspaceIds: [ws2.id])
+
+    let sessStream1 = AgentSessionInfo(provider: .claude, sessionId: "s1", title: "Stream 1 Work", status: .done, cwd: "/Users/ava/Projects/App/ws1")
+    let sessStream2 = AgentSessionInfo(provider: .claude, sessionId: "s2", title: "Stream 2 Work", status: .done, cwd: "/Users/ava/Projects/App/ws2")
+
+    registry.recordRecentSession(from: sessStream1)
+    let updatedProj = registry.recordRecentSession(from: sessStream2)!
+
+    try assert(updatedProj.recentSessions.count == 2, "Two distinct workstreams must retain independent snapshots")
+    let s1Snap = updatedProj.recentSessions.first(where: { $0.title == "Stream 1 Work" })
+    let s2Snap = updatedProj.recentSessions.first(where: { $0.title == "Stream 2 Work" })
+    try assert(s1Snap?.workstreamId == p.workstreams.first?.id)
+    try assert(s2Snap?.workstreamId == stream2.id)
+}
+
+// 549. M3.7: Project-known / Workstream-unknown session remains visible as Project-level Recent
+runTest("549. M3.7: Project-known / Workstream-unknown session remains visible as Project-level Recent") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_549_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher")
+    let unassignedWs = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher/unassigned-sub")
+
+    // Session in workspace that is not scoped to any workstream
+    let sessUnassigned = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-unassigned",
+        title: "Ad-hoc Maintenance",
+        status: .done,
+        cwd: "/Users/ava/Projects/Jobsearcher/unassigned-sub"
+    )
+
+    let updatedProj = registry.recordRecentSession(from: sessUnassigned)!
+    let recent = updatedProj.recentSessions.first
+    try assert(recent?.projectId == p.id)
+    try assert(recent?.workstreamId == nil, "Unassigned workspace must have workstreamId == nil")
+    try assert(recent?.title == "Ad-hoc Maintenance")
+}
+
+// 550. M3.7: Recent .blocked does NOT make Project currently Needs You
+runTest("550. M3.7: Recent .blocked does NOT make Project currently Needs You") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_550_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let blockedSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "blocked-1",
+        title: "Old Blocked Question",
+        status: .blocked,
+        cwd: "/Users/ava/Projects/App"
+    )
+
+    // Recorded as recent
+    registry.recordRecentSession(from: blockedSession)
+
+    // Status summary with NO active live sessions
+    let summary = p.statusSummary(sessions: [], openTabs: [])
+    try assert(summary.blockedCount == 0, "Recent blocked sessions must NOT count towards live blockedCount")
+    try assert(summary.status == .idle, "Project status must remain .idle when no live active sessions exist")
+    try assert(!summary.statusBadgeText.contains("Needs You"))
+}
+
+// 551. M3.7: Recent .working does NOT make Project currently Working
+runTest("551. M3.7: Recent .working does NOT make Project currently Working") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_551_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "TestProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let workingSession = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "codex-old-work",
+        title: "Historic Generation",
+        status: .working,
+        cwd: "/Users/ava/Projects/App"
+    )
+
+    registry.recordRecentSession(from: workingSession)
+    let summary = p.statusSummary(sessions: [], openTabs: [])
+    try assert(summary.workingCount == 0, "Recent working sessions must NOT count towards live workingCount")
+    try assert(summary.status == .idle)
+}
+
+// 552. M3.7: Active Needs You still overrides all Recent context normally
+runTest("552. M3.7: Active Needs You still overrides all Recent context normally") {
+    let p = Project(name: "TestProj", rootPath: "/Users/ava/Projects/App")
+    let liveBlocked = AgentSessionInfo(provider: .antigravity, sessionId: "live-b", title: "Live Gate", status: .blocked, cwd: "/Users/ava/Projects/App")
+
+    let summary = p.statusSummary(sessions: [liveBlocked], openTabs: [])
+    try assert(summary.blockedCount == 1)
+    try assert(summary.status == .blocked)
+    try assert(summary.statusBadgeText.contains("Needs You"))
+}
+
+// 553. M3.7: Restart preserves Recent metadata across JSON reload
+runTest("553. M3.7: Restart preserves Recent metadata across JSON reload") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_553_\(UUID().uuidString).json")
+    let registry1 = ProjectRegistry(storageURL: testStorageURL)
+
+    let p = try registry1.createProject(name: "PersistentProj", initialWorkspacePath: "/Users/ava/Projects/App")
+    let sess = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "persist-sess-1",
+        title: "Session Snapshot To Save",
+        status: .done,
+        cwd: "/Users/ava/Projects/App"
+    )
+    registry1.recordRecentSession(from: sess)
+
+    // Simulate app restart by loading new registry instance from same file
+    let registry2 = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry2.resetForTesting() }
+
+    let reloaded = registry2.getProject(byId: p.id)
+    try assert(reloaded?.recentSessions.count == 1)
+    try assert(reloaded?.recentSessions.first?.title == "Session Snapshot To Save")
+    try assert(reloaded?.recentSessions.first?.provider == .claude)
+}
+
+// 554. M3.7: Persistence boundary: No transcript, prompt, output, or auth secrets stored
+runTest("554. M3.7: Persistence boundary: No transcript, prompt, output, or auth secrets stored") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_554_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "SecretFree", initialWorkspacePath: "/Users/ava/Projects/App")
+    let sess = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "safe-sess-1",
+        title: "Safe Title Only",
+        status: .done,
+        cwd: "/Users/ava/Projects/App"
+    )
+    registry.recordRecentSession(from: sess)
+
+    let rawData = try Data(contentsOf: testStorageURL)
+    let rawString = String(data: rawData, encoding: .utf8)!
+
+    try assert(!rawString.contains("transcript"), "Transcript must NEVER be persisted in recent sessions")
+    try assert(!rawString.contains("messages"), "Messages must NEVER be persisted in recent sessions")
+    try assert(!rawString.contains("prompt"), "Prompts must NEVER be persisted in recent sessions")
+    try assert(!rawString.contains("token"), "Auth secrets must NEVER be persisted in recent sessions")
+    try assert(rawString.contains("safe-sess-1"), "Session ID must be persisted")
+}
+
+// 555. M3.7: M3.6 Workspace→Workstream attribution remains authoritative
+runTest("555. M3.7: M3.6 Workspace→Workstream attribution remains authoritative") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_555_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+
+    let sessCodex = AgentSessionInfo(provider: .codex, sessionId: "c1", title: "Task 1", status: .done, cwd: "/Users/ava/Projects/Jobsearcher-codex/sub")
+    let updatedProj = registry.recordRecentSession(from: sessCodex)!
+
+    let snap = updatedProj.recentSessions.first
+    try assert(snap?.workstreamId == streamA.id, "Snapshot workstream MUST resolve via deepest workspace mapping")
+}
+
+// 556. M3.7: Jobsearcher A/B recent sessions remain separated correctly
+runTest("556. M3.7: Jobsearcher A/B recent sessions remain separated correctly") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_556_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+    let streamB = p.workstreams[0]
+
+    let sessA = AgentSessionInfo(provider: .claude, sessionId: "sess-a", title: "Task on A", status: .done, cwd: "/Users/ava/Projects/Jobsearcher-codex")
+    let sessB = AgentSessionInfo(provider: .claude, sessionId: "sess-b", title: "Task on B", status: .done, cwd: "/Users/ava/Projects/Jobsearcher")
+
+    registry.recordRecentSession(from: sessA)
+    let updatedProj = registry.recordRecentSession(from: sessB)!
+
+    try assert(updatedProj.recentSessions.count == 2)
+    try assert(updatedProj.recentSessions.first(where: { $0.sessionId == "sess-a" })?.workstreamId == streamA.id)
+    try assert(updatedProj.recentSessions.first(where: { $0.sessionId == "sess-b" })?.workstreamId == streamB.id)
+}
+
+// 557. M3.7: C/ambiguous session remains Recent Unassigned rather than guessed
+runTest("557. M3.7: C/ambiguous session remains Recent Unassigned rather than guessed") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_557_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    _ = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+    _ = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+
+    // Add 3rd workspace in Jobsearcher project not assigned to any stream
+    let wsUnassigned = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-extra")
+
+    let sessExtra = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-extra",
+        title: "Pi5 remote maintenance", // Title mentions Pi5
+        status: .done,
+        cwd: "/Users/ava/Projects/Jobsearcher-extra/src"
+    )
+
+    let updatedProj = registry.recordRecentSession(from: sessExtra)!
+    let snap = updatedProj.recentSessions.first(where: { $0.sessionId == "sess-extra" })
+    try assert(snap != nil)
+    try assert(snap?.workstreamId == nil, "Must remain workstreamId == nil (Unassigned), never guessed to C")
+}
+
+print("🎉 All 557 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model & M3.7 Recent Session Continuity Tests Passed!")

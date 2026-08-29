@@ -335,7 +335,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             let gitFullName = (p.gitRepository ?? p.liveGitRepository)?.fullName ?? ""
             let pSessions = AgentStore.shared.getSessions(forProjectId: p.id)
             let sessSig = pSessions.map { "\($0.provider.rawValue):\($0.sessionId):\($0.status.rawValue)" }.joined(separator: ",")
-            projectsSig += "\(p.id):\(p.name):[\(wsSig)]:[\(stSig)]:\(gitFullName):[\(sessSig)];"
+            let recentSig = p.recentSessions.map { "\($0.provider.rawValue):\($0.sessionId):\($0.workstreamId ?? ""):\($0.lastStatus.rawValue)" }.joined(separator: ",")
+            projectsSig += "\(p.id):\(p.name):[\(wsSig)]:[\(stSig)]:\(gitFullName):[\(sessSig)]:[\(recentSig)];"
         }
 
         return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)|\(projectsSig)"
@@ -763,31 +764,77 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     }
                 }
 
-                // 4. Active Sessions Section
-                projSubmenu.addItem(NSMenuItem.separator())
-                if !projectSessions.isEmpty {
-                    let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(projectSessions.count)):", action: nil, keyEquivalent: "")
-                    sessHdr.isEnabled = false
-                    projSubmenu.addItem(sessHdr)
+                // 4. Active & Recent Sessions Section (M3.5 / M3.7)
+                let activeSessions = projectSessions
+                let allRecentSnapshots = project.recentSessions
 
-                    for sess in projectSessions {
-                        let sessBadge = sess.status.statusDot(theme: currentTheme)
-                        let sessTitle = sess.title.isEmpty ? sess.sessionId : sess.title
-                        let workstream = sess.resolveWorkstream(using: ProjectRegistry.shared)
-                        let streamTag = (project.workstreams.count > 1 && workstream != nil) ? "[\(workstream!.name)] " : ""
-                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(streamTag)\(sess.provider.displayName): \(sessTitle)", action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
-                        sessItem.target = self
-                        sessItem.representedObject = [
-                            "provider": sess.provider,
-                            "sessionId": sess.sessionId,
-                            "url": sess.webLink as Any,
-                            "tabId": sess.targetTabId as Any
-                        ]
-                        sessItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: sess.status, availability: .available))
-                        projSubmenu.addItem(sessItem)
+                // Active Wins: Filter out any recent snapshot that is currently represented by an active session
+                let inactiveRecentSnapshots = allRecentSnapshots.filter { recent in
+                    !activeSessions.contains(where: { active in
+                        active.sessionId == recent.sessionId ||
+                        (active.provider == recent.provider && active.resolveWorkstream(using: ProjectRegistry.shared)?.id == recent.workstreamId)
+                    })
+                }
+
+                if !activeSessions.isEmpty || !inactiveRecentSnapshots.isEmpty {
+                    projSubmenu.addItem(NSMenuItem.separator())
+
+                    if !activeSessions.isEmpty {
+                        let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(activeSessions.count)):", action: nil, keyEquivalent: "")
+                        sessHdr.isEnabled = false
+                        projSubmenu.addItem(sessHdr)
+
+                        for sess in activeSessions {
+                            let sessBadge = sess.status.statusDot(theme: currentTheme)
+                            let sessTitle = sess.title.isEmpty ? sess.sessionId : sess.title
+                            let workstream = sess.resolveWorkstream(using: ProjectRegistry.shared)
+                            let streamTag = (project.workstreams.count > 1 && workstream != nil) ? "[\(workstream!.name)] " : ""
+                            let sessItem = NSMenuItem(title: "  \(sessBadge) \(streamTag)\(sess.provider.displayName): \(sessTitle)", action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
+                            sessItem.target = self
+                            sessItem.representedObject = [
+                                "provider": sess.provider,
+                                "sessionId": sess.sessionId,
+                                "url": sess.webLink as Any,
+                                "tabId": sess.targetTabId as Any
+                            ]
+                            sessItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: sess.status, availability: .available))
+                            projSubmenu.addItem(sessItem)
+                        }
+                    }
+
+                    if !inactiveRecentSnapshots.isEmpty {
+                        let recentHdr = NSMenuItem(title: "Recent Sessions (\(inactiveRecentSnapshots.count)):", action: nil, keyEquivalent: "")
+                        recentHdr.isEnabled = false
+                        projSubmenu.addItem(recentHdr)
+
+                        for recent in inactiveRecentSnapshots {
+                            let streamTag: String
+                            if project.workstreams.count > 1 {
+                                if let wsId = recent.workstreamId, let ws = project.workstreams.first(where: { $0.id == wsId }) {
+                                    streamTag = "[\(ws.name)] "
+                                } else {
+                                    streamTag = "[Unassigned] "
+                                }
+                            } else {
+                                streamTag = ""
+                            }
+                            let timeTag = recent.lastUpdated.relativeString()
+                            let recentTitle = "  ⚪ Recent · \(streamTag)\(recent.provider.displayName): \(recent.title) [\(timeTag)]"
+                            let recentItem = NSMenuItem(title: recentTitle, action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
+                            recentItem.target = self
+                            recentItem.representedObject = [
+                                "provider": recent.provider,
+                                "sessionId": recent.sessionId,
+                                "url": recent.webLink as Any,
+                                "tabId": recent.targetTabId as Any
+                            ]
+                            recentItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: .idle, availability: .available))
+                            projSubmenu.addItem(recentItem)
+                        }
                     }
                 } else {
-                    let noSessItem = NSMenuItem(title: "Active Agent Sessions: None", action: nil, keyEquivalent: "")
+                    projSubmenu.addItem(NSMenuItem.separator())
+                    let noSessItem = NSMenuItem(title: "Sessions: None", action: nil, keyEquivalent: "")
                     noSessItem.isEnabled = false
                     projSubmenu.addItem(noSessItem)
                 }

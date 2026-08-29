@@ -115,6 +115,7 @@ public final class ProjectRegistry: @unchecked Sendable {
                     workspaces: normalizedWorkspaces,
                     workstreams: project.workstreams,
                     gitRepository: project.gitRepository,
+                    recentSessions: project.recentSessions,
                     createdAt: project.createdAt,
                     updatedAt: project.updatedAt
                 )
@@ -942,6 +943,84 @@ public final class ProjectRegistry: @unchecked Sendable {
     /// Deterministically resolves which registered Project contains the given path.
     public func matchProject(forPath filePath: String) -> Project? {
         return matchWorkspace(forPath: filePath)?.project
+    }
+
+    // MARK: - Recent Session Continuity (M3.7)
+
+    /// Records or updates the single most-recent session snapshot for a (Project × Workstream × Provider).
+    /// If workstream is nil, records as a Project-level unassigned workstream snapshot.
+    @discardableResult
+    public func recordRecentSession(from session: AgentSessionInfo) -> Project? {
+        guard let project = session.resolveProject(using: self) else {
+            return nil
+        }
+        let resolvedWorkstream = session.resolveWorkstream(using: self)
+        return recordRecentSession(from: session, inProjectId: project.id, workstreamId: resolvedWorkstream?.id)
+    }
+
+    /// Records or updates a snapshot in a specific project with optional workstream ID.
+    @discardableResult
+    public func recordRecentSession(
+        from session: AgentSessionInfo,
+        inProjectId projectId: String,
+        workstreamId: String?
+    ) -> Project? {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            return nil
+        }
+
+        let snapshot = ProjectRecentSession.from(session: session, projectId: projectId, workstreamId: workstreamId)
+
+        // Bounded invariant: Retain at most ONE most-recent snapshot per (Project × optional Workstream × Provider).
+        // If a snapshot exists for the same (provider, workstreamId), replace it.
+        if let existingIdx = project.recentSessions.firstIndex(where: {
+            $0.provider == session.provider && $0.workstreamId == workstreamId
+        }) {
+            project.recentSessions[existingIdx] = snapshot
+        } else if let sameSessionIdx = project.recentSessions.firstIndex(where: {
+            $0.sessionId == session.sessionId && $0.provider == session.provider
+        }) {
+            // Same stable session updated its workstream/state
+            project.recentSessions[sameSessionIdx] = snapshot
+        } else {
+            project.recentSessions.append(snapshot)
+        }
+
+        // Sort by lastUpdated descending
+        project.recentSessions.sort(by: { $0.lastUpdated > $1.lastUpdated })
+
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try? save()
+        return project
+    }
+
+    /// Returns the recent sessions for a given project ID.
+    public func getRecentSessions(forProjectId projectId: String) -> [ProjectRecentSession] {
+        lock.lock()
+        defer { lock.unlock() }
+        return projectsById[projectId]?.recentSessions ?? []
+    }
+
+    /// Clears all recent sessions for a project.
+    @discardableResult
+    public func clearRecentSessions(forProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        project.recentSessions.removeAll()
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return project
     }
 
     // MARK: - Test Utilities

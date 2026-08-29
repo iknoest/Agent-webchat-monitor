@@ -1819,3 +1819,30 @@ Next: Present M3 final Workstream Session Attribution report to Ava in Tradition
 Blockers: none
 
 [RELEASE] M3.6 Project Formation + Multi-Workspace + Workstream Reviewer Model — antigravity — 2026-08-29T12:12:00+02:00
+
+## 2026-08-29 — antigravity — macos
+Status: DONE
+Phase: M3.7 Recent Session Continuity
+Done:
+1. Lightweight Recent Session Snapshot Model (`ProjectModel.swift`):
+   - Added `ProjectRecentSession` (`id`, `provider`, `sessionId`, `title`, `cwd`, `projectId`, `workstreamId`, `lastStatus`, `lastUpdated`, `lastDurationSeconds`, `webLink`, `targetTabId`).
+   - Integrated `recentSessions: [ProjectRecentSession]` into `Project` with backward-compatible lossless JSON encoding/decoding.
+2. Bounded Snapshot Continuity & Pruning Preservation (`ProjectRegistry.swift` & `AgentState.swift`):
+   - Implemented `recordRecentSession(from:)`, `recordRecentSession(from:inProjectId:workstreamId:)`, `getRecentSessions`, `clearRecentSessions` with bounded invariant: at most ONE snapshot per `(Project × optional Workstream × Provider)`.
+   - Captured last-known session snapshots immediately before active lifecycle removal: Claude `SessionEnd`, Claude dead-process reconciliation, Claude stale pruning, Antigravity `SessionEnd` / reconciliation, and Codex stale pruning.
+   - Preserved Project-level unassigned recent snapshots when `workstreamId` is `nil` without guessing.
+3. Active Wins & Recent Context UI Integration (`MenuBarManager.swift`):
+   - Active sessions suppress duplicate recent snapshots: only inactive snapshots not represented by active sessions are rendered under `Recent Sessions (\(count)):`.
+   - Formatted compact relative timestamps (`[43m ago]`, `[yesterday]`, `[just now]`) and Workstream attribution tags (`[\(workstream.name)] ` or `[Unassigned] `).
+   - Invariant preserved: Recent snapshots strictly act as context and never participate in Needs You / Working aggregation, Smart Keep-Awake, or Telegram alerts.
+4. Comprehensive Test Suite & App Verification:
+   - Added Tests 541 to 557 in `Stage1TestRunner` covering active session metadata updates, Claude SessionEnd snapshot preservation, Claude stale pruning preservation, Antigravity reconciliation preservation, Active session deduplication suppression, re-activation in-place snapshot update, latest-only snapshot retention per Workstream × Provider, multi-workstream snapshot independence, Project-known/Workstream-unknown unassigned snapshot retention, Recent .blocked zero-impact on live Needs You, Recent .working zero-impact on live Working, active Needs You override, restart metadata preservation, zero transcript/prompt/auth secrets stored, M3.6 Workspace→Workstream attribution authority, Jobsearcher A/B recent separation, and unassigned/ambiguous C-guessing prevention (557/557 passed).
+   - Added `testRecentSessionContinuity` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS stress tests in `background_test.js` passed.
+   - Built and installed release app via `./build_app.sh`.
+   - Verified clean git diff formatting (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (557/557 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Create ONE local commit and present M3.7 report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.7 Recent Session Continuity — antigravity — 2026-08-29T12:28:00+02:00

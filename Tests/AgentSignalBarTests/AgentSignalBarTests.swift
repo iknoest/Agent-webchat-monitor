@@ -2986,5 +2986,38 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(claudeSess.resolveWorkstream(using: registry)?.name, "B Claude")
         XCTAssertNil(unknownSess.resolveWorkstream(using: registry))
     }
+
+    func testRecentSessionContinuity() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m37_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/workspace/Jobsearcher", initialWorkstreamName: "B Claude")
+        let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/test/workspace/Jobsearcher-codex")
+        let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+
+        // 1. Record live sessions
+        let sCodex = AgentSessionInfo(provider: .codex, sessionId: "codex-1", title: "Refactor engine", status: .done, cwd: "/Users/test/workspace/Jobsearcher-codex/sub")
+        let sClaude = AgentSessionInfo(provider: .claude, sessionId: "claude-1", title: "Fix API", status: .done, cwd: "/Users/test/workspace/Jobsearcher/sub")
+
+        _ = registry.recordRecentSession(from: sCodex)
+        _ = registry.recordRecentSession(from: sClaude)
+
+        let loaded = registry.getProject(byId: p.id)!
+        XCTAssertEqual(loaded.recentSessions.count, 2)
+
+        let codexRecent = loaded.recentSessions.first(where: { $0.provider == .codex })
+        let claudeRecent = loaded.recentSessions.first(where: { $0.provider == .claude })
+
+        XCTAssertEqual(codexRecent?.workstreamId, streamA.id)
+        XCTAssertEqual(codexRecent?.title, "Refactor engine")
+        XCTAssertEqual(claudeRecent?.workstreamId, p.workstreams.first?.id)
+
+        // 2. Status summary does not consider recent sessions as active
+        let summary = loaded.statusSummary(sessions: [], openTabs: [])
+        XCTAssertEqual(summary.totalSessions, 0)
+        XCTAssertEqual(summary.status, .idle)
+    }
 }
 #endif
