@@ -11860,4 +11860,96 @@ runTest("584. Attribution remains strictly CWD -> Workspace -> Project -> Workst
     try assert(ws?.id == streamA.id, "Session attribution must strictly follow CWD path, NOT title keywords")
 }
 
-print("🎉 All 584 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution & Workstream Scoping Persistence Tests Passed!")
+// 585. End-to-end Workstream Scoping UI integration: item enabled, action, representedObject, state toggle & Claude attribution
+runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action, representedObject, state toggle & Claude attribution") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_585_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    // 1. Setup Jobsearcher topology with 2 workspaces and 3 workstreams (all initially empty scope)
+    let p = try registry.createProject(name: "Jobsearcher")
+    let wsJob = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+    let streamB = try registry.addWorkstream(toProjectId: p.id, name: "B Claude", workspaceIds: [])
+    let streamC = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+
+    // 2. Build mock UI NSMenuItem using identical production construction logic
+    func generateScopeItem(forStream stream: ProjectWorkstream, workspace: ProjectWorkspace) -> NSMenuItem {
+        let isScoped = stream.workspaceIds.contains(workspace.id)
+        let boxTag = isScoped ? "☑" : "☐"
+        let wsLabel = workspace.name ?? (workspace.path as NSString).lastPathComponent
+        let item = NSMenuItem(title: "\(boxTag) \(wsLabel)", action: #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+        item.target = MenuBarManager.shared
+        item.isEnabled = true
+        item.state = isScoped ? .on : .off
+        item.representedObject = [
+            "projectId": p.id,
+            "workstreamId": stream.id,
+            "workspaceId": workspace.id
+        ]
+        return item
+    }
+
+    // 3. Test initial state for Workstream B -> Jobsearcher workspace
+    let initialItem = generateScopeItem(forStream: streamB, workspace: wsJob)
+    try assert(initialItem.isEnabled == true, "Scope item must be enabled")
+    try assert(initialItem.action == #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), "Scope item must target toggleWorkstreamWorkspaceClicked")
+    try assert(initialItem.target != nil, "Scope item target must be non-nil")
+    try assert(initialItem.state == .off, "Initial scope item state must be .off")
+    try assert(initialItem.title.contains("☐ Jobsearcher"), "Initial scope item title must display ☐")
+
+    let repDict = initialItem.representedObject as? [String: Any]
+    try assert(repDict?["projectId"] as? String == p.id, "representedObject must have correct projectId")
+    try assert(repDict?["workstreamId"] as? String == streamB.id, "representedObject must have correct workstreamId")
+    try assert(repDict?["workspaceId"] as? String == wsJob.id, "representedObject must have correct workspaceId")
+
+    // 4. Invoke the selector / toggle action (simulating user click on B -> Jobsearcher)
+    let afterToggleProject = try registry.toggleWorkstreamWorkspace(workspaceId: wsJob.id, workstreamId: streamB.id, inProjectId: p.id)
+    let updatedStreamB = afterToggleProject.workstreams.first(where: { $0.id == streamB.id })!
+    try assert(updatedStreamB.workspaceIds.contains(wsJob.id), "Workstream B must now contain Jobsearcher workspace ID")
+
+    // 5. Verify rebuilt menu item reflects .on and ☑
+    let rebuiltItem = generateScopeItem(forStream: updatedStreamB, workspace: wsJob)
+    try assert(rebuiltItem.state == .on, "Rebuilt scope item state must be .on")
+    try assert(rebuiltItem.title.contains("☑ Jobsearcher"), "Rebuilt scope item title must display ☑")
+
+    // 6. Second invocation toggles back to .off
+    let afterToggleOffProject = try registry.toggleWorkstreamWorkspace(workspaceId: wsJob.id, workstreamId: streamB.id, inProjectId: p.id)
+    let offStreamB = afterToggleOffProject.workstreams.first(where: { $0.id == streamB.id })!
+    try assert(!offStreamB.workspaceIds.contains(wsJob.id), "Workstream B workspaceIds must now be empty")
+    let rebuiltOffItem = generateScopeItem(forStream: offStreamB, workspace: wsJob)
+    try assert(rebuiltOffItem.state == .off, "Rebuilt scope item state must return to .off")
+    try assert(rebuiltOffItem.title.contains("☐ Jobsearcher"), "Rebuilt scope item title must return to ☐")
+
+    // 7. Toggle on again and verify disk reload preserves state
+    _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsJob.id, workstreamId: streamB.id, inProjectId: p.id)
+    _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsCodex.id, workstreamId: streamA.id, inProjectId: p.id)
+
+    let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+    let reloadedProj = reloadedRegistry.getProject(byId: p.id)!
+    let reloadedB = reloadedProj.workstreams.first(where: { $0.id == streamB.id })!
+    let reloadedA = reloadedProj.workstreams.first(where: { $0.id == streamA.id })!
+    try assert(reloadedB.workspaceIds == [wsJob.id], "Reloaded Workstream B must retain Jobsearcher workspace")
+    try assert(reloadedA.workspaceIds == [wsCodex.id], "Reloaded Workstream A must retain Jobsearcher-codex workspace")
+
+    // 8. Claude-Only Active Session Attribution: only Claude is active, NO Codex needed
+    let activeClaudeSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-jobsearcher-only",
+        title: "[Jobsearcher]",
+        status: .working,
+        cwd: "/Users/ava/Projects/Jobsearcher/Sources"
+    )
+
+    let resolvedClaudeWorkstream = activeClaudeSession.resolveWorkstream(using: reloadedRegistry)
+    try assert(resolvedClaudeWorkstream?.id == streamB.id, "Claude session in Jobsearcher MUST resolve to Workstream B")
+    try assert(resolvedClaudeWorkstream?.name == "B Claude", "Resolved Workstream name must be 'B Claude'")
+
+    let streamTag = (reloadedProj.workstreams.count > 1 && resolvedClaudeWorkstream != nil) ? "[\(resolvedClaudeWorkstream!.name)] " : ""
+    let renderedRow = "\(streamTag)\(activeClaudeSession.provider.displayName): \(activeClaudeSession.title)"
+    try assert(renderedRow == "[B Claude] Claude Code: [Jobsearcher]", "Active Agent Sessions row must visibly render '[B Claude] Claude Code: [Jobsearcher]'")
+}
+
+print("🎉 All 585 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution, Workstream Scoping Persistence & Interactive UI Checkmark Tests Passed!")

@@ -729,23 +729,33 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         // Scoped Workspaces Configuration for this Workstream
                         if !project.workspaces.isEmpty {
                             streamSubmenu.addItem(NSMenuItem.separator())
-                            let wsScopeHdr = NSMenuItem(title: "Scoped Workspaces:", action: nil, keyEquivalent: "")
-                            wsScopeHdr.isEnabled = false
-                            streamSubmenu.addItem(wsScopeHdr)
+                            let scopedCount = project.workspaces.filter { stream.workspaceIds.contains($0.id) }.count
+                            let scopeParentItem = NSMenuItem(title: "  Scoped Workspaces (\(scopedCount)/\(project.workspaces.count))...", action: nil, keyEquivalent: "")
+                            let scopeSubmenu = NSMenu()
+
+                            let scopeHdr = NSMenuItem(title: "Toggle Workspaces for '\(stream.name)':", action: nil, keyEquivalent: "")
+                            scopeHdr.isEnabled = false
+                            scopeSubmenu.addItem(scopeHdr)
+                            scopeSubmenu.addItem(NSMenuItem.separator())
 
                             for ws in project.workspaces {
                                 let wsLabel = ws.name ?? (ws.path as NSString).lastPathComponent
                                 let isScoped = stream.workspaceIds.contains(ws.id)
-                                let scopeItem = NSMenuItem(title: "📁 \(wsLabel)", action: #selector(toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+                                let boxTag = isScoped ? "☑" : "☐"
+                                let scopeItem = NSMenuItem(title: "\(boxTag) \(wsLabel)", action: #selector(toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
                                 scopeItem.target = self
+                                scopeItem.isEnabled = true
                                 scopeItem.state = isScoped ? .on : .off
                                 scopeItem.representedObject = [
                                     "projectId": project.id,
                                     "workstreamId": stream.id,
                                     "workspaceId": ws.id
                                 ]
-                                streamSubmenu.addItem(scopeItem)
+                                scopeSubmenu.addItem(scopeItem)
                             }
+
+                            scopeParentItem.submenu = scopeSubmenu
+                            streamSubmenu.addItem(scopeParentItem)
                         }
 
                         streamSubmenu.addItem(NSMenuItem.separator())
@@ -2091,7 +2101,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc private func toggleWorkstreamWorkspaceClicked(_ sender: NSMenuItem) {
+    @objc public func toggleWorkstreamWorkspaceClicked(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
               let projectId = dict["projectId"] as? String,
               let workstreamId = dict["workstreamId"] as? String,
