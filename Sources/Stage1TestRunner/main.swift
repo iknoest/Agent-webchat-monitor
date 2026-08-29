@@ -11684,4 +11684,180 @@ runTest("577. Recent snapshot never moves Project because of external tool-opera
     try assert(jobProj.recentSessions.isEmpty, "Jobsearcher must have zero recent sessions")
 }
 
-print("🎉 All 577 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity & Antigravity Authoritative workspacePaths Attribution Tests Passed!")
+// 578. Scoping toggle mutates intended Workstream workspaceIds and persists to disk
+runTest("578. Scoping toggle mutates intended Workstream workspaceIds and persists to disk") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_578_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+
+    // Toggle on Workstream A -> Jobsearcher-codex
+    let updated = try registry.toggleWorkstreamWorkspace(workspaceId: wsCodex.id, workstreamId: streamA.id, inProjectId: p.id)
+    let streamAUpdated = updated.workstreams.first(where: { $0.id == streamA.id })!
+    try assert(streamAUpdated.workspaceIds == [wsCodex.id], "Workstream A must contain wsCodex ID")
+
+    // Verify persisted file on disk
+    let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+    let reloadedProj = reloadedRegistry.getProject(byId: p.id)!
+    let reloadedStreamA = reloadedProj.workstreams.first(where: { $0.id == streamA.id })!
+    try assert(reloadedStreamA.workspaceIds == [wsCodex.id], "Persisted projects.json must retain workspaceIds")
+}
+
+// 579. Persisted registry reload retains exact Workstream workspace scoping
+runTest("579. Persisted registry reload retains exact Workstream workspace scoping") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_579_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsJob = p.workspaces[0]
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+    let streamB = p.workstreams[0]
+
+    _ = try registry.assignWorkspace(workspaceId: wsCodex.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+    _ = try registry.assignWorkspace(workspaceId: wsJob.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+
+    // Reload from disk
+    let reloaded = ProjectRegistry(storageURL: testStorageURL)
+    let pReloaded = reloaded.getProject(byId: p.id)!
+    try assert(pReloaded.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds == [wsCodex.id])
+    try assert(pReloaded.workstreams.first(where: { $0.id == streamB.id })?.workspaceIds == [wsJob.id])
+}
+
+// 580. Second Workstream can scope different workspace while third remains empty
+runTest("580. Second Workstream can scope different workspace while third remains empty") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_580_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsJob = p.workspaces[0]
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+    let streamC = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+    let streamB = p.workstreams[0]
+    _ = try registry.assignWorkspace(workspaceId: wsJob.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+
+    let latest = registry.getProject(byId: p.id)!
+    try assert(latest.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds == [wsCodex.id])
+    try assert(latest.workstreams.first(where: { $0.id == streamB.id })?.workspaceIds == [wsJob.id])
+    try assert(latest.workstreams.first(where: { $0.id == streamC.id })?.workspaceIds.isEmpty == true, "Stream C must remain empty")
+}
+
+// 581. Live session CWD resolves to scoped Workstream in Jobsearcher topology
+runTest("581. Live session CWD resolves to scoped Workstream in Jobsearcher topology") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_581_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsJob = p.workspaces[0]
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+    let streamB = p.workstreams[0]
+    _ = try registry.assignWorkspace(workspaceId: wsJob.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+
+    // Codex in Jobsearcher-codex
+    let sessCodex = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "cdx-581",
+        title: "Jobsearcher-codex",
+        status: .working,
+        cwd: "/Users/ava/Projects/Jobsearcher-codex"
+    )
+    let wsResolvedA = sessCodex.resolveWorkstream(using: registry)
+    try assert(wsResolvedA?.id == streamA.id, "Codex in Jobsearcher-codex MUST resolve to Workstream A")
+
+    // Claude in Jobsearcher
+    let sessClaude = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "cld-581",
+        title: "[Jobsearcher]",
+        status: .idle,
+        cwd: "/Users/ava/Projects/Jobsearcher"
+    )
+    let wsResolvedB = sessClaude.resolveWorkstream(using: registry)
+    try assert(wsResolvedB?.id == streamB.id, "Claude in Jobsearcher MUST resolve to Workstream B")
+}
+
+// 582. Active Agent Sessions visibly render Workstream label [A Jobsearcher codex] and [B Claude]
+runTest("582. Active Agent Sessions visibly render Workstream label [A Jobsearcher codex] and [B Claude]") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_582_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsJob = p.workspaces[0]
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+    let streamB = p.workstreams[0]
+    _ = try registry.assignWorkspace(workspaceId: wsJob.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+
+    let sessCodex = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "cdx-582",
+        title: "Jobsearcher-codex",
+        status: .working,
+        cwd: "/Users/ava/Projects/Jobsearcher-codex"
+    )
+
+    let ws = sessCodex.resolveWorkstream(using: registry)
+    let latestProj = registry.getProject(byId: p.id)!
+    let streamTag = (latestProj.workstreams.count > 1 && ws != nil) ? "[\(ws!.name)] " : ""
+    let renderedTitle = "\(streamTag)\(sessCodex.provider.displayName): \(sessCodex.title)"
+    try assert(renderedTitle == "[A Jobsearcher codex] Codex Desktop: Jobsearcher-codex", "Visible Active Agent Sessions label must match [A Jobsearcher codex] Codex Desktop: Jobsearcher-codex")
+}
+
+// 583. Registry reload does not erase or reset Workstream scope
+runTest("583. Registry reload does not erase or reset Workstream scope") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_583_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+
+    // Load multiple times
+    let reg2 = ProjectRegistry(storageURL: testStorageURL)
+    try assert(reg2.getProject(byId: p.id)?.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds == [wsCodex.id])
+
+    let reg3 = ProjectRegistry(storageURL: testStorageURL)
+    try assert(reg3.getProject(byId: p.id)?.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds == [wsCodex.id])
+}
+
+// 584. Attribution remains strictly CWD -> Workspace -> Project -> Workstream (no keywords/titles)
+runTest("584. Attribution remains strictly CWD -> Workspace -> Project -> Workstream (no keywords/titles)") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_584_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [wsCodex.id])
+
+    // Session named "B Claude Task" but located inside Jobsearcher-codex
+    let deceptive = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "deceptive-584",
+        title: "B Claude Task",
+        status: .working,
+        cwd: "/Users/ava/Projects/Jobsearcher-codex/sub"
+    )
+
+    let ws = deceptive.resolveWorkstream(using: registry)
+    try assert(ws?.id == streamA.id, "Session attribution must strictly follow CWD path, NOT title keywords")
+}
+
+print("🎉 All 584 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution & Workstream Scoping Persistence Tests Passed!")

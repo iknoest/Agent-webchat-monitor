@@ -736,9 +736,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                             for ws in project.workspaces {
                                 let wsLabel = ws.name ?? (ws.path as NSString).lastPathComponent
                                 let isScoped = stream.workspaceIds.contains(ws.id)
-                                let checkTag = isScoped ? "✓ " : "  "
-                                let scopeItem = NSMenuItem(title: "\(checkTag)📁 \(wsLabel)", action: #selector(toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+                                let scopeItem = NSMenuItem(title: "📁 \(wsLabel)", action: #selector(toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
                                 scopeItem.target = self
+                                scopeItem.state = isScoped ? .on : .off
                                 scopeItem.representedObject = [
                                     "projectId": project.id,
                                     "workstreamId": stream.id,
