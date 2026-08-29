@@ -1783,3 +1783,39 @@ Next: Present M3.5 report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M3.5 Project Switcher & Contextual Navigation — antigravity — 2026-08-29T11:03:00+02:00
+
+## 2026-08-29 — antigravity — macos
+Status: DONE
+Phase: M3.6 Project Formation + Multi-Workspace + Workstream Reviewer Model
+Done:
+1. Product Architecture & Multi-Workspace Data Model Evolution (`ProjectModel.swift`):
+   - Added `ProjectWorkspace` (`id`, `path`, `name`, `isPrimary`, `createdAt`) supporting multiple local checkouts/roots per Project.
+   - Added `ProjectWorkstream` (`id`, `name`, `currentReviewer: ProjectReviewer?`, `reviewerHistory: [ReviewerHistoryRecord]`, `workspaceIds: [String]`, `createdAt`, `updatedAt`) supporting multiple authority/review boundaries under one logical Project.
+   - Evolved `Project` struct with `workspaces: [ProjectWorkspace]` and `workstreams: [ProjectWorkstream]` while keeping `gitRepository` optional at project level.
+   - Implemented lossless backward-compatible JSON decoding migrating v1 schema (`rootPath`, `currentReviewer`, `reviewerHistory`) into v2 without data loss, bumping `ProjectRegistryData.currentVersion = 2`.
+   - Updated `statusSummary(sessions:openTabs:)` to evaluate reviewers across all workstreams and aggregate session states.
+2. Multi-Workspace & Workstream CRUD with Global Cardinality Invariants (`ProjectRegistry.swift`):
+   - Implemented Workspace CRUD: `addWorkspace`, `removeWorkspace`, `setPrimaryWorkspace` ensuring exactly one primary workspace per project.
+   - Implemented Workstream CRUD: `addWorkstream`, `renameWorkstream`, `removeWorkstream`.
+   - Implemented Project Formation CRUD: `createProject`, `renameProject`, `deleteProject`.
+   - Implemented global reviewer uniqueness across workstreams: one ChatGPT conversation can be `currentReviewer` for at most ONE workstream across the entire app at a time.
+   - Updated `matchWorkspace(forPath:)` and `matchProject(forPath:)` using deepest matching parent workspace.
+3. Session CWD to Workstream Scoping (`AgentState.swift`):
+   - Added `resolveWorkstream(using:)` and `associatedWorkstream` on `AgentSessionInfo`. When a session runs in a workspace uniquely scoped to one workstream, resolves that workstream; if ambiguous or un-scoped, resolves honest `nil`.
+4. Project Switcher UI & Action Selectors (`MenuBarManager.swift`):
+   - Rendered simple projects cleanly with minimal ceremony (single workspace path and main reviewer).
+   - Rendered multi-workspace and multi-workstream projects with clear structural hierarchy: Workspaces list (with ⭐ primary badge, Reveal in Finder, remove actions) and Workstreams list (with Current Reviewer status, tab observation, Jump to Reviewer, and unlink actions).
+   - Added user action selectors for Project management (Create Project, Rename Project, Delete Project, Add Workspace, Remove Workspace, Set Primary Workspace, Add Workstream, Rename Workstream, Remove Workstream).
+   - Added 1-click Workspace-to-Workstream Scoping toggles (`✓ 📁 <Workspace>`) directly inside each Workstream submenu.
+   - Added user-visible Workstream tag attribution (`  🟢 [Workstream Name] Provider: Session Title`) under Active Agent Sessions.
+5. Comprehensive Test Suite & App Verification:
+   - Added Tests 517 to 540 in `Stage1TestRunner` covering multi-workspaces, workspace exclusivity, multi-workspace session resolution, nested workspace resolution, workspace removal cleanup, multi-workstreams, one reviewer per workstream, concurrent reviewers across workstreams, global reviewer cardinality uniqueness, workspace-less workstreams, ambiguous session resolution, simple project ergonomics, v1-to-v2 data migration, project/workspace/workstream/deletion APIs, full Jobsearcher topology aggregation, project-level GitHub repo sharing, zero secrets/tokens persistence, workstream workspace scoping CRUD & toggle, exact Jobsearcher workstream session attribution authority, and strict attribution independence from provider/title keywords (540/540 passed).
+   - Added `testWorkstreamWorkspaceScopingAndAttribution` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS stress tests in `background_test.js` passed.
+   - Built and installed release app via `./build_app.sh`.
+   - Verified clean git diff formatting (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (540/540 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present M3 final Workstream Session Attribution report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.6 Project Formation + Multi-Workspace + Workstream Reviewer Model — antigravity — 2026-08-29T12:12:00+02:00

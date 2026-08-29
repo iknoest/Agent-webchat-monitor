@@ -330,11 +330,12 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         var projectsSig = ""
         for p in ProjectRegistry.shared.getAllProjects() {
-            let rev = p.currentReviewer
+            let wsSig = p.workspaces.map { "\($0.id):\($0.path):\($0.isPrimary)" }.joined(separator: ",")
+            let stSig = p.workstreams.map { "\($0.id):\($0.name):\($0.workspaceIds.sorted().joined(separator: "+")):\($0.currentReviewer?.conversationId ?? ""):\($0.currentReviewer?.title ?? ""):\($0.reviewerHistory.count)" }.joined(separator: ",")
             let gitFullName = (p.gitRepository ?? p.liveGitRepository)?.fullName ?? ""
             let pSessions = AgentStore.shared.getSessions(forProjectId: p.id)
             let sessSig = pSessions.map { "\($0.provider.rawValue):\($0.sessionId):\($0.status.rawValue)" }.joined(separator: ",")
-            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count):\(gitFullName):[\(sessSig)];"
+            projectsSig += "\(p.id):\(p.name):[\(wsSig)]:[\(stSig)]:\(gitFullName):[\(sessSig)];"
         }
 
         return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)|\(projectsSig)"
@@ -439,7 +440,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Projects & Workspaces (M3.5 Project Switcher & Contextual Navigation)
+        // 2. Projects & Workspaces (M3.5 / M3.6 Multi-Workspace & Workstream Model)
         let allProjects = ProjectRegistry.shared.getAllProjects()
         let chatgptInfo = AgentStore.shared.getStatus(for: .chatgpt)
         let openTabs = chatgptInfo.openTabs
@@ -458,23 +459,65 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             for project in allProjects {
                 let projectSessions = AgentStore.shared.getSessions(forProjectId: project.id)
                 let summary = project.statusSummary(sessions: projectSessions, openTabs: openTabs)
-                let liveStatus = project.liveReviewerStatus(openTabs: openTabs)
 
                 let projItem = NSMenuItem(title: "  📁 \(project.name) [\(summary.statusBadgeText)]", action: nil, keyEquivalent: "")
                 projItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: summary.status, availability: .available))
                 let projSubmenu = NSMenu()
 
-                // Project root path + Reveal in Finder
-                let pathItem = NSMenuItem(title: "Root: \(project.rootPath)", action: nil, keyEquivalent: "")
-                pathItem.isEnabled = false
-                projSubmenu.addItem(pathItem)
+                // 1. Workspaces Section (M3.6)
+                if project.workspaces.count == 1, let singleWs = project.workspaces.first {
+                    let pathItem = NSMenuItem(title: "Root: \(singleWs.path)", action: nil, keyEquivalent: "")
+                    pathItem.isEnabled = false
+                    projSubmenu.addItem(pathItem)
 
-                let revealItem = NSMenuItem(title: "  📂 Reveal in Finder", action: #selector(revealProjectFolderClicked(_:)), keyEquivalent: "")
-                revealItem.target = self
-                revealItem.representedObject = ["path": project.rootPath]
-                projSubmenu.addItem(revealItem)
+                    let revealItem = NSMenuItem(title: "  📂 Reveal in Finder", action: #selector(revealProjectFolderClicked(_:)), keyEquivalent: "")
+                    revealItem.target = self
+                    revealItem.representedObject = ["path": singleWs.path]
+                    projSubmenu.addItem(revealItem)
+                } else if !project.workspaces.isEmpty {
+                    let wsHdr = NSMenuItem(title: "Workspaces (\(project.workspaces.count)):", action: nil, keyEquivalent: "")
+                    wsHdr.isEnabled = false
+                    projSubmenu.addItem(wsHdr)
 
-                // Associated GitHub repository (M3.4)
+                    for ws in project.workspaces {
+                        let wsLabel = ws.name ?? (ws.path as NSString).lastPathComponent
+                        let primaryTag = ws.isPrimary ? " [Primary]" : ""
+                        let wsItem = NSMenuItem(title: "  📁 \(wsLabel)\(primaryTag)", action: nil, keyEquivalent: "")
+                        let wsSubmenu = NSMenu()
+
+                        let wsPathItem = NSMenuItem(title: "Path: \(ws.path)", action: nil, keyEquivalent: "")
+                        wsPathItem.isEnabled = false
+                        wsSubmenu.addItem(wsPathItem)
+
+                        let revealWsItem = NSMenuItem(title: "  📂 Reveal in Finder", action: #selector(revealProjectFolderClicked(_:)), keyEquivalent: "")
+                        revealWsItem.target = self
+                        revealWsItem.representedObject = ["path": ws.path]
+                        wsSubmenu.addItem(revealWsItem)
+
+                        if !ws.isPrimary {
+                            let makePrimaryItem = NSMenuItem(title: "  ⭐️ Set as Primary Workspace", action: #selector(setPrimaryWorkspaceClicked(_:)), keyEquivalent: "")
+                            makePrimaryItem.target = self
+                            makePrimaryItem.representedObject = ["projectId": project.id, "workspaceId": ws.id]
+                            wsSubmenu.addItem(makePrimaryItem)
+                        }
+
+                        if project.workspaces.count > 1 {
+                            let removeWsItem = NSMenuItem(title: "  🗑️ Remove Workspace", action: #selector(removeWorkspaceClicked(_:)), keyEquivalent: "")
+                            removeWsItem.target = self
+                            removeWsItem.representedObject = ["projectId": project.id, "workspaceId": ws.id]
+                            wsSubmenu.addItem(removeWsItem)
+                        }
+
+                        wsItem.submenu = wsSubmenu
+                        projSubmenu.addItem(wsItem)
+                    }
+                } else {
+                    let noWsItem = NSMenuItem(title: "Workspaces: None", action: nil, keyEquivalent: "")
+                    noWsItem.isEnabled = false
+                    projSubmenu.addItem(noWsItem)
+                }
+
+                // 2. Associated GitHub repository (M3.4)
                 if let gitRepo = project.gitRepository ?? project.liveGitRepository {
                     let gitItem = NSMenuItem(title: "GitHub: \(gitRepo.fullName)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
                     gitItem.target = self
@@ -484,98 +527,243 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
                 projSubmenu.addItem(NSMenuItem.separator())
 
-                // Current Reviewer Details (M3.2)
-                if let reviewer = project.currentReviewer {
-                    let revHdr = NSMenuItem(title: "Current Reviewer:", action: nil, keyEquivalent: "")
-                    revHdr.isEnabled = false
-                    projSubmenu.addItem(revHdr)
+                // 3. Workstreams & Reviewers Section (M3.2 / M3.6)
+                let isSimpleProject = project.workstreams.count <= 1
+                if isSimpleProject, let defaultStream = project.workstreams.first {
+                    let liveStatus = defaultStream.liveReviewerStatus(openTabs: openTabs)
+                    if let reviewer = defaultStream.currentReviewer {
+                        let revHdr = NSMenuItem(title: "Current Reviewer:", action: nil, keyEquivalent: "")
+                        revHdr.isEnabled = false
+                        projSubmenu.addItem(revHdr)
 
-                    let titleStr = reviewer.title ?? reviewer.conversationId
-                    let revDetailItem = NSMenuItem(title: "  Title: \(titleStr)", action: nil, keyEquivalent: "")
-                    revDetailItem.isEnabled = false
-                    projSubmenu.addItem(revDetailItem)
+                        let titleStr = reviewer.title ?? reviewer.conversationId
+                        let revDetailItem = NSMenuItem(title: "  Title: \(titleStr)", action: nil, keyEquivalent: "")
+                        revDetailItem.isEnabled = false
+                        projSubmenu.addItem(revDetailItem)
 
-                    let convIdItem = NSMenuItem(title: "  ID: \(reviewer.conversationId)", action: nil, keyEquivalent: "")
-                    convIdItem.isEnabled = false
-                    projSubmenu.addItem(convIdItem)
+                        let convIdItem = NSMenuItem(title: "  ID: \(reviewer.conversationId)", action: nil, keyEquivalent: "")
+                        convIdItem.isEnabled = false
+                        projSubmenu.addItem(convIdItem)
 
-                    if let gId = reviewer.chatgptProjectId {
-                        let gItem = NSMenuItem(title: "  ChatGPT Project: \(gId)", action: nil, keyEquivalent: "")
-                        gItem.isEnabled = false
-                        projSubmenu.addItem(gItem)
+                        if let gId = reviewer.chatgptProjectId {
+                            let gItem = NSMenuItem(title: "  ChatGPT Project: \(gId)", action: nil, keyEquivalent: "")
+                            gItem.isEnabled = false
+                            projSubmenu.addItem(gItem)
+                        }
+
+                        let obsStatusStr = (liveStatus?.isCurrentlyObservable == true) ? "Currently open in Chrome" : "Closed / Not currently observable"
+                        let statusItem = NSMenuItem(title: "  Status: \(obsStatusStr)", action: nil, keyEquivalent: "")
+                        statusItem.isEnabled = false
+                        projSubmenu.addItem(statusItem)
+
+                        let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                        openRevItem.target = self
+                        openRevItem.representedObject = ["url": reviewer.url, "tabId": liveStatus?.activeTabId as Any]
+                        projSubmenu.addItem(openRevItem)
+
+                        let unlinkItem = NSMenuItem(title: "  Unlink Current Reviewer", action: #selector(removeWorkstreamReviewerClicked(_:)), keyEquivalent: "")
+                        unlinkItem.target = self
+                        unlinkItem.representedObject = ["projectId": project.id, "workstreamId": defaultStream.id]
+                        projSubmenu.addItem(unlinkItem)
+
+                        projSubmenu.addItem(NSMenuItem.separator())
                     }
 
-                    let obsStatusStr = (liveStatus?.isCurrentlyObservable == true) ? "Currently open in Chrome" : "Closed / Not currently observable"
-                    let statusItem = NSMenuItem(title: "  Status: \(obsStatusStr)", action: nil, keyEquivalent: "")
-                    statusItem.isEnabled = false
-                    projSubmenu.addItem(statusItem)
+                    // Explicit Assignment Action for simple project
+                    if let eligible = activeOrFirstEligibleTab {
+                        let candidateConvId = eligible.parsed.conversationId
+                        let candidateTitle = eligible.tab.title
 
-                    // Open / Focus in Chrome
-                    let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                    openRevItem.target = self
-                    openRevItem.representedObject = ["url": reviewer.url, "tabId": liveStatus?.activeTabId as Any]
-                    projSubmenu.addItem(openRevItem)
+                        var conflictName: String? = nil
+                        for otherProj in allProjects {
+                            for otherWs in otherProj.workstreams {
+                                if otherProj.id == project.id && otherWs.id == defaultStream.id { continue }
+                                if otherWs.currentReviewer?.conversationId == candidateConvId {
+                                    conflictName = "\(otherProj.name) / \(otherWs.name)"
+                                    break
+                                }
+                            }
+                        }
 
-                    // Unlink / Remove reviewer option
-                    let unlinkItem = NSMenuItem(title: "  Unlink Current Reviewer", action: #selector(removeProjectReviewerClicked(_:)), keyEquivalent: "")
-                    unlinkItem.target = self
-                    unlinkItem.representedObject = ["projectId": project.id]
-                    projSubmenu.addItem(unlinkItem)
-
-                    projSubmenu.addItem(NSMenuItem.separator())
-                }
-
-                // Explicit Assignment Action: "Set current ChatGPT conversation as reviewer"
-                if let eligible = activeOrFirstEligibleTab {
-                    let candidateConvId = eligible.parsed.conversationId
-                    let candidateTitle = eligible.tab.title
-
-                    let conflictingProject = allProjects.first(where: { $0.id != project.id && $0.currentReviewer?.conversationId == candidateConvId })
-
-                    if let conflict = conflictingProject {
-                        let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict.name)'", action: nil, keyEquivalent: "")
-                        conflictItem.isEnabled = false
-                        projSubmenu.addItem(conflictItem)
-                    } else if project.currentReviewer?.conversationId == candidateConvId {
-                        let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
-                        alreadyLinkedItem.isEnabled = false
-                        projSubmenu.addItem(alreadyLinkedItem)
+                        if let conflict = conflictName {
+                            let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict)'", action: nil, keyEquivalent: "")
+                            conflictItem.isEnabled = false
+                            projSubmenu.addItem(conflictItem)
+                        } else if defaultStream.currentReviewer?.conversationId == candidateConvId {
+                            let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
+                            alreadyLinkedItem.isEnabled = false
+                            projSubmenu.addItem(alreadyLinkedItem)
+                        } else {
+                            let linkTitle = defaultStream.currentReviewer == nil ?
+                                "Set current ChatGPT conversation as reviewer ('\(candidateTitle)')" :
+                                "Replace Reviewer with '\(candidateTitle)'"
+                            let linkItem = NSMenuItem(title: linkTitle, action: #selector(setWorkstreamReviewerClicked(_:)), keyEquivalent: "")
+                            linkItem.target = self
+                            linkItem.representedObject = [
+                                "projectId": project.id,
+                                "workstreamId": defaultStream.id,
+                                "url": eligible.tab.url,
+                                "title": candidateTitle
+                            ]
+                            projSubmenu.addItem(linkItem)
+                        }
                     } else {
-                        let linkTitle = project.currentReviewer == nil ?
-                            "Set current ChatGPT conversation as reviewer ('\(candidateTitle)')" :
-                            "Replace Reviewer with '\(candidateTitle)'"
-                        let linkItem = NSMenuItem(title: linkTitle, action: #selector(setProjectReviewerClicked(_:)), keyEquivalent: "")
-                        linkItem.target = self
-                        linkItem.representedObject = [
-                            "projectId": project.id,
-                            "url": eligible.tab.url,
-                            "title": candidateTitle
-                        ]
-                        projSubmenu.addItem(linkItem)
+                        let noEligibleItem = NSMenuItem(title: "Open a ChatGPT conversation in Chrome to set as Reviewer", action: nil, keyEquivalent: "")
+                        noEligibleItem.isEnabled = false
+                        projSubmenu.addItem(noEligibleItem)
+                    }
+
+                    if !defaultStream.reviewerHistory.isEmpty {
+                        projSubmenu.addItem(NSMenuItem.separator())
+                        let histHdr = NSMenuItem(title: "Previous Reviewers (\(defaultStream.reviewerHistory.count)):", action: nil, keyEquivalent: "")
+                        histHdr.isEnabled = false
+                        projSubmenu.addItem(histHdr)
+
+                        for past in defaultStream.reviewerHistory.reversed().prefix(5) {
+                            let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
+                            let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                            pastItem.target = self
+                            pastItem.representedObject = ["url": past.url]
+                            projSubmenu.addItem(pastItem)
+                        }
                     }
                 } else {
-                    let noEligibleItem = NSMenuItem(title: "Open a ChatGPT conversation in Chrome to set as Reviewer", action: nil, keyEquivalent: "")
-                    noEligibleItem.isEnabled = false
-                    projSubmenu.addItem(noEligibleItem)
-                }
+                    // Complex Project with 2+ Workstreams (e.g. Jobsearcher A / B / C)
+                    let streamsHdr = NSMenuItem(title: "Workstreams & Reviewers (\(project.workstreams.count)):", action: nil, keyEquivalent: "")
+                    streamsHdr.isEnabled = false
+                    projSubmenu.addItem(streamsHdr)
 
-                // Previous Reviewer Association History
-                if !project.reviewerHistory.isEmpty {
-                    projSubmenu.addItem(NSMenuItem.separator())
-                    let histHdr = NSMenuItem(title: "Previous Reviewers (\(project.reviewerHistory.count)):", action: nil, keyEquivalent: "")
-                    histHdr.isEnabled = false
-                    projSubmenu.addItem(histHdr)
+                    for stream in project.workstreams {
+                        let liveStatus = stream.liveReviewerStatus(openTabs: openTabs)
+                        let revSummary: String
+                        if let rev = stream.currentReviewer {
+                            let dispTitle = liveStatus?.liveTitle ?? rev.title ?? "Conv (\(rev.conversationId.prefix(8)))"
+                            let obsTag = (liveStatus?.isCurrentlyObservable == true) ? "🟢 Open" : "⚪ Closed"
+                            revSummary = " → \(dispTitle) [\(obsTag)]"
+                        } else {
+                            revSummary = " → (No Reviewer)"
+                        }
 
-                    for past in project.reviewerHistory.reversed().prefix(5) {
-                        let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
-                        let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                        pastItem.target = self
-                        pastItem.representedObject = ["url": past.url]
-                        projSubmenu.addItem(pastItem)
+                        let streamItem = NSMenuItem(title: "  📌 \(stream.name)\(revSummary)", action: nil, keyEquivalent: "")
+                        let streamSubmenu = NSMenu()
+
+                        if let rev = stream.currentReviewer {
+                            let revHdr = NSMenuItem(title: "Reviewer: \(rev.title ?? rev.conversationId)", action: nil, keyEquivalent: "")
+                            revHdr.isEnabled = false
+                            streamSubmenu.addItem(revHdr)
+
+                            let obsStr = (liveStatus?.isCurrentlyObservable == true) ? "Status: Open in Chrome" : "Status: Closed"
+                            let obsItem = NSMenuItem(title: "  \(obsStr)", action: nil, keyEquivalent: "")
+                            obsItem.isEnabled = false
+                            streamSubmenu.addItem(obsItem)
+
+                            let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                            openRevItem.target = self
+                            openRevItem.representedObject = ["url": rev.url, "tabId": liveStatus?.activeTabId as Any]
+                            streamSubmenu.addItem(openRevItem)
+
+                            let unlinkItem = NSMenuItem(title: "  Unlink Reviewer", action: #selector(removeWorkstreamReviewerClicked(_:)), keyEquivalent: "")
+                            unlinkItem.target = self
+                            unlinkItem.representedObject = ["projectId": project.id, "workstreamId": stream.id]
+                            streamSubmenu.addItem(unlinkItem)
+
+                            streamSubmenu.addItem(NSMenuItem.separator())
+                        }
+
+                        // Workstream Reviewer Assignment
+                        if let eligible = activeOrFirstEligibleTab {
+                            let candidateConvId = eligible.parsed.conversationId
+                            let candidateTitle = eligible.tab.title
+
+                            var conflictName: String? = nil
+                            for otherProj in allProjects {
+                                for otherWs in otherProj.workstreams {
+                                    if otherProj.id == project.id && otherWs.id == stream.id { continue }
+                                    if otherWs.currentReviewer?.conversationId == candidateConvId {
+                                        conflictName = "\(otherProj.name) / \(otherWs.name)"
+                                        break
+                                    }
+                                }
+                            }
+
+                            if let conflict = conflictName {
+                                let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict)'", action: nil, keyEquivalent: "")
+                                conflictItem.isEnabled = false
+                                streamSubmenu.addItem(conflictItem)
+                            } else if stream.currentReviewer?.conversationId == candidateConvId {
+                                let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
+                                alreadyLinkedItem.isEnabled = false
+                                streamSubmenu.addItem(alreadyLinkedItem)
+                            } else {
+                                let linkTitle = stream.currentReviewer == nil ?
+                                    "Set current ChatGPT tab as reviewer ('\(candidateTitle)')" :
+                                    "Replace Reviewer with '\(candidateTitle)'"
+                                let linkItem = NSMenuItem(title: linkTitle, action: #selector(setWorkstreamReviewerClicked(_:)), keyEquivalent: "")
+                                linkItem.target = self
+                                linkItem.representedObject = [
+                                    "projectId": project.id,
+                                    "workstreamId": stream.id,
+                                    "url": eligible.tab.url,
+                                    "title": candidateTitle
+                                ]
+                                streamSubmenu.addItem(linkItem)
+                            }
+                        }
+
+                        if !stream.reviewerHistory.isEmpty {
+                            streamSubmenu.addItem(NSMenuItem.separator())
+                            let histHdr = NSMenuItem(title: "Previous Reviewers (\(stream.reviewerHistory.count)):", action: nil, keyEquivalent: "")
+                            histHdr.isEnabled = false
+                            streamSubmenu.addItem(histHdr)
+
+                            for past in stream.reviewerHistory.reversed().prefix(5) {
+                                let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
+                                let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                                pastItem.target = self
+                                pastItem.representedObject = ["url": past.url]
+                                streamSubmenu.addItem(pastItem)
+                            }
+                        }
+
+                        // Scoped Workspaces Configuration for this Workstream
+                        if !project.workspaces.isEmpty {
+                            streamSubmenu.addItem(NSMenuItem.separator())
+                            let wsScopeHdr = NSMenuItem(title: "Scoped Workspaces:", action: nil, keyEquivalent: "")
+                            wsScopeHdr.isEnabled = false
+                            streamSubmenu.addItem(wsScopeHdr)
+
+                            for ws in project.workspaces {
+                                let wsLabel = ws.name ?? (ws.path as NSString).lastPathComponent
+                                let isScoped = stream.workspaceIds.contains(ws.id)
+                                let checkTag = isScoped ? "✓ " : "  "
+                                let scopeItem = NSMenuItem(title: "\(checkTag)📁 \(wsLabel)", action: #selector(toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+                                scopeItem.target = self
+                                scopeItem.representedObject = [
+                                    "projectId": project.id,
+                                    "workstreamId": stream.id,
+                                    "workspaceId": ws.id
+                                ]
+                                streamSubmenu.addItem(scopeItem)
+                            }
+                        }
+
+                        streamSubmenu.addItem(NSMenuItem.separator())
+                        let renameStreamItem = NSMenuItem(title: "  ✏️ Rename Workstream...", action: #selector(renameWorkstreamClicked(_:)), keyEquivalent: "")
+                        renameStreamItem.target = self
+                        renameStreamItem.representedObject = ["projectId": project.id, "workstreamId": stream.id, "currentName": stream.name]
+                        streamSubmenu.addItem(renameStreamItem)
+
+                        let removeStreamItem = NSMenuItem(title: "  🗑️ Remove Workstream", action: #selector(removeWorkstreamClicked(_:)), keyEquivalent: "")
+                        removeStreamItem.target = self
+                        removeStreamItem.representedObject = ["projectId": project.id, "workstreamId": stream.id]
+                        streamSubmenu.addItem(removeStreamItem)
+
+                        streamItem.submenu = streamSubmenu
+                        projSubmenu.addItem(streamItem)
                     }
                 }
 
-                // Active Agent Sessions in this Project (M3.3 / M3.5 Contextual Navigation)
+                // 4. Active Sessions Section
                 projSubmenu.addItem(NSMenuItem.separator())
                 if !projectSessions.isEmpty {
                     let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(projectSessions.count)):", action: nil, keyEquivalent: "")
@@ -585,7 +773,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     for sess in projectSessions {
                         let sessBadge = sess.status.statusDot(theme: currentTheme)
                         let sessTitle = sess.title.isEmpty ? sess.sessionId : sess.title
-                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(sess.provider.displayName): \(sessTitle)", action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
+                        let workstream = sess.resolveWorkstream(using: ProjectRegistry.shared)
+                        let streamTag = (project.workstreams.count > 1 && workstream != nil) ? "[\(workstream!.name)] " : ""
+                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(streamTag)\(sess.provider.displayName): \(sessTitle)", action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
                         sessItem.target = self
                         sessItem.representedObject = [
                             "provider": sess.provider,
@@ -602,12 +792,38 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                     projSubmenu.addItem(noSessItem)
                 }
 
+                // 5. Project Actions Section (M3.6 Self-Service Formation)
+                projSubmenu.addItem(NSMenuItem.separator())
+                let addWsAction = NSMenuItem(title: "  ➕ Add Workspace Folder...", action: #selector(addWorkspaceClicked(_:)), keyEquivalent: "")
+                addWsAction.target = self
+                addWsAction.representedObject = ["projectId": project.id]
+                projSubmenu.addItem(addWsAction)
+
+                let addStreamAction = NSMenuItem(title: "  ➕ Add Workstream...", action: #selector(addWorkstreamClicked(_:)), keyEquivalent: "")
+                addStreamAction.target = self
+                addStreamAction.representedObject = ["projectId": project.id]
+                projSubmenu.addItem(addStreamAction)
+
+                let renameProjAction = NSMenuItem(title: "  ✏️ Rename Project...", action: #selector(renameProjectClicked(_:)), keyEquivalent: "")
+                renameProjAction.target = self
+                renameProjAction.representedObject = ["projectId": project.id, "currentName": project.name]
+                projSubmenu.addItem(renameProjAction)
+
+                let deleteProjAction = NSMenuItem(title: "  🗑️ Delete Project...", action: #selector(deleteProjectClicked(_:)), keyEquivalent: "")
+                deleteProjAction.target = self
+                deleteProjAction.representedObject = ["projectId": project.id, "projectName": project.name]
+                projSubmenu.addItem(deleteProjAction)
+
                 projItem.submenu = projSubmenu
                 menu.addItem(projItem)
             }
-
-            menu.addItem(NSMenuItem.separator())
         }
+
+        let createProjItem = NSMenuItem(title: "➕ Create New Project...", action: #selector(createNewProjectClicked), keyEquivalent: "")
+        createProjItem.target = self
+        menu.addItem(createProjItem)
+
+        menu.addItem(NSMenuItem.separator())
 
         // 3. Direct 1-Click Agent & Session Rows (Filtered by Monitored Agents)
         let allStates = AgentStore.shared.getAllStates()
@@ -1658,14 +1874,7 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             updateTitleAndMenu()
         } catch {
             print("⚠️ [MenuBarManager] Failed to assign reviewer: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = "Reviewer Assignment Failed"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-            }
+            showErrorAlert(title: "Reviewer Assignment Failed", error: error)
         }
     }
 
@@ -1680,6 +1889,283 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             updateTitleAndMenu()
         } catch {
             print("⚠️ [MenuBarManager] Failed to remove reviewer: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - M3.6 Project & Workstream Formation Actions
+
+    @objc private func createNewProjectClicked() {
+        let openPanel = NSOpenPanel()
+        openPanel.title = "Select Project Root Folder"
+        openPanel.canChooseFiles = false
+        openPanel.canChooseDirectories = true
+        openPanel.allowsMultipleSelection = false
+        openPanel.canCreateDirectories = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        if openPanel.runModal() == .OK, let selectedURL = openPanel.url {
+            let path = selectedURL.path
+            let defaultName = selectedURL.lastPathComponent
+
+            let alert = NSAlert()
+            alert.messageText = "Create New Project"
+            alert.informativeText = "Enter a name for this project:"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Create")
+            alert.addButton(withTitle: "Cancel")
+
+            let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+            input.stringValue = defaultName
+            alert.accessoryView = input
+
+            if alert.runModal() == .alertFirstButtonReturn {
+                let enteredName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let finalName = enteredName.isEmpty ? defaultName : enteredName
+                do {
+                    try ProjectRegistry.shared.createProject(name: finalName, initialWorkspacePath: path)
+                    updateTitleAndMenu()
+                } catch {
+                    showErrorAlert(title: "Failed to Create Project", error: error)
+                }
+            }
+        }
+    }
+
+    @objc private func addWorkspaceClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String else { return }
+
+        let openPanel = NSOpenPanel()
+        openPanel.title = "Select Workspace Folder to Add"
+        openPanel.canChooseFiles = false
+        openPanel.canChooseDirectories = true
+        openPanel.allowsMultipleSelection = false
+        openPanel.canCreateDirectories = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        if openPanel.runModal() == .OK, let selectedURL = openPanel.url {
+            do {
+                try ProjectRegistry.shared.addWorkspace(toProjectId: projectId, path: selectedURL.path)
+                updateTitleAndMenu()
+            } catch {
+                showErrorAlert(title: "Failed to Add Workspace", error: error)
+            }
+        }
+    }
+
+    @objc private func removeWorkspaceClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workspaceId = dict["workspaceId"] as? String else { return }
+
+        do {
+            try ProjectRegistry.shared.removeWorkspace(workspaceId: workspaceId, fromProjectId: projectId)
+            updateTitleAndMenu()
+        } catch {
+            showErrorAlert(title: "Failed to Remove Workspace", error: error)
+        }
+    }
+
+    @objc private func setPrimaryWorkspaceClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workspaceId = dict["workspaceId"] as? String else { return }
+
+        do {
+            try ProjectRegistry.shared.setPrimaryWorkspace(workspaceId: workspaceId, inProjectId: projectId)
+            updateTitleAndMenu()
+        } catch {
+            showErrorAlert(title: "Failed to Set Primary Workspace", error: error)
+        }
+    }
+
+    @objc private func addWorkstreamClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Add Workstream"
+        alert.informativeText = "Enter a name for the new workstream (e.g. 'A — Discovery / Scoring'):"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        input.placeholderString = "Workstream Name"
+        alert.accessoryView = input
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            do {
+                try ProjectRegistry.shared.addWorkstream(toProjectId: projectId, name: name)
+                updateTitleAndMenu()
+            } catch {
+                showErrorAlert(title: "Failed to Add Workstream", error: error)
+            }
+        }
+    }
+
+    @objc private func renameWorkstreamClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workstreamId = dict["workstreamId"] as? String else { return }
+
+        let currentName = dict["currentName"] as? String ?? ""
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Workstream"
+        alert.informativeText = "Enter a new name for this workstream:"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        input.stringValue = currentName
+        alert.accessoryView = input
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let newName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !newName.isEmpty else { return }
+            do {
+                try ProjectRegistry.shared.renameWorkstream(workstreamId: workstreamId, inProjectId: projectId, newName: newName)
+                updateTitleAndMenu()
+            } catch {
+                showErrorAlert(title: "Failed to Rename Workstream", error: error)
+            }
+        }
+    }
+
+    @objc private func removeWorkstreamClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workstreamId = dict["workstreamId"] as? String else { return }
+
+        do {
+            try ProjectRegistry.shared.removeWorkstream(workstreamId: workstreamId, fromProjectId: projectId)
+            updateTitleAndMenu()
+        } catch {
+            showErrorAlert(title: "Failed to Remove Workstream", error: error)
+        }
+    }
+
+    @objc private func toggleWorkstreamWorkspaceClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workstreamId = dict["workstreamId"] as? String,
+              let workspaceId = dict["workspaceId"] as? String else { return }
+
+        do {
+            try ProjectRegistry.shared.toggleWorkstreamWorkspace(
+                workspaceId: workspaceId,
+                workstreamId: workstreamId,
+                inProjectId: projectId
+            )
+            updateTitleAndMenu()
+        } catch {
+            showErrorAlert(title: "Failed to Update Workstream Workspace", error: error)
+        }
+    }
+
+    @objc private func renameProjectClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String else { return }
+
+        let currentName = dict["currentName"] as? String ?? ""
+
+        let alert = NSAlert()
+        alert.messageText = "Rename Project"
+        alert.informativeText = "Enter a new name for this project:"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        input.stringValue = currentName
+        alert.accessoryView = input
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            let newName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !newName.isEmpty else { return }
+            do {
+                try ProjectRegistry.shared.renameProject(id: projectId, newName: newName)
+                updateTitleAndMenu()
+            } catch {
+                showErrorAlert(title: "Failed to Rename Project", error: error)
+            }
+        }
+    }
+
+    @objc private func deleteProjectClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String else { return }
+
+        let projectName = dict["projectName"] as? String ?? "Project"
+
+        let alert = NSAlert()
+        alert.messageText = "Delete Project"
+        alert.informativeText = "Are you sure you want to remove '\(projectName)' from AgentBridge? (Files on disk will NOT be deleted)."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            do {
+                try ProjectRegistry.shared.deleteProject(id: projectId)
+                updateTitleAndMenu()
+            } catch {
+                showErrorAlert(title: "Failed to Delete Project", error: error)
+            }
+        }
+    }
+
+    @objc private func setWorkstreamReviewerClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workstreamId = dict["workstreamId"] as? String,
+              let url = dict["url"] as? String else {
+            return
+        }
+        let title = dict["title"] as? String
+
+        do {
+            try ProjectRegistry.shared.assignReviewer(toWorkstreamId: workstreamId, inProjectId: projectId, url: url, title: title)
+            updateTitleAndMenu()
+        } catch {
+            print("⚠️ [MenuBarManager] Failed to assign workstream reviewer: \(error.localizedDescription)")
+            showErrorAlert(title: "Reviewer Assignment Failed", error: error)
+        }
+    }
+
+    @objc private func removeWorkstreamReviewerClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let projectId = dict["projectId"] as? String,
+              let workstreamId = dict["workstreamId"] as? String else {
+            return
+        }
+
+        do {
+            try ProjectRegistry.shared.removeReviewer(fromWorkstreamId: workstreamId, inProjectId: projectId)
+            updateTitleAndMenu()
+        } catch {
+            print("⚠️ [MenuBarManager] Failed to remove workstream reviewer: \(error.localizedDescription)")
+            showErrorAlert(title: "Failed to Remove Reviewer", error: error)
+        }
+    }
+
+    private func showErrorAlert(title: String, error: Error) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
         }
     }
 

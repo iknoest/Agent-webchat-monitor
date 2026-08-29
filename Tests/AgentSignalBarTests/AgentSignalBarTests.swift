@@ -2907,5 +2907,84 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertTrue(live?.isCurrentlyObservable == true)
         XCTAssertEqual(live?.activeTabId, 55)
     }
+
+    func testProjectMultiWorkspaceAndWorkstreamModel() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m36_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        // 1. Create project with multiple workspaces and workstreams
+        let project = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/workspace/Jobsearcher")
+        let wsCodex = try registry.addWorkspace(toProjectId: project.id, path: "/Users/test/workspace/Jobsearcher-codex", name: "Codex Worktree")
+
+        let streamA = try registry.addWorkstream(toProjectId: project.id, name: "Workstream A — Discovery", workspaceIds: [wsCodex.id])
+        let streamB = try registry.addWorkstream(toProjectId: project.id, name: "Workstream B — Scraper", workspaceIds: [project.workspaces[0].id])
+        let streamC = try registry.addWorkstream(toProjectId: project.id, name: "Workstream C — Strategy", workspaceIds: [])
+
+        // 2. Assign distinct reviewers
+        _ = try registry.assignReviewer(toWorkstreamId: streamA.id, inProjectId: project.id, url: "https://chatgpt.com/c/rev-a-123", title: "Reviewer A")
+        _ = try registry.assignReviewer(toWorkstreamId: streamB.id, inProjectId: project.id, url: "https://chatgpt.com/c/rev-b-456", title: "Reviewer B")
+        _ = try registry.assignReviewer(toWorkstreamId: streamC.id, inProjectId: project.id, url: "https://chatgpt.com/c/rev-c-789", title: "Reviewer C")
+
+        let loaded = registry.getProject(byId: project.id)
+        XCTAssertEqual(loaded?.workspaces.count, 2)
+        XCTAssertEqual(loaded?.workstreams.count, 4) // initial Default/Main + A + B + C
+
+        // 3. Match workspaces and workstreams from CWD
+        let sCodex = AgentSessionInfo(provider: .codex, sessionId: "c1", status: .working, cwd: "/Users/test/workspace/Jobsearcher-codex/src")
+        let sClaude = AgentSessionInfo(provider: .claude, sessionId: "cl1", status: .done, cwd: "/Users/test/workspace/Jobsearcher/sub")
+
+        XCTAssertEqual(sCodex.resolveProject(using: registry)?.id, project.id)
+        XCTAssertEqual(sClaude.resolveProject(using: registry)?.id, project.id)
+
+        XCTAssertEqual(sCodex.resolveWorkstream(using: registry)?.id, streamA.id)
+        XCTAssertEqual(sClaude.resolveWorkstream(using: registry)?.id, streamB.id)
+
+        // 4. Test live tab observation across workstreams
+        let openTabs = [
+            ChatGPTTabInfo(tabId: 101, title: "Reviewer A Tab", url: "https://chatgpt.com/c/rev-a-123", status: "working", active: true)
+        ]
+        let liveA = streamA.liveReviewerStatus(openTabs: openTabs)
+        XCTAssertEqual(liveA?.isCurrentlyObservable, true)
+        XCTAssertEqual(liveA?.activeTabId, 101)
+
+        let liveB = streamB.liveReviewerStatus(openTabs: openTabs)
+        XCTAssertEqual(liveB?.isCurrentlyObservable, false)
+    }
+
+    func testWorkstreamWorkspaceScopingAndAttribution() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m3final_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/workspace/Jobsearcher", initialWorkstreamName: "B Claude")
+        let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/test/workspace/Jobsearcher-codex")
+
+        let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+        let streamC = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+
+        // 1. Assign workspace via assignWorkspace API
+        _ = try registry.assignWorkspace(workspaceId: wsCodex.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+        let loaded = registry.getProject(byId: p.id)!
+        XCTAssertTrue(loaded.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds.contains(wsCodex.id) == true)
+
+        // 2. Toggle off and on
+        _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsCodex.id, workstreamId: streamA.id, inProjectId: p.id)
+        XCTAssertFalse(registry.getProject(byId: p.id)!.workstreams.first(where: { $0.id == streamA.id })!.workspaceIds.contains(wsCodex.id))
+
+        _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsCodex.id, workstreamId: streamA.id, inProjectId: p.id)
+        XCTAssertTrue(registry.getProject(byId: p.id)!.workstreams.first(where: { $0.id == streamA.id })!.workspaceIds.contains(wsCodex.id))
+
+        // 3. Attribution checks
+        let codexSess = AgentSessionInfo(provider: .codex, sessionId: "s1", status: .working, cwd: "/Users/test/workspace/Jobsearcher-codex/sub")
+        let claudeSess = AgentSessionInfo(provider: .claude, sessionId: "s2", status: .working, cwd: "/Users/test/workspace/Jobsearcher/sub")
+        let unknownSess = AgentSessionInfo(provider: .claude, sessionId: "s3", status: .working, cwd: "/tmp/other")
+
+        XCTAssertEqual(codexSess.resolveWorkstream(using: registry)?.name, "A Jobsearcher codex")
+        XCTAssertEqual(claudeSess.resolveWorkstream(using: registry)?.name, "B Claude")
+        XCTAssertNil(unknownSess.resolveWorkstream(using: registry))
+    }
 }
 #endif

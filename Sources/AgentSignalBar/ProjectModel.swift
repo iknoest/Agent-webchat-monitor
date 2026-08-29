@@ -412,78 +412,84 @@ public enum ProjectGitDetector {
 // MARK: - Canonical Project Model
 
 /// Canonical representation of an explicitly registered local folder / project root.
-public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
-    /// Stable unique identifier for the project.
+// MARK: - Project Workspaces & Workstreams (M3.6)
+
+/// Represents a canonical local filesystem workspace root belonging to an AgentBridge Project.
+public struct ProjectWorkspace: Identifiable, Codable, Sendable, Equatable, Hashable {
+    /// Stable unique identifier for the workspace.
     public let id: String
 
-    /// Human-friendly display name (defaults to the folder basename if not specified).
-    public var name: String
+    /// Canonical, normalized absolute filesystem path of the workspace root.
+    public var path: String
 
-    /// Canonical, normalized absolute filesystem path of the project root.
-    public let rootPath: String
+    /// Optional human-friendly label for this workspace (e.g. "Main Repo", "Codex Worktree").
+    public var name: String?
 
-    /// Timestamp when the project was registered.
+    /// Whether this workspace is the designated primary workspace for the project.
+    public var isPrimary: Bool
+
+    /// Timestamp when this workspace was added to the project.
     public let createdAt: Date
-
-    /// Timestamp when the project metadata was last updated.
-    public var updatedAt: Date
-
-    /// Currently assigned ChatGPT reviewer conversation (M3.2).
-    public var currentReviewer: ProjectReviewer?
-
-    /// Prior reviewer association migration history (M3.2).
-    public var reviewerHistory: [ReviewerHistoryRecord]
-
-    /// Optional associated GitHub repository metadata (M3.4).
-    public var gitRepository: ProjectGitHubRepository?
 
     public init(
         id: String = UUID().uuidString,
+        path: String,
         name: String? = nil,
-        rootPath: String,
-        createdAt: Date = Date(),
-        updatedAt: Date = Date(),
-        currentReviewer: ProjectReviewer? = nil,
-        reviewerHistory: [ReviewerHistoryRecord] = [],
-        gitRepository: ProjectGitHubRepository? = nil
+        isPrimary: Bool = false,
+        createdAt: Date = Date()
     ) {
         self.id = id
-        let canonicalPath = Self.canonicalizePath(rootPath)
-        self.rootPath = canonicalPath
-
-        if let explicitName = name?.trimmingCharacters(in: .whitespacesAndNewlines), !explicitName.isEmpty {
-            self.name = explicitName
-        } else {
-            let lastComponent = (canonicalPath as NSString).lastPathComponent
-            self.name = lastComponent.isEmpty ? "Root" : lastComponent
-        }
-
+        self.path = Project.canonicalizePath(path)
+        let cleanName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = (cleanName?.isEmpty == false) ? cleanName : nil
+        self.isPrimary = isPrimary
         self.createdAt = createdAt
-        self.updatedAt = updatedAt
+    }
+}
+
+/// Represents an authority and coordination boundary inside an AgentBridge Project (e.g. Workstream A/B/C).
+public struct ProjectWorkstream: Identifiable, Codable, Sendable, Equatable, Hashable {
+    /// Stable unique identifier for the workstream.
+    public let id: String
+
+    /// Human-friendly display name (e.g. "A — Discovery / Scoring", "Main").
+    public var name: String
+
+    /// Currently assigned ChatGPT reviewer conversation for this workstream (M3.6).
+    public var currentReviewer: ProjectReviewer?
+
+    /// Prior reviewer association migration history for this workstream (M3.6).
+    public var reviewerHistory: [ReviewerHistoryRecord]
+
+    /// Zero or more workspace IDs scoped specifically to this workstream.
+    public var workspaceIds: [String]
+
+    /// Timestamp when this workstream was created.
+    public let createdAt: Date
+
+    /// Timestamp when this workstream metadata was last updated.
+    public var updatedAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        currentReviewer: ProjectReviewer? = nil,
+        reviewerHistory: [ReviewerHistoryRecord] = [],
+        workspaceIds: [String] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = cleanName.isEmpty ? "Default" : cleanName
         self.currentReviewer = currentReviewer
         self.reviewerHistory = reviewerHistory
-        self.gitRepository = gitRepository ?? ProjectGitDetector.detect(at: canonicalPath)
+        self.workspaceIds = workspaceIds
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(String.self, forKey: .id)
-        self.name = try container.decode(String.self, forKey: .name)
-        let rawPath = try container.decode(String.self, forKey: .rootPath)
-        self.rootPath = Self.canonicalizePath(rawPath)
-        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
-        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        self.currentReviewer = try container.decodeIfPresent(ProjectReviewer.self, forKey: .currentReviewer)
-        self.reviewerHistory = try container.decodeIfPresent([ReviewerHistoryRecord].self, forKey: .reviewerHistory) ?? []
-        self.gitRepository = try container.decodeIfPresent(ProjectGitHubRepository.self, forKey: .gitRepository)
-    }
-
-    /// Evaluates the live local Git repository status at the project root path.
-    public var liveGitRepository: ProjectGitHubRepository? {
-        return ProjectGitDetector.detect(at: rootPath)
-    }
-
-    /// Evaluates whether the current reviewer is actively open / observable among open Chrome tabs.
+    /// Evaluates whether this workstream's reviewer is actively open / observable among open Chrome tabs.
     public func liveReviewerStatus(openTabs: [ChatGPTTabInfo]) -> ProjectReviewerLiveStatus? {
         guard let reviewer = currentReviewer else { return nil }
 
@@ -508,8 +514,246 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
             canonicalUrl: reviewer.url
         )
     }
+}
 
-    /// Aggregated state summary of a Project for top-level switcher display (M3.5).
+// MARK: - Core Project Entity (M3.1 / M3.6 Multi-Workspace & Workstream Model)
+
+/// Represents a logical project boundary containing one or more workspaces, workstreams, and sessions.
+public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
+    /// Stable unique identifier for the project.
+    public let id: String
+
+    /// Human-friendly display name.
+    public var name: String
+
+    /// All canonical filesystem workspaces belonging to this project (M3.6).
+    public var workspaces: [ProjectWorkspace]
+
+    /// All coordination / authority workstreams belonging to this project (M3.6).
+    public var workstreams: [ProjectWorkstream]
+
+    /// Optional associated GitHub repository metadata (M3.4).
+    public var gitRepository: ProjectGitHubRepository?
+
+    /// Timestamp when the project was registered.
+    public let createdAt: Date
+
+    /// Timestamp when the project metadata was last updated.
+    public var updatedAt: Date
+
+    // MARK: - Backward-Compatible Computed Properties
+
+    /// Canonical primary root path of the project (M3.1 compatibility).
+    public var rootPath: String {
+        return primaryWorkspace?.path ?? workspaces.first?.path ?? ""
+    }
+
+    /// Designated primary workspace, or first workspace.
+    public var primaryWorkspace: ProjectWorkspace? {
+        return workspaces.first(where: { $0.isPrimary }) ?? workspaces.first
+    }
+
+    /// Current reviewer of the primary / first workstream (M3.2 compatibility).
+    public var currentReviewer: ProjectReviewer? {
+        get {
+            return workstreams.first(where: { $0.currentReviewer != nil })?.currentReviewer
+        }
+        set {
+            if let newRev = newValue {
+                if workstreams.isEmpty {
+                    workstreams.append(ProjectWorkstream(id: "default", name: "Main", currentReviewer: newRev))
+                } else {
+                    workstreams[0].currentReviewer = newRev
+                    workstreams[0].updatedAt = Date()
+                }
+            } else {
+                for i in 0..<workstreams.count {
+                    workstreams[i].currentReviewer = nil
+                    workstreams[i].updatedAt = Date()
+                }
+            }
+        }
+    }
+
+    /// Prior reviewer association migration history aggregated across workstreams (M3.2 compatibility).
+    public var reviewerHistory: [ReviewerHistoryRecord] {
+        return workstreams.flatMap { $0.reviewerHistory }
+    }
+
+    // MARK: - Initializers
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String? = nil,
+        workspaces: [ProjectWorkspace] = [],
+        workstreams: [ProjectWorkstream] = [],
+        gitRepository: ProjectGitHubRepository? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.workspaces = workspaces
+        self.workstreams = workstreams
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+
+        if let explicitName = name?.trimmingCharacters(in: .whitespacesAndNewlines), !explicitName.isEmpty {
+            self.name = explicitName
+        } else if let primary = workspaces.first {
+            let lastComponent = (primary.path as NSString).lastPathComponent
+            self.name = lastComponent.isEmpty ? "Root" : lastComponent
+        } else {
+            self.name = "Project"
+        }
+
+        if let explicitGit = gitRepository {
+            self.gitRepository = explicitGit
+        } else if let primary = workspaces.first {
+            self.gitRepository = ProjectGitDetector.detect(at: primary.path)
+        } else {
+            self.gitRepository = nil
+        }
+    }
+
+    /// Convenience initializer for single-workspace registration (M3.1-M3.5 compatibility).
+    public init(
+        id: String = UUID().uuidString,
+        name: String? = nil,
+        rootPath: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        currentReviewer: ProjectReviewer? = nil,
+        reviewerHistory: [ReviewerHistoryRecord] = [],
+        gitRepository: ProjectGitHubRepository? = nil
+    ) {
+        let canonicalPath = Self.canonicalizePath(rootPath)
+        let primaryWs = ProjectWorkspace(path: canonicalPath, name: nil, isPrimary: true, createdAt: createdAt)
+        let defaultWs = ProjectWorkstream(
+            id: "default",
+            name: "Main",
+            currentReviewer: currentReviewer,
+            reviewerHistory: reviewerHistory,
+            workspaceIds: [primaryWs.id],
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+
+        self.id = id
+        self.workspaces = [primaryWs]
+        self.workstreams = [defaultWs]
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+
+        if let explicitName = name?.trimmingCharacters(in: .whitespacesAndNewlines), !explicitName.isEmpty {
+            self.name = explicitName
+        } else {
+            let lastComponent = (canonicalPath as NSString).lastPathComponent
+            self.name = lastComponent.isEmpty ? "Root" : lastComponent
+        }
+
+        self.gitRepository = gitRepository ?? ProjectGitDetector.detect(at: canonicalPath)
+    }
+
+    // MARK: - Decodable with Version 1 -> Version 2 Schema Migration
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case workspaces
+        case workstreams
+        case gitRepository
+        case createdAt
+        case updatedAt
+        // Legacy v1 keys:
+        case rootPath
+        case currentReviewer
+        case reviewerHistory
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.name = try container.decode(String.self, forKey: .name)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.gitRepository = try container.decodeIfPresent(ProjectGitHubRepository.self, forKey: .gitRepository)
+
+        // 1. Decode or migrate Workspaces
+        if let decodedWorkspaces = try container.decodeIfPresent([ProjectWorkspace].self, forKey: .workspaces), !decodedWorkspaces.isEmpty {
+            self.workspaces = decodedWorkspaces.map { ws in
+                ProjectWorkspace(
+                    id: ws.id,
+                    path: Self.canonicalizePath(ws.path),
+                    name: ws.name,
+                    isPrimary: ws.isPrimary,
+                    createdAt: ws.createdAt
+                )
+            }
+        } else if let rawRootPath = try container.decodeIfPresent(String.self, forKey: .rootPath) {
+            let canonical = Self.canonicalizePath(rawRootPath)
+            let primaryWs = ProjectWorkspace(path: canonical, name: nil, isPrimary: true, createdAt: self.createdAt)
+            self.workspaces = [primaryWs]
+        } else {
+            self.workspaces = []
+        }
+
+        // 2. Decode or migrate Workstreams
+        if let decodedWorkstreams = try container.decodeIfPresent([ProjectWorkstream].self, forKey: .workstreams), !decodedWorkstreams.isEmpty {
+            self.workstreams = decodedWorkstreams
+        } else {
+            let legacyReviewer = try container.decodeIfPresent(ProjectReviewer.self, forKey: .currentReviewer)
+            let legacyHistory = try container.decodeIfPresent([ReviewerHistoryRecord].self, forKey: .reviewerHistory) ?? []
+            let primaryId = self.workspaces.first?.id
+            let defaultWs = ProjectWorkstream(
+                id: "default",
+                name: "Main",
+                currentReviewer: legacyReviewer,
+                reviewerHistory: legacyHistory,
+                workspaceIds: primaryId != nil ? [primaryId!] : [],
+                createdAt: self.createdAt,
+                updatedAt: self.updatedAt
+            )
+            self.workstreams = [defaultWs]
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(workspaces, forKey: .workspaces)
+        try container.encode(workstreams, forKey: .workstreams)
+        try container.encodeIfPresent(gitRepository, forKey: .gitRepository)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    // MARK: - Live Observation & Evaluation
+
+    /// Evaluates live local Git repository status across the project's workspaces.
+    public var liveGitRepository: ProjectGitHubRepository? {
+        if let primary = primaryWorkspace, let repo = ProjectGitDetector.detect(at: primary.path) {
+            return repo
+        }
+        for ws in workspaces {
+            if let repo = ProjectGitDetector.detect(at: ws.path) {
+                return repo
+            }
+        }
+        return nil
+    }
+
+    /// Evaluates whether any workstream reviewer is actively open / observable among open Chrome tabs.
+    public func liveReviewerStatus(openTabs: [ChatGPTTabInfo]) -> ProjectReviewerLiveStatus? {
+        for ws in workstreams {
+            if let st = ws.liveReviewerStatus(openTabs: openTabs), st.isCurrentlyObservable {
+                return st
+            }
+        }
+        return workstreams.first?.liveReviewerStatus(openTabs: openTabs)
+    }
+
+    /// Aggregated state summary of a Project for top-level switcher display (M3.5 / M3.6).
     public struct StatusSummary: Sendable, Equatable {
         public let status: AgentStatus
         public let totalSessions: Int
@@ -557,7 +801,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         }
     }
 
-    /// Computes the aggregated status summary for this project using canonical lifecycle priority (M3.5).
+    /// Computes the aggregated status summary for this project using canonical lifecycle priority (M3.5 / M3.6).
     public func statusSummary(sessions: [AgentSessionInfo], openTabs: [ChatGPTTabInfo] = []) -> StatusSummary {
         var blocked = 0
         var working = 0
@@ -577,8 +821,20 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
             }
         }
 
-        let liveRev = liveReviewerStatus(openTabs: openTabs)
-        let isRevOpen = liveRev?.isCurrentlyObservable == true
+        var isRevOpen = false
+        var revTitle: String? = nil
+
+        for ws in workstreams {
+            if let liveRev = ws.liveReviewerStatus(openTabs: openTabs) {
+                if liveRev.isCurrentlyObservable {
+                    isRevOpen = true
+                    revTitle = liveRev.liveTitle
+                    break
+                } else if revTitle == nil {
+                    revTitle = liveRev.liveTitle
+                }
+            }
+        }
 
         let aggregate: AgentStatus
         if blocked > 0 {
@@ -587,8 +843,6 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
             aggregate = .working
         } else if done > 0 {
             aggregate = .done
-        } else if !sessions.isEmpty {
-            aggregate = .idle
         } else {
             aggregate = .idle
         }
@@ -601,7 +855,7 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
             doneCount: done,
             idleCount: idle,
             isReviewerOpen: isRevOpen,
-            reviewerTitle: liveRev?.liveTitle
+            reviewerTitle: revTitle
         )
     }
 
@@ -633,9 +887,9 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// Versioned schema container for durable project storage in `projects.json`.
+/// Versioned schema container for durable project storage in `projects.json` (M3.6 Version 2).
 public struct ProjectRegistryData: Codable, Sendable, Equatable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var projects: [Project]

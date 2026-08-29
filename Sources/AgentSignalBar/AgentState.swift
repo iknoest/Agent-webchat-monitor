@@ -361,7 +361,7 @@ public struct AgentSessionInfo: Codable, Sendable {
         self.cwd = cwd
     }
 
-    /// Dynamically resolves the registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3).
+    /// Dynamically resolves the registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3 / M3.6).
     ///
     /// Evaluated using `ProjectRegistry.matchProject(forPath:)` longest-parent matching.
     /// Returns `nil` (Unassigned) if the session has no reliable CWD or is outside all registered roots.
@@ -372,7 +372,7 @@ public struct AgentSessionInfo: Codable, Sendable {
         return registry.matchProject(forPath: rawCwd)
     }
 
-    /// Derived registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3).
+    /// Derived registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3 / M3.6).
     public var associatedProject: Project? {
         return resolveProject(using: .shared)
     }
@@ -385,6 +385,27 @@ public struct AgentSessionInfo: Codable, Sendable {
     /// Unique ID of the associated project, or nil if unassigned.
     public var associatedProjectId: String? {
         return associatedProject?.id
+    }
+
+    /// Dynamically resolves the scoped Workstream if this session's workspace is unambiguously bound to exactly one Workstream (M3.6).
+    /// If ambiguous or no workspace bound, returns nil (Unassigned).
+    public func resolveWorkstream(using registry: ProjectRegistry = .shared) -> ProjectWorkstream? {
+        guard let rawCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !rawCwd.isEmpty else {
+            return nil
+        }
+        guard let (project, workspace) = registry.matchWorkspace(forPath: rawCwd) else {
+            return nil
+        }
+        let matchingWorkstreams = project.workstreams.filter { $0.workspaceIds.contains(workspace.id) }
+        if matchingWorkstreams.count == 1 {
+            return matchingWorkstreams.first
+        }
+        return nil
+    }
+
+    /// Derived scoped Workstream if unambiguously determined by workspace mapping (M3.6).
+    public var associatedWorkstream: ProjectWorkstream? {
+        return resolveWorkstream(using: .shared)
     }
 }
 

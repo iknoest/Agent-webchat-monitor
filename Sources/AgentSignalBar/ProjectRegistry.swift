@@ -1,18 +1,30 @@
 import Foundation
 
-/// Errors produced during Project Registry and Reviewer operations.
+/// Errors produced during Project Registry, Workspace, Workstream, and Reviewer operations.
 public enum ProjectRegistryError: Error, LocalizedError, Equatable {
     case emptyPath
+    case emptyName
     case projectNotFound(String)
+    case workspaceNotFound(String)
+    case workstreamNotFound(String)
+    case workspaceAlreadyAssigned(path: String, existingProjectId: String, existingProjectName: String)
     case invalidConversationUrl(String)
     case reviewerAlreadyAssigned(conversationId: String, existingProjectId: String, existingProjectName: String)
 
     public var errorDescription: String? {
         switch self {
         case .emptyPath:
-            return "Project root path cannot be empty."
+            return "Project or workspace root path cannot be empty."
+        case .emptyName:
+            return "Project or workstream name cannot be empty."
         case .projectNotFound(let id):
             return "Project with ID '\(id)' not found."
+        case .workspaceNotFound(let id):
+            return "Workspace with ID '\(id)' not found."
+        case .workstreamNotFound(let id):
+            return "Workstream with ID '\(id)' not found."
+        case .workspaceAlreadyAssigned(let path, _, let name):
+            return "Workspace path '\(path)' is already assigned to Project '\(name)'."
         case .invalidConversationUrl(let url):
             return "Cannot extract a valid ChatGPT conversation ID from URL: '\(url)'."
         case .reviewerAlreadyAssigned(let convId, _, let name):
@@ -21,13 +33,13 @@ public enum ProjectRegistryError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Durable local Project Registry for managing canonical local project roots.
+/// Durable local Project Registry for managing Projects, Workspaces, and Workstreams (M3.1 / M3.6).
 public final class ProjectRegistry: @unchecked Sendable {
     public static let shared = ProjectRegistry()
 
     private let lock = NSLock()
     private var projectsById: [String: Project] = [:]
-    private var projectsByCanonicalPath: [String: String] = [:] // canonical rootPath -> project.id
+    private var workspacesByCanonicalPath: [String: (projectId: String, workspaceId: String)] = [:] // canonical path -> (projectId, workspaceId)
     private let storageURL: URL
 
     /// Returns the active storage URL used by this registry instance.
@@ -52,9 +64,9 @@ public final class ProjectRegistry: @unchecked Sendable {
         self.load()
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence & Migration
 
-    /// Loads project configurations from disk safely.
+    /// Loads project configurations from disk safely, supporting Version 1 -> Version 2 migration.
     public func load() {
         lock.lock()
         defer { lock.unlock() }
@@ -64,7 +76,7 @@ public final class ProjectRegistry: @unchecked Sendable {
 
         if !fm.fileExists(atPath: path) {
             projectsById = [:]
-            projectsByCanonicalPath = [:]
+            workspacesByCanonicalPath = [:]
             return
         }
 
@@ -75,25 +87,42 @@ public final class ProjectRegistry: @unchecked Sendable {
             let registryData = try decoder.decode(ProjectRegistryData.self, from: data)
 
             var byId: [String: Project] = [:]
-            var byPath: [String: String] = [:]
+            var byWsPath: [String: (projectId: String, workspaceId: String)] = [:]
 
             for project in registryData.projects {
-                let canonical = Project.canonicalizePath(project.rootPath)
+                var normalizedWorkspaces: [ProjectWorkspace] = []
+                for ws in project.workspaces {
+                    let canonical = Project.canonicalizePath(ws.path)
+                    let normWs = ProjectWorkspace(
+                        id: ws.id,
+                        path: canonical,
+                        name: ws.name,
+                        isPrimary: ws.isPrimary,
+                        createdAt: ws.createdAt
+                    )
+                    normalizedWorkspaces.append(normWs)
+                    byWsPath[canonical] = (projectId: project.id, workspaceId: normWs.id)
+                }
+
+                // If no workspace is primary, designate the first one as primary
+                if !normalizedWorkspaces.isEmpty && !normalizedWorkspaces.contains(where: { $0.isPrimary }) {
+                    normalizedWorkspaces[0].isPrimary = true
+                }
+
                 let normalizedProject = Project(
                     id: project.id,
                     name: project.name,
-                    rootPath: canonical,
+                    workspaces: normalizedWorkspaces,
+                    workstreams: project.workstreams,
+                    gitRepository: project.gitRepository,
                     createdAt: project.createdAt,
-                    updatedAt: project.updatedAt,
-                    currentReviewer: project.currentReviewer,
-                    reviewerHistory: project.reviewerHistory
+                    updatedAt: project.updatedAt
                 )
                 byId[normalizedProject.id] = normalizedProject
-                byPath[canonical] = normalizedProject.id
             }
 
             self.projectsById = byId
-            self.projectsByCanonicalPath = byPath
+            self.workspacesByCanonicalPath = byWsPath
         } catch {
             print("⚠️ [ProjectRegistry] Failed to parse projects config from \(path): \(error.localizedDescription)")
             // Backup corrupted file to preserve recoverable data
@@ -102,7 +131,7 @@ public final class ProjectRegistry: @unchecked Sendable {
             print("🔒 [ProjectRegistry] Preserved corrupted file backup at \(backupPath)")
             // Safe fallback without crashing
             self.projectsById = [:]
-            self.projectsByCanonicalPath = [:]
+            self.workspacesByCanonicalPath = [:]
         }
     }
 
@@ -129,11 +158,71 @@ public final class ProjectRegistry: @unchecked Sendable {
         try data.write(to: storageURL, options: [.atomic])
     }
 
-    // MARK: - Registration & Management
+    // MARK: - Project Creation & Registration
 
-    /// Registers a local project root folder.
+    /// Creates a new Project explicitly (M3.6 Self-Service Project Formation).
+    @discardableResult
+    public func createProject(
+        name: String,
+        initialWorkspacePath: String? = nil,
+        initialWorkstreamName: String? = nil
+    ) throws -> Project {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else {
+            throw ProjectRegistryError.emptyName
+        }
+
+        lock.lock()
+        let newProjectId = UUID().uuidString
+        var workspaces: [ProjectWorkspace] = []
+        var workstreams: [ProjectWorkstream] = []
+
+        if let wsPath = initialWorkspacePath?.trimmingCharacters(in: .whitespacesAndNewlines), !wsPath.isEmpty {
+            let canonicalPath = Project.canonicalizePath(wsPath)
+            if let (existingPid, _) = workspacesByCanonicalPath[canonicalPath], let existingProj = projectsById[existingPid] {
+                lock.unlock()
+                throw ProjectRegistryError.workspaceAlreadyAssigned(
+                    path: canonicalPath,
+                    existingProjectId: existingPid,
+                    existingProjectName: existingProj.name
+                )
+            }
+            let ws = ProjectWorkspace(path: canonicalPath, name: nil, isPrimary: true)
+            workspaces.append(ws)
+            workspacesByCanonicalPath[canonicalPath] = (projectId: newProjectId, workspaceId: ws.id)
+        }
+
+        let streamName = initialWorkstreamName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Main"
+        let primaryId = workspaces.first?.id
+        let defaultStream = ProjectWorkstream(
+            id: UUID().uuidString,
+            name: streamName.isEmpty ? "Main" : streamName,
+            currentReviewer: nil,
+            reviewerHistory: [],
+            workspaceIds: primaryId != nil ? [primaryId!] : []
+        )
+        workstreams.append(defaultStream)
+
+        let newProject = Project(
+            id: newProjectId,
+            name: cleanName,
+            workspaces: workspaces,
+            workstreams: workstreams,
+            gitRepository: workspaces.first.flatMap { ProjectGitDetector.detect(at: $0.path) },
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+
+        projectsById[newProject.id] = newProject
+        lock.unlock()
+
+        try save()
+        return newProject
+    }
+
+    /// Registers a local project root folder (M3.1-M3.5 compatibility).
     ///
-    /// If the canonical root path is already registered, returns the existing project
+    /// If the canonical root path is already registered as a workspace, returns the existing project
     /// (updating the display name if an explicit new name is provided).
     @discardableResult
     public func registerProject(rootPath: String, name: String? = nil) throws -> Project {
@@ -143,7 +232,7 @@ public final class ProjectRegistry: @unchecked Sendable {
         }
 
         lock.lock()
-        if let existingId = projectsByCanonicalPath[canonicalPath], var existingProject = projectsById[existingId] {
+        if let (existingId, _) = workspacesByCanonicalPath[canonicalPath], var existingProject = projectsById[existingId] {
             if let newName = name?.trimmingCharacters(in: .whitespacesAndNewlines), !newName.isEmpty, newName != existingProject.name {
                 existingProject.name = newName
                 existingProject.updatedAt = Date()
@@ -156,23 +245,65 @@ public final class ProjectRegistry: @unchecked Sendable {
             return existingProject
         }
 
-        let newProject = Project(
+        let newProjectId = UUID().uuidString
+        let primaryWs = ProjectWorkspace(path: canonicalPath, name: nil, isPrimary: true)
+        let defaultWs = ProjectWorkstream(
             id: UUID().uuidString,
-            name: name,
-            rootPath: canonicalPath,
+            name: "Main",
+            currentReviewer: nil,
+            reviewerHistory: [],
+            workspaceIds: [primaryWs.id]
+        )
+
+        let cleanName: String
+        if let explicitName = name?.trimmingCharacters(in: .whitespacesAndNewlines), !explicitName.isEmpty {
+            cleanName = explicitName
+        } else {
+            let lastComponent = (canonicalPath as NSString).lastPathComponent
+            cleanName = lastComponent.isEmpty ? "Root" : lastComponent
+        }
+
+        let newProject = Project(
+            id: newProjectId,
+            name: cleanName,
+            workspaces: [primaryWs],
+            workstreams: [defaultWs],
+            gitRepository: ProjectGitDetector.detect(at: canonicalPath),
             createdAt: Date(),
             updatedAt: Date()
         )
 
         projectsById[newProject.id] = newProject
-        projectsByCanonicalPath[canonicalPath] = newProject.id
+        workspacesByCanonicalPath[canonicalPath] = (projectId: newProjectId, workspaceId: primaryWs.id)
         lock.unlock()
 
         try save()
         return newProject
     }
 
-    /// Removes a project by its unique ID.
+    /// Renames an existing Project.
+    @discardableResult
+    public func renameProject(id: String, newName: String) throws -> Project {
+        let cleanName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else {
+            throw ProjectRegistryError.emptyName
+        }
+
+        lock.lock()
+        guard var project = projectsById[id] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(id)
+        }
+        project.name = cleanName
+        project.updatedAt = Date()
+        projectsById[id] = project
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    /// Removes a project by its unique ID, clearing all its workspace ownerships.
     @discardableResult
     public func removeProject(id: String) throws -> Bool {
         lock.lock()
@@ -180,42 +311,352 @@ public final class ProjectRegistry: @unchecked Sendable {
             lock.unlock()
             return false
         }
-        projectsByCanonicalPath.removeValue(forKey: project.rootPath)
+        for ws in project.workspaces {
+            workspacesByCanonicalPath.removeValue(forKey: ws.path)
+        }
         lock.unlock()
 
         try save()
         return true
     }
 
-    /// Removes a project by its root path.
+    /// Alias for removeProject(id:).
+    @discardableResult
+    public func deleteProject(id: String) throws -> Bool {
+        return try removeProject(id: id)
+    }
+
+    /// Removes a project by any of its workspace paths.
     @discardableResult
     public func removeProject(byRootPath rootPath: String) throws -> Bool {
         let canonicalPath = Project.canonicalizePath(rootPath)
         lock.lock()
-        guard let id = projectsByCanonicalPath[canonicalPath] else {
+        guard let (projectId, _) = workspacesByCanonicalPath[canonicalPath] else {
             lock.unlock()
             return false
         }
-        projectsById.removeValue(forKey: id)
-        projectsByCanonicalPath.removeValue(forKey: canonicalPath)
+        lock.unlock()
+        return try removeProject(id: projectId)
+    }
+
+    // MARK: - Multi-Workspace Management (M3.6)
+
+    /// Adds a local workspace folder to an existing Project.
+    @discardableResult
+    public func addWorkspace(
+        toProjectId projectId: String,
+        path: String,
+        name: String? = nil,
+        isPrimary: Bool = false
+    ) throws -> ProjectWorkspace {
+        let canonicalPath = Project.canonicalizePath(path)
+        guard !canonicalPath.isEmpty else {
+            throw ProjectRegistryError.emptyPath
+        }
+
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        // Workspace uniqueness invariant: belongs to at most ONE project
+        if let (existingPid, existingWsId) = workspacesByCanonicalPath[canonicalPath] {
+            if existingPid == projectId {
+                // Already in this project: return existing
+                if let existingWs = project.workspaces.first(where: { $0.id == existingWsId }) {
+                    lock.unlock()
+                    return existingWs
+                }
+            } else {
+                let existingName = projectsById[existingPid]?.name ?? "Another Project"
+                lock.unlock()
+                throw ProjectRegistryError.workspaceAlreadyAssigned(
+                    path: canonicalPath,
+                    existingProjectId: existingPid,
+                    existingProjectName: existingName
+                )
+            }
+        }
+
+        let makePrimary = isPrimary || project.workspaces.isEmpty
+        if makePrimary {
+            for i in 0..<project.workspaces.count {
+                project.workspaces[i].isPrimary = false
+            }
+        }
+
+        let newWs = ProjectWorkspace(
+            id: UUID().uuidString,
+            path: canonicalPath,
+            name: name,
+            isPrimary: makePrimary
+        )
+
+        project.workspaces.append(newWs)
+        project.updatedAt = Date()
+        if project.gitRepository == nil {
+            project.gitRepository = ProjectGitDetector.detect(at: canonicalPath)
+        }
+
+        projectsById[projectId] = project
+        workspacesByCanonicalPath[canonicalPath] = (projectId: projectId, workspaceId: newWs.id)
         lock.unlock()
 
         try save()
-        return true
+        return newWs
     }
 
-    // MARK: - Reviewer Management (M3.2)
+    /// Removes a workspace from a Project.
+    @discardableResult
+    public func removeWorkspace(workspaceId: String, fromProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
 
-    /// Explicitly assigns a ChatGPT conversation as the current reviewer for a Project.
-    ///
-    /// - Parameters:
-    ///   - projectId: Target Project ID.
-    ///   - url: Full ChatGPT conversation URL (e.g. `https://chatgpt.com/c/12345`).
-    ///   - title: Optional last-known conversation title.
-    /// - Returns: The updated Project with currentReviewer and updated reviewerHistory.
+        guard let wsIndex = project.workspaces.firstIndex(where: { $0.id == workspaceId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workspaceNotFound(workspaceId)
+        }
+
+        let removedWs = project.workspaces.remove(at: wsIndex)
+        workspacesByCanonicalPath.removeValue(forKey: removedWs.path)
+
+        // If removed workspace was primary and workspaces remain, designate the first remaining as primary
+        if removedWs.isPrimary && !project.workspaces.isEmpty {
+            project.workspaces[0].isPrimary = true
+        }
+
+        // Clean up workstream workspace scoping
+        for i in 0..<project.workstreams.count {
+            project.workstreams[i].workspaceIds.removeAll(where: { $0 == workspaceId })
+        }
+
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    /// Designates a workspace as the primary workspace for a Project.
+    @discardableResult
+    public func setPrimaryWorkspace(workspaceId: String, inProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        guard project.workspaces.contains(where: { $0.id == workspaceId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workspaceNotFound(workspaceId)
+        }
+
+        for i in 0..<project.workspaces.count {
+            project.workspaces[i].isPrimary = (project.workspaces[i].id == workspaceId)
+        }
+
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    // MARK: - Workstream Management (M3.6)
+
+    /// Adds a workstream to an existing Project.
+    @discardableResult
+    public func addWorkstream(
+        toProjectId projectId: String,
+        name: String,
+        workspaceIds: [String] = []
+    ) throws -> ProjectWorkstream {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else {
+            throw ProjectRegistryError.emptyName
+        }
+
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        let newStream = ProjectWorkstream(
+            id: UUID().uuidString,
+            name: cleanName,
+            currentReviewer: nil,
+            reviewerHistory: [],
+            workspaceIds: workspaceIds
+        )
+
+        project.workstreams.append(newStream)
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return newStream
+    }
+
+    /// Renames a workstream.
+    @discardableResult
+    public func renameWorkstream(
+        workstreamId: String,
+        inProjectId projectId: String,
+        newName: String
+    ) throws -> ProjectWorkstream {
+        let cleanName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else {
+            throw ProjectRegistryError.emptyName
+        }
+
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        guard let streamIndex = project.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        project.workstreams[streamIndex].name = cleanName
+        project.workstreams[streamIndex].updatedAt = Date()
+        project.updatedAt = Date()
+        let updatedStream = project.workstreams[streamIndex]
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return updatedStream
+    }
+
+    /// Removes a workstream from a Project.
+    @discardableResult
+    public func removeWorkstream(workstreamId: String, fromProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+
+        guard let streamIndex = project.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        project.workstreams.remove(at: streamIndex)
+        project.updatedAt = Date()
+        projectsById[projectId] = project
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    /// Assigns a workspace to a workstream's scope.
+    @discardableResult
+    public func assignWorkspace(
+        workspaceId: String,
+        toWorkstreamId workstreamId: String,
+        inProjectId projectId: String
+    ) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        guard project.workspaces.contains(where: { $0.id == workspaceId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workspaceNotFound(workspaceId)
+        }
+        guard let streamIdx = project.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        if !project.workstreams[streamIdx].workspaceIds.contains(workspaceId) {
+            project.workstreams[streamIdx].workspaceIds.append(workspaceId)
+            project.workstreams[streamIdx].updatedAt = Date()
+            project.updatedAt = Date()
+            projectsById[projectId] = project
+        }
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    /// Removes a workspace from a workstream's scope.
+    @discardableResult
+    public func unassignWorkspace(
+        workspaceId: String,
+        fromWorkstreamId workstreamId: String,
+        inProjectId projectId: String
+    ) throws -> Project {
+        lock.lock()
+        guard var project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        guard let streamIdx = project.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        if let idx = project.workstreams[streamIdx].workspaceIds.firstIndex(of: workspaceId) {
+            project.workstreams[streamIdx].workspaceIds.remove(at: idx)
+            project.workstreams[streamIdx].updatedAt = Date()
+            project.updatedAt = Date()
+            projectsById[projectId] = project
+        }
+        lock.unlock()
+
+        try save()
+        return project
+    }
+
+    /// Toggles a workspace in a workstream's scope.
+    @discardableResult
+    public func toggleWorkstreamWorkspace(
+        workspaceId: String,
+        workstreamId: String,
+        inProjectId projectId: String
+    ) throws -> Project {
+        lock.lock()
+        guard let project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        guard let stream = project.workstreams.first(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+        let isAssigned = stream.workspaceIds.contains(workspaceId)
+        lock.unlock()
+
+        if isAssigned {
+            return try unassignWorkspace(workspaceId: workspaceId, fromWorkstreamId: workstreamId, inProjectId: projectId)
+        } else {
+            return try assignWorkspace(workspaceId: workspaceId, toWorkstreamId: workstreamId, inProjectId: projectId)
+        }
+    }
+
+    // MARK: - Workstream Reviewer Management (M3.6)
+
+    /// Assigns a ChatGPT conversation as current reviewer for a specific Workstream.
     @discardableResult
     public func assignReviewer(
-        toProjectId projectId: String,
+        toWorkstreamId workstreamId: String,
+        inProjectId projectId: String,
         url: String,
         title: String? = nil
     ) throws -> Project {
@@ -229,28 +670,41 @@ public final class ProjectRegistry: @unchecked Sendable {
             throw ProjectRegistryError.projectNotFound(projectId)
         }
 
-        // Cardinality check: Is this conversationId already currentReviewer for ANOTHER project?
-        for (otherId, otherProject) in projectsById where otherId != projectId {
-            if let existingRev = otherProject.currentReviewer, existingRev.conversationId == parsed.conversationId {
-                lock.unlock()
-                throw ProjectRegistryError.reviewerAlreadyAssigned(
-                    conversationId: parsed.conversationId,
-                    existingProjectId: otherId,
-                    existingProjectName: otherProject.name
-                )
+        guard let targetIndex = targetProject.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        // Global Cardinality Invariant: Is this conversationId already currentReviewer in ANY workstream in ANY project?
+        for (otherPid, otherProject) in projectsById {
+            for otherWs in otherProject.workstreams {
+                if otherPid == projectId && otherWs.id == workstreamId { continue }
+                if let existingRev = otherWs.currentReviewer, existingRev.conversationId == parsed.conversationId {
+                    let existingScopeName = (otherProject.workstreams.count <= 1 || otherWs.name == "Main" || otherWs.name == "Default") ? otherProject.name : "\(otherProject.name) / \(otherWs.name)"
+                    lock.unlock()
+                    throw ProjectRegistryError.reviewerAlreadyAssigned(
+                        conversationId: parsed.conversationId,
+                        existingProjectId: otherPid,
+                        existingProjectName: existingScopeName
+                    )
+                }
             }
         }
 
-        // If the same conversation is already assigned to THIS project, update title/url if changed
-        if let current = targetProject.currentReviewer, current.conversationId == parsed.conversationId {
-            targetProject.currentReviewer?.url = parsed.canonicalUrl
+        var workstream = targetProject.workstreams[targetIndex]
+
+        // If same conversation is already assigned to THIS workstream, update title/url
+        if let current = workstream.currentReviewer, current.conversationId == parsed.conversationId {
+            workstream.currentReviewer?.url = parsed.canonicalUrl
             if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
-                targetProject.currentReviewer?.title = t
+                workstream.currentReviewer?.title = t
             }
             if let gId = parsed.chatgptProjectId {
-                targetProject.currentReviewer?.chatgptProjectId = gId
+                workstream.currentReviewer?.chatgptProjectId = gId
             }
-            targetProject.currentReviewer?.lastObservedAt = Date()
+            workstream.currentReviewer?.lastObservedAt = Date()
+            workstream.updatedAt = Date()
+            targetProject.workstreams[targetIndex] = workstream
             targetProject.updatedAt = Date()
             projectsById[projectId] = targetProject
             lock.unlock()
@@ -258,8 +712,8 @@ public final class ProjectRegistry: @unchecked Sendable {
             return targetProject
         }
 
-        // Migration/Replacement: If targetProject already has a current reviewer, archive to history
-        if let oldReviewer = targetProject.currentReviewer {
+        // Migration/Replacement: Archive previous reviewer to workstream history
+        if let oldReviewer = workstream.currentReviewer {
             let historyRecord = ReviewerHistoryRecord(
                 conversationId: oldReviewer.conversationId,
                 url: oldReviewer.url,
@@ -268,7 +722,7 @@ public final class ProjectRegistry: @unchecked Sendable {
                 assignedAt: oldReviewer.assignedAt,
                 replacedAt: Date()
             )
-            targetProject.reviewerHistory.append(historyRecord)
+            workstream.reviewerHistory.append(historyRecord)
         }
 
         let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -281,7 +735,9 @@ public final class ProjectRegistry: @unchecked Sendable {
             lastObservedAt: Date()
         )
 
-        targetProject.currentReviewer = newReviewer
+        workstream.currentReviewer = newReviewer
+        workstream.updatedAt = Date()
+        targetProject.workstreams[targetIndex] = workstream
         targetProject.updatedAt = Date()
         projectsById[projectId] = targetProject
         lock.unlock()
@@ -290,16 +746,25 @@ public final class ProjectRegistry: @unchecked Sendable {
         return targetProject
     }
 
-    /// Removes current reviewer from a Project, archiving it to reviewerHistory.
+    /// Removes current reviewer from a specific Workstream, archiving it to reviewerHistory.
     @discardableResult
-    public func removeReviewer(fromProjectId projectId: String) throws -> Project {
+    public func removeReviewer(
+        fromWorkstreamId workstreamId: String,
+        inProjectId projectId: String
+    ) throws -> Project {
         lock.lock()
         guard var targetProject = projectsById[projectId] else {
             lock.unlock()
             throw ProjectRegistryError.projectNotFound(projectId)
         }
 
-        if let oldReviewer = targetProject.currentReviewer {
+        guard let targetIndex = targetProject.workstreams.firstIndex(where: { $0.id == workstreamId }) else {
+            lock.unlock()
+            throw ProjectRegistryError.workstreamNotFound(workstreamId)
+        }
+
+        var workstream = targetProject.workstreams[targetIndex]
+        if let oldReviewer = workstream.currentReviewer {
             let historyRecord = ReviewerHistoryRecord(
                 conversationId: oldReviewer.conversationId,
                 url: oldReviewer.url,
@@ -308,8 +773,10 @@ public final class ProjectRegistry: @unchecked Sendable {
                 assignedAt: oldReviewer.assignedAt,
                 replacedAt: Date()
             )
-            targetProject.reviewerHistory.append(historyRecord)
-            targetProject.currentReviewer = nil
+            workstream.reviewerHistory.append(historyRecord)
+            workstream.currentReviewer = nil
+            workstream.updatedAt = Date()
+            targetProject.workstreams[targetIndex] = workstream
             targetProject.updatedAt = Date()
             projectsById[projectId] = targetProject
             lock.unlock()
@@ -321,19 +788,66 @@ public final class ProjectRegistry: @unchecked Sendable {
         return targetProject
     }
 
-    /// Finds which project (if any) currently has the specified conversation ID as reviewer.
-    public func findProject(byReviewerConversationId conversationId: String) -> Project? {
+    // MARK: - Reviewer Management (M3.2 / Simple Project Compatibility)
+
+    /// Assigns a ChatGPT conversation to the primary / first workstream of a Project.
+    @discardableResult
+    public func assignReviewer(
+        toProjectId projectId: String,
+        url: String,
+        title: String? = nil
+    ) throws -> Project {
+        lock.lock()
+        guard let project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        let targetWorkstreamId: String
+        if let firstStream = project.workstreams.first {
+            targetWorkstreamId = firstStream.id
+            lock.unlock()
+        } else {
+            lock.unlock()
+            let newStream = try addWorkstream(toProjectId: projectId, name: "Main")
+            targetWorkstreamId = newStream.id
+        }
+        return try assignReviewer(toWorkstreamId: targetWorkstreamId, inProjectId: projectId, url: url, title: title)
+    }
+
+    /// Removes current reviewer from the primary / first workstream of a Project.
+    @discardableResult
+    public func removeReviewer(fromProjectId projectId: String) throws -> Project {
+        lock.lock()
+        guard let project = projectsById[projectId] else {
+            lock.unlock()
+            throw ProjectRegistryError.projectNotFound(projectId)
+        }
+        guard let firstStream = project.workstreams.first(where: { $0.currentReviewer != nil }) ?? project.workstreams.first else {
+            lock.unlock()
+            return project
+        }
+        let targetWorkstreamId = firstStream.id
+        lock.unlock()
+        return try removeReviewer(fromWorkstreamId: targetWorkstreamId, inProjectId: projectId)
+    }
+
+    /// Finds which project and workstream currently has the specified conversation ID as reviewer.
+    public func findProject(byReviewerConversationId conversationId: String) -> (project: Project, workstream: ProjectWorkstream)? {
         lock.lock()
         defer { lock.unlock() }
         for project in projectsById.values {
-            if let rev = project.currentReviewer, rev.conversationId == conversationId {
-                return project
+            for ws in project.workstreams {
+                if let rev = ws.currentReviewer, rev.conversationId == conversationId {
+                    return (project, ws)
+                }
             }
         }
         return nil
     }
 
-    /// Refreshes the local Git repository metadata for a project from disk (M3.4).
+    // MARK: - Git Repository Association (M3.4)
+
+    /// Refreshes local Git repository metadata for a project across its workspaces.
     @discardableResult
     public func refreshGitRepository(forProjectId projectId: String) throws -> Project {
         lock.lock()
@@ -342,12 +856,11 @@ public final class ProjectRegistry: @unchecked Sendable {
             throw ProjectRegistryError.projectNotFound(projectId)
         }
 
-        let detected = ProjectGitDetector.detect(at: project.rootPath)
+        let detected = project.liveGitRepository
         if project.gitRepository != detected {
             project.gitRepository = detected
             project.updatedAt = Date()
             projectsById[projectId] = project
-            projectsByCanonicalPath[project.rootPath] = project.id
             lock.unlock()
             try save()
             return project
@@ -366,12 +879,12 @@ public final class ProjectRegistry: @unchecked Sendable {
         return projectsById[id]
     }
 
-    /// Looks up a registered project by its exact canonical root path.
+    /// Looks up a registered project by exact canonical workspace path.
     public func getProject(byRootPath rootPath: String) -> Project? {
         let canonicalPath = Project.canonicalizePath(rootPath)
         lock.lock()
         defer { lock.unlock() }
-        guard let id = projectsByCanonicalPath[canonicalPath] else { return nil }
+        guard let (id, _) = workspacesByCanonicalPath[canonicalPath] else { return nil }
         return projectsById[id]
     }
 
@@ -389,15 +902,15 @@ public final class ProjectRegistry: @unchecked Sendable {
         return projectsById.count
     }
 
-    // MARK: - Path Matching Primitives
+    // MARK: - Path Matching Primitives (M3.3 / M3.6)
 
-    /// Deterministically resolves which registered project root contains the given path.
+    /// Deterministically resolves which registered workspace contains the given path.
     ///
-    /// If nested projects are registered (e.g. `/a/b` and `/a/b/c/d`), the longest
-    /// matching registered parent path wins.
+    /// If nested workspaces are registered (e.g. `/a/b` and `/a/b/c/d`), the longest
+    /// matching registered parent workspace path wins.
     ///
     /// Boundary check guarantees `/a/b-extra` is NOT matched by `/a/b`.
-    public func matchProject(forPath filePath: String) -> Project? {
+    public func matchWorkspace(forPath filePath: String) -> (project: Project, workspace: ProjectWorkspace)? {
         let canonicalPath = Project.canonicalizePath(filePath)
         guard !canonicalPath.isEmpty else { return nil }
 
@@ -405,23 +918,30 @@ public final class ProjectRegistry: @unchecked Sendable {
         let candidateProjects = Array(projectsById.values)
         lock.unlock()
 
-        var bestMatch: Project? = nil
+        var bestMatch: (project: Project, workspace: ProjectWorkspace)? = nil
         var bestMatchLength = -1
 
         for project in candidateProjects {
-            let root = project.rootPath
-            let isExactMatch = (canonicalPath == root)
-            let isSubpathMatch = canonicalPath.hasPrefix(root == "/" ? "/" : root + "/")
+            for workspace in project.workspaces {
+                let wsPath = workspace.path
+                let isExactMatch = (canonicalPath == wsPath)
+                let isSubpathMatch = canonicalPath.hasPrefix(wsPath == "/" ? "/" : wsPath + "/")
 
-            if isExactMatch || isSubpathMatch {
-                if root.count > bestMatchLength {
-                    bestMatch = project
-                    bestMatchLength = root.count
+                if isExactMatch || isSubpathMatch {
+                    if wsPath.count > bestMatchLength {
+                        bestMatch = (project, workspace)
+                        bestMatchLength = wsPath.count
+                    }
                 }
             }
         }
 
         return bestMatch
+    }
+
+    /// Deterministically resolves which registered Project contains the given path.
+    public func matchProject(forPath filePath: String) -> Project? {
+        return matchWorkspace(forPath: filePath)?.project
     }
 
     // MARK: - Test Utilities
@@ -430,7 +950,7 @@ public final class ProjectRegistry: @unchecked Sendable {
     public func resetForTesting() {
         lock.lock()
         projectsById = [:]
-        projectsByCanonicalPath = [:]
+        workspacesByCanonicalPath = [:]
         lock.unlock()
         if TestEnvironment.isTestRuntime || storageURL.path.contains("AgentSignalBarTest_") {
             try? FileManager.default.removeItem(at: storageURL)
