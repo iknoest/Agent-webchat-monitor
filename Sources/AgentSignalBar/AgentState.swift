@@ -313,6 +313,7 @@ public struct AgentSessionInfo: Codable, Sendable {
     public var pendingToolName: String?
     public var pendingToolTime: Date?
     public var cwd: String?
+    public var workspacePaths: [String]?
 
     public var isAcknowledged: Bool {
         guard let ackId = acknowledgedTurnId, let tId = turnId, !ackId.isEmpty, !tId.isEmpty else {
@@ -339,7 +340,8 @@ public struct AgentSessionInfo: Codable, Sendable {
         sensorReason: String? = nil,
         pendingToolName: String? = nil,
         pendingToolTime: Date? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        workspacePaths: [String]? = nil
     ) {
         self.provider = provider
         self.sessionId = sessionId
@@ -359,13 +361,33 @@ public struct AgentSessionInfo: Codable, Sendable {
         self.pendingToolName = pendingToolName
         self.pendingToolTime = pendingToolTime
         self.cwd = cwd
+        self.workspacePaths = workspacePaths
     }
 
-    /// Dynamically resolves the registered AgentBridge Project matching this session's reliable CWD/workspace (M3.3 / M3.6).
+    /// Dynamically resolves the registered AgentBridge Project matching this session's authoritative workspace(s) (M3.3 / M3.6 / M3.7).
     ///
-    /// Evaluated using `ProjectRegistry.matchProject(forPath:)` longest-parent matching.
+    /// If multiple workspacePaths exist:
+    /// - if all resolvable paths belong to exactly ONE Project -> resolves to that Project.
+    /// - if they span multiple Projects or none resolve -> returns nil (Unknown / Unassigned).
+    ///
     /// Returns `nil` (Unassigned) if the session has no reliable CWD or is outside all registered roots.
     public func resolveProject(using registry: ProjectRegistry = .shared) -> Project? {
+        if let paths = workspacePaths, !paths.isEmpty {
+            var matchedProjects: Set<String> = []
+            var projectMap: [String: Project] = [:]
+            for p in paths {
+                let clean = p.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty else { continue }
+                if let proj = registry.matchProject(forPath: clean) {
+                    matchedProjects.insert(proj.id)
+                    projectMap[proj.id] = proj
+                }
+            }
+            if matchedProjects.count == 1, let singleId = matchedProjects.first {
+                return projectMap[singleId]
+            }
+            return nil
+        }
         guard let rawCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !rawCwd.isEmpty else {
             return nil
         }
@@ -387,9 +409,31 @@ public struct AgentSessionInfo: Codable, Sendable {
         return associatedProject?.id
     }
 
-    /// Dynamically resolves the scoped Workstream if this session's workspace is unambiguously bound to exactly one Workstream (M3.6).
-    /// If ambiguous or no workspace bound, returns nil (Unassigned).
+    /// Dynamically resolves the scoped Workstream if this session's workspace(s) unambiguously bind to exactly one Workstream (M3.6 / M3.7).
+    /// If multiple workspacePaths resolve to different Workstreams, or no workspace bound, returns nil (Unassigned).
     public func resolveWorkstream(using registry: ProjectRegistry = .shared) -> ProjectWorkstream? {
+        if let paths = workspacePaths, !paths.isEmpty {
+            guard let project = resolveProject(using: registry) else {
+                return nil
+            }
+            var matchingStreamIds: Set<String> = []
+            var streamMap: [String: ProjectWorkstream] = [:]
+            for p in paths {
+                let clean = p.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty else { continue }
+                if let (matchedProj, workspace) = registry.matchWorkspace(forPath: clean), matchedProj.id == project.id {
+                    let streams = project.workstreams.filter { $0.workspaceIds.contains(workspace.id) }
+                    for st in streams {
+                        matchingStreamIds.insert(st.id)
+                        streamMap[st.id] = st
+                    }
+                }
+            }
+            if matchingStreamIds.count == 1, let singleId = matchingStreamIds.first {
+                return streamMap[singleId]
+            }
+            return nil
+        }
         guard let rawCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !rawCwd.isEmpty else {
             return nil
         }
@@ -1050,11 +1094,32 @@ public final class AgentStore: @unchecked Sendable {
         }
     }
 
-    public func pruneStaleClaudeSessions(maxAgeSeconds: TimeInterval = 300) {
+    public func pruneStaleClaudeSessions(
+        maxAgeSeconds: TimeInterval = 300,
+        sessionsDir: String = ("~/.claude/sessions" as NSString).expandingTildeInPath
+    ) {
         lock.lock()
         var currentSessions = trackedSessions[.claude] ?? [:]
         let now = Date()
         var changed = false
+
+        // Discover session IDs that belong to live claude-desktop / local-agent processes
+        var liveDesktopSessionIds: Set<String> = []
+        if FileManager.default.fileExists(atPath: sessionsDir),
+           let files = try? FileManager.default.contentsOfDirectory(atPath: sessionsDir) {
+            for file in files where file.hasSuffix(".json") {
+                let fullPath = "\(sessionsDir)/\(file)"
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: fullPath)),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let pidNum = json["pid"] as? Int,
+                   let sessId = json["sessionId"] as? String {
+                    let entrypoint = (json["entrypoint"] as? String) ?? ""
+                    if (entrypoint == "claude-desktop" || entrypoint.contains("desktop") || entrypoint.contains("local-agent")) && kill(pid_t(pidNum), 0) == 0 {
+                        liveDesktopSessionIds.insert(sessId)
+                    }
+                }
+            }
+        }
 
         for (sessionId, session) in currentSessions {
             // MUST NEVER prune working or blocked sessions due to age!
@@ -1074,6 +1139,11 @@ public final class AgentStore: @unchecked Sendable {
                 ProjectRegistry.shared.recordRecentSession(from: session)
                 currentSessions.removeValue(forKey: sessionId)
                 changed = true
+                continue
+            }
+
+            // If session belongs to an active, alive Claude Desktop process, do NOT prune due to age
+            if liveDesktopSessionIds.contains(sessionId) {
                 continue
             }
 
@@ -1152,7 +1222,6 @@ public final class AgentStore: @unchecked Sendable {
         )
 
         session.title = title
-        session.lastUpdated = now
         if !rawCwd.isEmpty {
             session.cwd = rawCwd
         }
@@ -1179,6 +1248,7 @@ public final class AgentStore: @unchecked Sendable {
                 eventTimestamp = Date(timeIntervalSince1970: tsNum)
             }
         }
+        session.lastUpdated = eventTimestamp ?? now
         var shouldMarkQuotaExhausted = false
 
         switch event {
@@ -1323,9 +1393,19 @@ public final class AgentStore: @unchecked Sendable {
         lastSeenAntigravityHookTime = now
 
         var currentSessions = trackedSessions[.antigravity] ?? [:]
+        var explicitWorkspacePaths: [String] = []
+        if let paths = json["workspace_paths"] as? [String] {
+            explicitWorkspacePaths = paths.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        } else if let paths = json["workspacePaths"] as? [String] {
+            explicitWorkspacePaths = paths.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+
         let rawCwd = json["cwd"] as? String ?? ""
-        let folderName = (rawCwd as NSString).lastPathComponent
-        let title = folderName.isEmpty ? "Antigravity (\(sessionId.prefix(8)))" : "[\(folderName)]"
+        let effectiveCwd: String? = explicitWorkspacePaths.count == 1 ? explicitWorkspacePaths.first : (!rawCwd.isEmpty ? rawCwd : nil)
+        let effectivePaths: [String]? = !explicitWorkspacePaths.isEmpty ? explicitWorkspacePaths : (effectiveCwd != nil ? [effectiveCwd!] : nil)
+
+        let folderName = (effectiveCwd != nil ? (effectiveCwd! as NSString).lastPathComponent : "")
+        let title = !folderName.isEmpty ? "[\(folderName)]" : "Antigravity (\(sessionId.prefix(8)))"
         let error = json["error"] as? String ?? ((json["termination_reason"] as? String == "ERROR" || json["terminationReason"] as? String == "ERROR") ? "Error" : nil)
         let terminationReason = json["termination_reason"] as? String ?? json["terminationReason"] as? String
 
@@ -1348,14 +1428,15 @@ public final class AgentStore: @unchecked Sendable {
             status: .idle,
             turnId: nil,
             sourceEvidence: "Antigravity Hook: Registered",
-            lastUpdated: now
+            lastUpdated: now,
+            cwd: effectiveCwd,
+            workspacePaths: effectivePaths
         )
 
         session.title = title
         session.lastUpdated = now
-        if !rawCwd.isEmpty {
-            session.cwd = rawCwd
-        }
+        session.cwd = effectiveCwd
+        session.workspacePaths = effectivePaths
 
         var eventTimestamp: Date? = nil
         if let tsStr = json["timestamp"] as? String {

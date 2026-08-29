@@ -58,10 +58,12 @@ def main():
         sys.stderr.write(f"Trace write error: {e}\n")
 
     # Forward to AgentSignalBar HTTP Server
+    ws_paths = data.get("workspacePaths") or []
     payload = {
         "event": event_arg,
         "session_id": conversation_id,
-        "cwd": (data.get("workspacePaths") or [os.getcwd()])[0],
+        "cwd": ws_paths[0] if ws_paths else os.getcwd(),
+        "workspace_paths": ws_paths,
         "timestamp": record["timestamp"],
         "tool_name": tool_name,
         "tool_call": tool_call,

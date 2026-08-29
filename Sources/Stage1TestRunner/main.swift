@@ -11156,4 +11156,532 @@ runTest("557. M3.7: C/ambiguous session remains Recent Unassigned rather than gu
     try assert(snap?.workstreamId == nil, "Must remain workstreamId == nil (Unassigned), never guessed to C")
 }
 
-print("🎉 All 557 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model & M3.7 Recent Session Continuity Tests Passed!")
+// 558. M3 Final Acceptance: Antigravity session with reliable cwd resolves Project
+runTest("558. M3 Final Acceptance: Antigravity session with reliable cwd resolves Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_558_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let agySession = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-test-558",
+        title: "[Agent-webchat monitor]",
+        status: .working,
+        cwd: "/Users/ava/Projects/Agent-webchat monitor/Sources"
+    )
+
+    let matchedProj = agySession.resolveProject(using: registry)
+    try assert(matchedProj?.id == p.id, "Antigravity session with reliable CWD MUST resolve to owning Project")
+}
+
+// 559. M3 Final Acceptance: Antigravity inactive session retains Recent under correct Project
+runTest("559. M3 Final Acceptance: Antigravity inactive session retains Recent under correct Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_559_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let agySession = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-test-559",
+        title: "[Agent-webchat monitor]",
+        status: .done,
+        cwd: "/Users/ava/Projects/Agent-webchat monitor"
+    )
+
+    let updatedProj = registry.recordRecentSession(from: agySession)
+    try assert(updatedProj?.id == p.id, "Antigravity snapshot must attach to correct Project")
+    try assert(updatedProj?.recentSessions.first?.provider == .antigravity)
+    try assert(updatedProj?.recentSessions.first?.sessionId == "agy-test-559")
+}
+
+// 560. M3 Final Acceptance: Recent captured with workstreamId=nil later displays Workstream after current workspace scoping becomes unique
+runTest("560. M3 Final Acceptance: Recent captured with workstreamId=nil later displays Workstream after current workspace scoping becomes unique") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_560_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "B Claude")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+
+    // Snapshot captured when Workstream A had no workspaces assigned (workstreamId: nil)
+    let historicalRecent = ProjectRecentSession(
+        provider: .claude,
+        sessionId: "claude-hist-1",
+        title: "[Jobsearcher-codex]",
+        cwd: "/Users/ava/Projects/Jobsearcher-codex",
+        projectId: p.id,
+        workstreamId: nil,
+        lastStatus: .done
+    )
+
+    // Before scoping: returns nil ([Unassigned])
+    try assert(historicalRecent.resolveCurrentWorkstream(using: registry) == nil)
+
+    // User later scopes Jobsearcher-codex workspace to Workstream A
+    _ = try registry.assignWorkspace(workspaceId: wsCodex.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+
+    // Dynamic resolution at render/read time now returns Workstream A!
+    let resolved = historicalRecent.resolveCurrentWorkstream(using: registry)
+    try assert(resolved?.id == streamA.id, "Recent workstream attribution must dynamically re-derive from current workspace topology")
+    try assert(resolved?.name == "A Jobsearcher codex")
+}
+
+// 561. M3 Final Acceptance: Changing workspace scope A→B causes Recent display attribution to follow current topology
+runTest("561. M3 Final Acceptance: Changing workspace scope A→B causes Recent display attribution to follow current topology") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_561_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher/ws", initialWorkstreamName: "Stream 1")
+    let stream2 = try registry.addWorkstream(toProjectId: p.id, name: "Stream 2", workspaceIds: [])
+
+    let recent = ProjectRecentSession(
+        provider: .codex,
+        sessionId: "cdx-1",
+        title: "Task",
+        cwd: "/Users/ava/Projects/Jobsearcher/ws",
+        projectId: p.id,
+        workstreamId: p.workstreams[0].id,
+        lastStatus: .done
+    )
+
+    // Initially resolves to Stream 1
+    try assert(recent.resolveCurrentWorkstream(using: registry)?.id == p.workstreams[0].id)
+
+    // Move workspace from Stream 1 to Stream 2
+    let wsId = p.workspaces[0].id
+    _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsId, workstreamId: p.workstreams[0].id, inProjectId: p.id)
+    _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsId, workstreamId: stream2.id, inProjectId: p.id)
+
+    // Dynamic resolution now reflects Stream 2
+    try assert(recent.resolveCurrentWorkstream(using: registry)?.id == stream2.id, "Dynamic resolution must track workspace reassignment")
+}
+
+// 562. M3 Final Acceptance: Ambiguous current scope returns Unassigned
+runTest("562. M3 Final Acceptance: Ambiguous current scope returns Unassigned") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_562_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher/ws", initialWorkstreamName: "Stream 1")
+    let stream2 = try registry.addWorkstream(toProjectId: p.id, name: "Stream 2", workspaceIds: [p.workspaces[0].id])
+
+    // Workspace belongs to BOTH Stream 1 and Stream 2 -> ambiguous
+    let recent = ProjectRecentSession(
+        provider: .codex,
+        sessionId: "cdx-ambig",
+        title: "Task",
+        cwd: "/Users/ava/Projects/Jobsearcher/ws",
+        projectId: p.id,
+        workstreamId: nil,
+        lastStatus: .done
+    )
+
+    try assert(recent.resolveCurrentWorkstream(using: registry) == nil, "Ambiguous multi-workstream workspace must resolve to nil ([Unassigned])")
+}
+
+// 563. M3 Final Acceptance: Claude Desktop .done/.idle >300s + process alive remains tracked
+runTest("563. M3 Final Acceptance: Claude Desktop .done/.idle >300s + process alive remains tracked") {
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let tempSessionsDir = "\(NSTemporaryDirectory())claude_sessions_test_563_\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: tempSessionsDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempSessionsDir) }
+
+    let testPid = getpid() // Current test runner process is alive!
+    let sessionJson = """
+    {
+        "pid": \(testPid),
+        "sessionId": "claude-desktop-sess-563",
+        "entrypoint": "claude-desktop",
+        "cwd": "/Users/ava/Projects/Jobsearcher-codex"
+    }
+    """
+    try sessionJson.write(toFile: "\(tempSessionsDir)/\(testPid).json", atomically: true, encoding: .utf8)
+
+    // Register active session that completed turn >400s ago
+    _ = store.handleClaudeHookEvent(
+        json: [
+            "event": "Stop",
+            "session_id": "claude-desktop-sess-563",
+            "cwd": "/Users/ava/Projects/Jobsearcher-codex",
+            "timestamp": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-400))
+        ],
+        isTestMode: true
+    )
+
+    // Run pruning with test sessionsDir
+    store.pruneStaleClaudeSessions(maxAgeSeconds: 300, sessionsDir: tempSessionsDir)
+
+    // Session MUST remain tracked because process is alive!
+    let active = store.getSessions(for: .claude)
+    try assert(active.contains(where: { $0.sessionId == "claude-desktop-sess-563" }), "Alive Claude Desktop session must NOT be pruned merely due to >300s inactivity")
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+}
+
+// 564. M3 Final Acceptance: Preserved idle Claude session does NOT make Project Working
+runTest("564. M3 Final Acceptance: Preserved idle Claude session does NOT make Project Working") {
+    let p = Project(name: "Jobsearcher", rootPath: "/Users/ava/Projects/Jobsearcher-codex")
+    let idleSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-desktop-idle",
+        title: "[Jobsearcher-codex]",
+        status: .idle,
+        cwd: "/Users/ava/Projects/Jobsearcher-codex"
+    )
+
+    let summary = p.statusSummary(sessions: [idleSession], openTabs: [])
+    try assert(summary.workingCount == 0, "Idle session must not increment workingCount")
+    try assert(summary.status == .idle, "Project status must remain .idle for preserved idle session")
+    try assert(!summary.statusBadgeText.contains("Working"))
+}
+
+// 565. M3 Final Acceptance: Preserved done Claude session uses existing done/ready semantics only
+runTest("565. M3 Final Acceptance: Preserved done Claude session uses existing done/ready semantics only") {
+    let p = Project(name: "Jobsearcher", rootPath: "/Users/ava/Projects/Jobsearcher-codex")
+    let doneSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-desktop-done",
+        title: "[Jobsearcher-codex]",
+        status: .done,
+        cwd: "/Users/ava/Projects/Jobsearcher-codex"
+    )
+
+    let summary = p.statusSummary(sessions: [doneSession], openTabs: [])
+    try assert(summary.workingCount == 0, "Done session must not increment workingCount")
+    try assert(summary.status == .done, "Project status must be .done for preserved done session")
+    try assert(summary.statusBadgeText == "1 Ready", "Project status badge must show '1 Ready' according to existing done/ready semantics")
+}
+
+// 566. M3 Final Acceptance: Claude Desktop process exit removes tracked session and preserves Recent
+runTest("566. M3 Final Acceptance: Claude Desktop process exit removes tracked session and preserves Recent") {
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let tempSessionsDir = "\(NSTemporaryDirectory())claude_sessions_test_566_\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: tempSessionsDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempSessionsDir) }
+
+    let deadPid = 999999 // Non-existent dead process
+    let sessionJson = """
+    {
+        "pid": \(deadPid),
+        "sessionId": "claude-desktop-dead-566",
+        "entrypoint": "claude-desktop",
+        "cwd": "/Users/ava/Projects/Jobsearcher-codex"
+    }
+    """
+    try sessionJson.write(toFile: "\(tempSessionsDir)/\(deadPid).json", atomically: true, encoding: .utf8)
+
+    _ = store.handleClaudeHookEvent(
+        json: [
+            "event": "Stop",
+            "session_id": "claude-desktop-dead-566",
+            "cwd": "/Users/ava/Projects/Jobsearcher-codex"
+        ],
+        isTestMode: true
+    )
+
+    // Reconcile dead sessions using test sessionsDir
+    AutoMonitor.shared.reconcileDeadClaudeSessions(sessionsDir: tempSessionsDir)
+
+    // Tracked sessions must now be empty
+    let active = store.getSessions(for: .claude)
+    try assert(!active.contains(where: { $0.sessionId == "claude-desktop-dead-566" }), "Terminated Claude desktop process must be removed from tracked sessions")
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+}
+
+// 567. M3 Final Acceptance: Ordinary Claude CLI lifecycle behavior is not accidentally made immortal
+runTest("567. M3 Final Acceptance: Ordinary Claude CLI lifecycle behavior is not accidentally made immortal") {
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+
+    let tempSessionsDir = "\(NSTemporaryDirectory())claude_sessions_test_567_\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: tempSessionsDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: tempSessionsDir) }
+
+    // Ordinary CLI session with no desktop process file
+    _ = store.handleClaudeHookEvent(
+        json: [
+            "event": "Stop",
+            "session_id": "claude-cli-567",
+            "cwd": "/Users/ava/Projects/Jobsearcher-codex",
+            "timestamp": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-400))
+        ],
+        isTestMode: true
+    )
+
+    // Prune with empty sessionsDir
+    store.pruneStaleClaudeSessions(maxAgeSeconds: 300, sessionsDir: tempSessionsDir)
+
+    // Non-desktop CLI session MUST be pruned after 300s
+    let active = store.getSessions(for: .claude)
+    try assert(!active.contains(where: { $0.sessionId == "claude-cli-567" }), "Ordinary CLI session without live desktop process must be pruned as stale")
+    store.purgeSyntheticAndStaleSessions(provider: .claude)
+}
+
+// 568. Antigravity hook with one workspacePath resolves correct Project
+runTest("568. Antigravity hook with one workspacePath resolves correct Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_568_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-hook-568",
+        title: "AgentBridge Task",
+        status: .working,
+        workspacePaths: ["/Users/ava/Projects/Agent-webchat monitor"]
+    )
+
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == p.id, "Single authoritative workspacePath must resolve to matching Project")
+}
+
+// 569. Hook workspacePath descendant resolves through normal canonical matching
+runTest("569. Hook workspacePath descendant resolves through normal canonical matching") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_569_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-hook-569",
+        title: "AgentBridge Subdir Task",
+        status: .working,
+        workspacePaths: ["/Users/ava/Projects/Agent-webchat monitor/Sources/AgentSignalBar"]
+    )
+
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == p.id, "Workspace descendant must resolve through canonical prefix matching")
+}
+
+// 570. Session owned by AgentBridge reads TargetFile inside Jobsearcher -> remains AgentBridge
+runTest("570. Session owned by AgentBridge reads TargetFile inside Jobsearcher -> remains AgentBridge") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_570_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let pAgent = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    _ = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher")
+
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+
+    // Hook registers session with authoritative workspacePaths in AgentBridge
+    _ = store.handleAntigravityHookEvent(
+        json: [
+            "event": "PreToolUse",
+            "session_id": "agy-cross-proj-570",
+            "workspace_paths": ["/Users/ava/Projects/Agent-webchat monitor"],
+            "tool_name": "view_file",
+            "tool_call": [
+                "name": "view_file",
+                "args": [
+                    "AbsolutePath": "/Users/ava/Projects/Jobsearcher/Package.swift"
+                ]
+            ]
+        ],
+        isTestMode: true
+    )
+
+    let sessions = store.getSessions(for: .antigravity)
+    let agySession = sessions.first(where: { $0.sessionId == "agy-cross-proj-570" })!
+
+    // Must remain resolved to AgentBridge, NEVER falsely flipped to Jobsearcher
+    try assert(agySession.resolveProject(using: registry)?.id == pAgent.id, "Reading external Jobsearcher file must NOT change session project ownership")
+    store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+}
+
+// 571. SearchDirectory/SearchPath outside Project cannot change ownership
+runTest("571. SearchDirectory/SearchPath outside Project cannot change ownership") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_571_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let pAgent = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    _ = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher")
+
+    let store = AgentStore.shared
+    store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+
+    _ = store.handleAntigravityHookEvent(
+        json: [
+            "event": "PreToolUse",
+            "session_id": "agy-cross-proj-571",
+            "workspace_paths": ["/Users/ava/Projects/Agent-webchat monitor"],
+            "tool_name": "find_by_name",
+            "tool_call": [
+                "name": "find_by_name",
+                "args": [
+                    "SearchDirectory": "/Users/ava/Projects/Jobsearcher/Sources"
+                ]
+            ]
+        ],
+        isTestMode: true
+    )
+
+    let agySession = store.getSessions(for: .antigravity).first(where: { $0.sessionId == "agy-cross-proj-571" })!
+    try assert(agySession.resolveProject(using: registry)?.id == pAgent.id, "SearchDirectory outside project must not alter ownership")
+    store.purgeSyntheticAndStaleSessions(provider: .antigravity)
+}
+
+// 572. Missing workspacePaths -> Project Unknown
+runTest("572. Missing workspacePaths -> Project Unknown") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_572_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+
+    // Disk probe session with no workspace evidence
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-disk-probe-572",
+        title: "[a8c0fd8c]",
+        status: .working
+    )
+
+    try assert(session.resolveProject(using: registry) == nil, "Session with no workspace evidence must remain Project Unknown (nil)")
+    try assert(session.associatedProjectName == "Unassigned")
+}
+
+// 573. Multiple workspacePaths all inside same Project -> Project resolves
+runTest("573. Multiple workspacePaths all inside same Project -> Project resolves") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_573_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-multi-same-573",
+        title: "Multi-workspace same project",
+        status: .working,
+        workspacePaths: [
+            "/Users/ava/Projects/Agent-webchat monitor/Sources",
+            "/Users/ava/Projects/Agent-webchat monitor/Tests"
+        ]
+    )
+
+    let matched = session.resolveProject(using: registry)
+    try assert(matched?.id == p.id, "Multiple workspacePaths all inside same Project must resolve to that Project")
+}
+
+// 574. Multiple workspacePaths spanning two Projects -> Project Unknown
+runTest("574. Multiple workspacePaths spanning two Projects -> Project Unknown") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_574_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    _ = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher")
+
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-multi-diff-574",
+        title: "Cross-project workspaces",
+        status: .working,
+        workspacePaths: [
+            "/Users/ava/Projects/Agent-webchat monitor",
+            "/Users/ava/Projects/Jobsearcher"
+        ]
+    )
+
+    try assert(session.resolveProject(using: registry) == nil, "Multiple workspacePaths spanning two Projects must resolve to nil (Unknown/Unassigned)")
+}
+
+// 575. Multiple workspace evidence mapping to different Workstreams -> Workstream Unknown
+runTest("575. Multiple workspace evidence mapping to different Workstreams -> Workstream Unknown") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_575_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher/ws1", initialWorkstreamName: "Stream 1")
+    let ws2 = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher/ws2")
+    _ = try registry.addWorkstream(toProjectId: p.id, name: "Stream 2", workspaceIds: [ws2.id])
+
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-multi-stream-575",
+        title: "Multi-stream workspaces",
+        status: .working,
+        workspacePaths: [
+            "/Users/ava/Projects/Jobsearcher/ws1",
+            "/Users/ava/Projects/Jobsearcher/ws2"
+        ]
+    )
+
+    try assert(session.resolveProject(using: registry)?.id == p.id, "Same project must resolve")
+    try assert(session.resolveWorkstream(using: registry) == nil, "Workspaces spanning two different Workstreams must resolve to nil Workstream (Unknown)")
+}
+
+// 576. Unambiguous workspace evidence -> correct Workstream
+runTest("576. Unambiguous workspace evidence -> correct Workstream") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_576_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher", initialWorkstreamName: "Stream B")
+    let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "Stream A", workspaceIds: [wsCodex.id])
+
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-stream-576",
+        title: "Unambiguous task",
+        status: .working,
+        workspacePaths: ["/Users/ava/Projects/Jobsearcher-codex/sub"]
+    )
+
+    let ws = session.resolveWorkstream(using: registry)
+    try assert(ws?.id == streamA.id, "Unambiguous workspacePath must resolve to matching Workstream")
+}
+
+// 577. Recent snapshot never moves Project because of external tool-operation path
+runTest("577. Recent snapshot never moves Project because of external tool-operation path") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_577_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let pAgent = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/ava/Projects/Agent-webchat monitor")
+    let pJob = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher")
+
+    let session = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-snap-577",
+        title: "Done task",
+        status: .done,
+        workspacePaths: ["/Users/ava/Projects/Agent-webchat monitor"]
+    )
+
+    let updated = registry.recordRecentSession(from: session)!
+    try assert(updated.id == pAgent.id, "Recent snapshot must attach to AgentBridge Project")
+
+    // Check Jobsearcher project has no recent sessions
+    let jobProj = registry.getProject(byId: pJob.id)!
+    try assert(jobProj.recentSessions.isEmpty, "Jobsearcher must have zero recent sessions")
+}
+
+print("🎉 All 577 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity & Antigravity Authoritative workspacePaths Attribution Tests Passed!")

@@ -526,6 +526,7 @@ public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, 
     public let sessionId: String
     public let title: String
     public let cwd: String?
+    public let workspacePaths: [String]?
     public let projectId: String
     public let workstreamId: String?
     public let lastStatus: AgentStatus
@@ -540,6 +541,7 @@ public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, 
         sessionId: String,
         title: String,
         cwd: String?,
+        workspacePaths: [String]? = nil,
         projectId: String,
         workstreamId: String? = nil,
         lastStatus: AgentStatus,
@@ -553,6 +555,7 @@ public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, 
         self.sessionId = sessionId
         self.title = title
         self.cwd = cwd
+        self.workspacePaths = workspacePaths
         self.projectId = projectId
         self.workstreamId = workstreamId
         self.lastStatus = lastStatus
@@ -573,6 +576,7 @@ public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, 
             sessionId: session.sessionId,
             title: session.title.isEmpty ? session.sessionId : session.title,
             cwd: session.cwd,
+            workspacePaths: session.workspacePaths,
             projectId: projectId,
             workstreamId: workstreamId,
             lastStatus: session.status,
@@ -581,6 +585,51 @@ public struct ProjectRecentSession: Identifiable, Codable, Sendable, Equatable, 
             webLink: session.webLink,
             targetTabId: session.targetTabId
         )
+    }
+
+    /// Dynamically resolves the current scoped Workstream from authoritative workspace evidence against live topology (M3.7 Dynamic Workstream Attribution).
+    /// If multiple workspacePaths exist:
+    /// - if they unambiguously map to the same Workstream -> that workstream wins.
+    /// - if ambiguous (>1 matching workstreams) or spanning multiple projects -> returns nil (Unassigned).
+    /// Otherwise falls back to historical workstreamId if still present in project, else nil.
+    public func resolveCurrentWorkstream(using registry: ProjectRegistry = .shared) -> ProjectWorkstream? {
+        if let paths = workspacePaths, !paths.isEmpty {
+            guard let project = registry.getProject(byId: projectId) else { return nil }
+            var matchingStreamIds: Set<String> = []
+            var streamMap: [String: ProjectWorkstream] = [:]
+            for p in paths {
+                let clean = p.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty else { continue }
+                if let (matchedProj, workspace) = registry.matchWorkspace(forPath: clean), matchedProj.id == project.id {
+                    let streams = project.workstreams.filter { $0.workspaceIds.contains(workspace.id) }
+                    for st in streams {
+                        matchingStreamIds.insert(st.id)
+                        streamMap[st.id] = st
+                    }
+                }
+            }
+            if matchingStreamIds.count == 1, let singleId = matchingStreamIds.first {
+                return streamMap[singleId]
+            }
+            return nil
+        }
+
+        if let rawCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !rawCwd.isEmpty {
+            if let (project, workspace) = registry.matchWorkspace(forPath: rawCwd) {
+                let matchingWorkstreams = project.workstreams.filter { $0.workspaceIds.contains(workspace.id) }
+                if matchingWorkstreams.count == 1 {
+                    return matchingWorkstreams.first
+                } else if matchingWorkstreams.count > 1 {
+                    // Ambiguous scope -> return nil (Unassigned)
+                    return nil
+                }
+            }
+        }
+        // Fallback: look up stored workstreamId if still exists in project
+        if let wsId = workstreamId, let project = registry.getProject(byId: projectId) {
+            return project.workstreams.first(where: { $0.id == wsId })
+        }
+        return nil
     }
 }
 

@@ -770,9 +770,10 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
                 // Active Wins: Filter out any recent snapshot that is currently represented by an active session
                 let inactiveRecentSnapshots = allRecentSnapshots.filter { recent in
-                    !activeSessions.contains(where: { active in
+                    let recentResolvedWorkstream = recent.resolveCurrentWorkstream(using: ProjectRegistry.shared)
+                    return !activeSessions.contains(where: { active in
                         active.sessionId == recent.sessionId ||
-                        (active.provider == recent.provider && active.resolveWorkstream(using: ProjectRegistry.shared)?.id == recent.workstreamId)
+                        (active.provider == recent.provider && active.resolveWorkstream(using: ProjectRegistry.shared)?.id == recentResolvedWorkstream?.id)
                     })
                 }
 
@@ -808,16 +809,8 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                         projSubmenu.addItem(recentHdr)
 
                         for recent in inactiveRecentSnapshots {
-                            let streamTag: String
-                            if project.workstreams.count > 1 {
-                                if let wsId = recent.workstreamId, let ws = project.workstreams.first(where: { $0.id == wsId }) {
-                                    streamTag = "[\(ws.name)] "
-                                } else {
-                                    streamTag = "[Unassigned] "
-                                }
-                            } else {
-                                streamTag = ""
-                            }
+                            let workstream = recent.resolveCurrentWorkstream(using: ProjectRegistry.shared)
+                            let streamTag = project.workstreams.count > 1 ? (workstream != nil ? "[\(workstream!.name)] " : "[Unassigned] ") : ""
                             let timeTag = recent.lastUpdated.relativeString()
                             let recentTitle = "  ⚪ Recent · \(streamTag)\(recent.provider.displayName): \(recent.title) [\(timeTag)]"
                             let recentItem = NSMenuItem(title: recentTitle, action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")

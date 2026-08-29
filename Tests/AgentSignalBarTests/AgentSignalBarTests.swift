@@ -3019,5 +3019,74 @@ final class AgentSignalBarTests: XCTestCase {
         XCTAssertEqual(summary.totalSessions, 0)
         XCTAssertEqual(summary.status, .idle)
     }
+
+    func testDynamicWorkstreamAttribution() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m3final_dyn_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/Jobsearcher", initialWorkstreamName: "Stream B")
+        let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/test/Jobsearcher-codex")
+        let streamA = try registry.addWorkstream(toProjectId: p.id, name: "Stream A", workspaceIds: [])
+
+        // Recent session captured with workstreamId = nil
+        let recent = ProjectRecentSession(
+            provider: .claude,
+            sessionId: "c-1",
+            title: "Task",
+            cwd: "/Users/test/Jobsearcher-codex/sub",
+            projectId: p.id,
+            workstreamId: nil,
+            lastStatus: .done
+        )
+
+        XCTAssertNil(recent.resolveCurrentWorkstream(using: registry))
+
+        // Assign workspace to Stream A
+        _ = try registry.assignWorkspace(workspaceId: wsCodex.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+
+        // Dynamic resolution now resolves to Stream A
+        XCTAssertEqual(recent.resolveCurrentWorkstream(using: registry)?.id, streamA.id)
+    }
+
+    func testAntigravityAuthoritativeWorkspacePathsAttribution() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_agy_auth_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let pAgent = try registry.createProject(name: "AgentBridge", initialWorkspacePath: "/Users/test/Agent-webchat monitor")
+        let pJob = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/Jobsearcher")
+
+        // 1. Authoritative workspacePaths in AgentBridge
+        let sessSingle = AgentSessionInfo(
+            provider: .antigravity,
+            sessionId: "agy-1",
+            title: "Task 1",
+            status: .working,
+            workspacePaths: ["/Users/test/Agent-webchat monitor"]
+        )
+        XCTAssertEqual(sessSingle.resolveProject(using: registry)?.id, pAgent.id)
+
+        // 2. Multiple workspacePaths spanning two projects -> nil (Unknown)
+        let sessMultiCross = AgentSessionInfo(
+            provider: .antigravity,
+            sessionId: "agy-2",
+            title: "Task 2",
+            status: .working,
+            workspacePaths: ["/Users/test/Agent-webchat monitor", "/Users/test/Jobsearcher"]
+        )
+        XCTAssertNil(sessMultiCross.resolveProject(using: registry))
+
+        // 3. Missing workspacePaths & cwd -> nil (Unknown)
+        let sessMissing = AgentSessionInfo(
+            provider: .antigravity,
+            sessionId: "agy-3",
+            title: "Task 3",
+            status: .working
+        )
+        XCTAssertNil(sessMissing.resolveProject(using: registry))
+    }
 }
 #endif
