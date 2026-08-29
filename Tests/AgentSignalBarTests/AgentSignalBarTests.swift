@@ -3088,5 +3088,98 @@ final class AgentSignalBarTests: XCTestCase {
         )
         XCTAssertNil(sessMissing.resolveProject(using: registry))
     }
+
+    func testExclusiveAutoMoveCardinality() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_exclusive_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/test/Jobsearcher", initialWorkstreamName: "B Claude")
+        let wsJob = p.workspaces[0]
+        let wsCodex = try registry.addWorkspace(toProjectId: p.id, path: "/Users/test/Jobsearcher-codex")
+
+        let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+        let streamC = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+
+        // 1. Assign wsJob to B (already done on creation)
+        XCTAssertTrue(registry.getProject(byId: p.id)!.workstreams.first(where: { $0.id == p.workstreams[0].id })!.workspaceIds.contains(wsJob.id))
+
+        // 2. Assign wsJob to C -> Exclusive Auto-Move removes it from B!
+        _ = try registry.assignWorkspace(workspaceId: wsJob.id, toWorkstreamId: streamC.id, inProjectId: p.id)
+        let pAfter = registry.getProject(byId: p.id)!
+        XCTAssertFalse(pAfter.workstreams.first(where: { $0.id == p.workstreams[0].id })!.workspaceIds.contains(wsJob.id))
+        XCTAssertTrue(pAfter.workstreams.first(where: { $0.id == streamC.id })!.workspaceIds.contains(wsJob.id))
+
+        // 3. Reload preserves exclusive ownership in C
+        let reloaded = ProjectRegistry(storageURL: testStorageURL)
+        let pReloaded = reloaded.getProject(byId: p.id)!
+        XCTAssertFalse(pReloaded.workstreams.first(where: { $0.id == p.workstreams[0].id })!.workspaceIds.contains(wsJob.id))
+        XCTAssertTrue(pReloaded.workstreams.first(where: { $0.id == streamC.id })!.workspaceIds.contains(wsJob.id))
+
+        // 4. Session in Jobsearcher resolves to C
+        let sess = AgentSessionInfo(provider: .claude, sessionId: "c-move", title: "Move Task", status: .working, cwd: "/Users/test/Jobsearcher/sub")
+        XCTAssertEqual(sess.resolveWorkstream(using: reloaded)?.id, streamC.id)
+    }
+
+    func testAmbiguousLegacyPersistedStateCleansing() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_legacy_ambig_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: testStorageURL) }
+
+        let wsId = "WS-AMBIG-UNIT"
+        let legacyJson = """
+        {
+          "projects": [
+            {
+              "id": "proj-legacy",
+              "name": "Jobsearcher",
+              "createdAt": "2026-08-29T10:00:00Z",
+              "updatedAt": "2026-08-29T10:00:00Z",
+              "workspaces": [
+                {
+                  "id": "\(wsId)",
+                  "path": "/Users/test/Jobsearcher",
+                  "isPrimary": true,
+                  "createdAt": "2026-08-29T10:00:00Z"
+                }
+              ],
+              "workstreams": [
+                {
+                  "id": "st-b",
+                  "name": "B Claude",
+                  "workspaceIds": ["\(wsId)"],
+                  "createdAt": "2026-08-29T10:00:00Z",
+                  "updatedAt": "2026-08-29T10:00:00Z"
+                },
+                {
+                  "id": "st-c",
+                  "name": "C Pi5 Claude",
+                  "workspaceIds": ["\(wsId)"],
+                  "createdAt": "2026-08-29T10:00:00Z",
+                  "updatedAt": "2026-08-29T10:00:00Z"
+                }
+              ],
+              "recentSessions": []
+            }
+          ],
+          "version": 2
+        }
+        """
+        try legacyJson.write(to: testStorageURL, atomically: true, encoding: .utf8)
+
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        let proj = registry.getProject(byId: "proj-legacy")!
+        let stB = proj.workstreams.first(where: { $0.id == "st-b" })!
+        let stC = proj.workstreams.first(where: { $0.id == "st-c" })!
+
+        XCTAssertTrue(stB.workspaceIds.isEmpty)
+        XCTAssertTrue(stC.workspaceIds.isEmpty)
+
+        let sess = AgentSessionInfo(provider: .claude, sessionId: "c-legacy", title: "Legacy Task", status: .working, cwd: "/Users/test/Jobsearcher/sub")
+        XCTAssertNil(sess.resolveWorkstream(using: registry))
+    }
 }
 #endif

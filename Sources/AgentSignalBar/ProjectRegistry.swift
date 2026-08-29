@@ -109,11 +109,42 @@ public final class ProjectRegistry: @unchecked Sendable {
                     normalizedWorkspaces[0].isPrimary = true
                 }
 
+                // Cleanse workstream workspace scoping to enforce exclusivity
+                // If a workspaceId appears in >1 workstream (ambiguous conflict from legacy data),
+                // remove it from all workstreams so it becomes unassigned without guessing.
+                let validWorkspaceIdSet = Set(normalizedWorkspaces.map { $0.id })
+                var workspaceIdCount: [String: Int] = [:]
+                for st in project.workstreams {
+                    for wsId in Set(st.workspaceIds) {
+                        if validWorkspaceIdSet.contains(wsId) {
+                            workspaceIdCount[wsId, default: 0] += 1
+                        }
+                    }
+                }
+
+                var normalizedWorkstreams: [ProjectWorkstream] = []
+                for st in project.workstreams {
+                    let cleanWsIds = st.workspaceIds.filter { wsId in
+                        validWorkspaceIdSet.contains(wsId) && (workspaceIdCount[wsId] == 1)
+                    }
+                    var seenWsIds = Set<String>()
+                    var dedupedWsIds: [String] = []
+                    for wsId in cleanWsIds {
+                        if !seenWsIds.contains(wsId) {
+                            seenWsIds.insert(wsId)
+                            dedupedWsIds.append(wsId)
+                        }
+                    }
+                    var normSt = st
+                    normSt.workspaceIds = dedupedWsIds
+                    normalizedWorkstreams.append(normSt)
+                }
+
                 let normalizedProject = Project(
                     id: project.id,
                     name: project.name,
                     workspaces: normalizedWorkspaces,
-                    workstreams: project.workstreams,
+                    workstreams: normalizedWorkstreams,
                     gitRepository: project.gitRepository,
                     recentSessions: project.recentSessions,
                     createdAt: project.createdAt,
@@ -489,12 +520,28 @@ public final class ProjectRegistry: @unchecked Sendable {
             throw ProjectRegistryError.projectNotFound(projectId)
         }
 
+        // Exclusive auto-move: sanitize workspaceIds and remove from other workstreams in this project
+        var sanitizedWorkspaceIds: [String] = []
+        for wsId in workspaceIds {
+            if project.workspaces.contains(where: { $0.id == wsId }) {
+                for i in 0..<project.workstreams.count {
+                    if let rmIdx = project.workstreams[i].workspaceIds.firstIndex(of: wsId) {
+                        project.workstreams[i].workspaceIds.remove(at: rmIdx)
+                        project.workstreams[i].updatedAt = Date()
+                    }
+                }
+                if !sanitizedWorkspaceIds.contains(wsId) {
+                    sanitizedWorkspaceIds.append(wsId)
+                }
+            }
+        }
+
         let newStream = ProjectWorkstream(
             id: UUID().uuidString,
             name: cleanName,
             currentReviewer: nil,
             reviewerHistory: [],
-            workspaceIds: workspaceIds
+            workspaceIds: sanitizedWorkspaceIds
         )
 
         project.workstreams.append(newStream)
@@ -584,9 +631,27 @@ public final class ProjectRegistry: @unchecked Sendable {
             throw ProjectRegistryError.workstreamNotFound(workstreamId)
         }
 
+        // Exclusive auto-move:
+        // 1. Remove workspaceId from any other workstream in the same project
+        var modified = false
+        for otherIdx in 0..<project.workstreams.count {
+            if otherIdx != streamIdx {
+                if let rmIdx = project.workstreams[otherIdx].workspaceIds.firstIndex(of: workspaceId) {
+                    project.workstreams[otherIdx].workspaceIds.remove(at: rmIdx)
+                    project.workstreams[otherIdx].updatedAt = Date()
+                    modified = true
+                }
+            }
+        }
+
+        // 2. Assign workspaceId to target workstream
         if !project.workstreams[streamIdx].workspaceIds.contains(workspaceId) {
             project.workstreams[streamIdx].workspaceIds.append(workspaceId)
             project.workstreams[streamIdx].updatedAt = Date()
+            modified = true
+        }
+
+        if modified {
             project.updatedAt = Date()
             projectsById[projectId] = project
         }

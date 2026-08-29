@@ -11264,28 +11264,75 @@ runTest("561. M3 Final Acceptance: Changing workspace scope A→B causes Recent 
     try assert(recent.resolveCurrentWorkstream(using: registry)?.id == stream2.id, "Dynamic resolution must track workspace reassignment")
 }
 
-// 562. M3 Final Acceptance: Ambiguous current scope returns Unassigned
-runTest("562. M3 Final Acceptance: Ambiguous current scope returns Unassigned") {
+// 562. M3 Final Acceptance: Ambiguous legacy multi-workstream persisted state cleanses to unassigned without guessing
+runTest("562. M3 Final Acceptance: Ambiguous legacy multi-workstream persisted state cleanses to unassigned without guessing") {
     let tempDir = NSTemporaryDirectory()
     let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_562_\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: testStorageURL) }
+
+    // Synthesize legacy raw JSON with duplicate workspace ownership (same workspaceId in Stream 1 and Stream 2)
+    let wsId = "WS-AMBIG-562"
+    let legacyJson = """
+    {
+      "projects": [
+        {
+          "id": "proj-562",
+          "name": "Jobsearcher",
+          "createdAt": "2026-08-29T10:00:00Z",
+          "updatedAt": "2026-08-29T10:00:00Z",
+          "workspaces": [
+            {
+              "id": "\(wsId)",
+              "path": "/Users/ava/Projects/Jobsearcher/ws",
+              "isPrimary": true,
+              "createdAt": "2026-08-29T10:00:00Z"
+            }
+          ],
+          "workstreams": [
+            {
+              "id": "stream-1",
+              "name": "Stream 1",
+              "workspaceIds": ["\(wsId)"],
+              "createdAt": "2026-08-29T10:00:00Z",
+              "updatedAt": "2026-08-29T10:00:00Z"
+            },
+            {
+              "id": "stream-2",
+              "name": "Stream 2",
+              "workspaceIds": ["\(wsId)"],
+              "createdAt": "2026-08-29T10:00:00Z",
+              "updatedAt": "2026-08-29T10:00:00Z"
+            }
+          ],
+          "recentSessions": []
+        }
+      ],
+      "version": 2
+    }
+    """
+    try legacyJson.write(to: testStorageURL, atomically: true, encoding: .utf8)
+
+    // Load registry from legacy JSON - must cleanse duplicate to unassigned deterministically
     let registry = ProjectRegistry(storageURL: testStorageURL)
     defer { registry.resetForTesting() }
 
-    let p = try registry.createProject(name: "Jobsearcher", initialWorkspacePath: "/Users/ava/Projects/Jobsearcher/ws", initialWorkstreamName: "Stream 1")
-    let stream2 = try registry.addWorkstream(toProjectId: p.id, name: "Stream 2", workspaceIds: [p.workspaces[0].id])
+    let loadedProj = registry.getProject(byId: "proj-562")!
+    let s1 = loadedProj.workstreams.first(where: { $0.id == "stream-1" })!
+    let s2 = loadedProj.workstreams.first(where: { $0.id == "stream-2" })!
+    try assert(s1.workspaceIds.isEmpty, "Stream 1 workspaceIds must be cleansed of ambiguous duplicate")
+    try assert(s2.workspaceIds.isEmpty, "Stream 2 workspaceIds must be cleansed of ambiguous duplicate")
 
-    // Workspace belongs to BOTH Stream 1 and Stream 2 -> ambiguous
     let recent = ProjectRecentSession(
         provider: .codex,
         sessionId: "cdx-ambig",
         title: "Task",
         cwd: "/Users/ava/Projects/Jobsearcher/ws",
-        projectId: p.id,
+        projectId: "proj-562",
         workstreamId: nil,
         lastStatus: .done
     )
 
-    try assert(recent.resolveCurrentWorkstream(using: registry) == nil, "Ambiguous multi-workstream workspace must resolve to nil ([Unassigned])")
+    try assert(recent.resolveCurrentWorkstream(using: registry) == nil, "Cleansed unassigned workspace must resolve to nil ([Unassigned]) without guessing")
 }
 
 // 563. M3 Final Acceptance: Claude Desktop .done/.idle >300s + process alive remains tracked
@@ -11878,9 +11925,8 @@ runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action
     // 2. Build mock UI NSMenuItem using identical production construction logic
     func generateScopeItem(forStream stream: ProjectWorkstream, workspace: ProjectWorkspace) -> NSMenuItem {
         let isScoped = stream.workspaceIds.contains(workspace.id)
-        let boxTag = isScoped ? "☑" : "☐"
         let wsLabel = workspace.name ?? (workspace.path as NSString).lastPathComponent
-        let item = NSMenuItem(title: "\(boxTag) \(wsLabel)", action: #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+        let item = NSMenuItem(title: wsLabel, action: #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
         item.target = MenuBarManager.shared
         item.isEnabled = true
         item.state = isScoped ? .on : .off
@@ -11898,7 +11944,8 @@ runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action
     try assert(initialItem.action == #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), "Scope item must target toggleWorkstreamWorkspaceClicked")
     try assert(initialItem.target != nil, "Scope item target must be non-nil")
     try assert(initialItem.state == .off, "Initial scope item state must be .off")
-    try assert(initialItem.title.contains("☐ Jobsearcher"), "Initial scope item title must display ☐")
+    try assert(initialItem.title == "Jobsearcher", "Initial scope item title must be plain workspace name without glyphs")
+    try assert(!initialItem.title.contains("☐") && !initialItem.title.contains("☑"), "Title must not contain checkbox glyphs")
 
     let repDict = initialItem.representedObject as? [String: Any]
     try assert(repDict?["projectId"] as? String == p.id, "representedObject must have correct projectId")
@@ -11910,10 +11957,11 @@ runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action
     let updatedStreamB = afterToggleProject.workstreams.first(where: { $0.id == streamB.id })!
     try assert(updatedStreamB.workspaceIds.contains(wsJob.id), "Workstream B must now contain Jobsearcher workspace ID")
 
-    // 5. Verify rebuilt menu item reflects .on and ☑
+    // 5. Verify rebuilt menu item reflects .on with plain title
     let rebuiltItem = generateScopeItem(forStream: updatedStreamB, workspace: wsJob)
     try assert(rebuiltItem.state == .on, "Rebuilt scope item state must be .on")
-    try assert(rebuiltItem.title.contains("☑ Jobsearcher"), "Rebuilt scope item title must display ☑")
+    try assert(rebuiltItem.title == "Jobsearcher", "Rebuilt scope item title must be plain workspace name")
+    try assert(!rebuiltItem.title.contains("☐") && !rebuiltItem.title.contains("☑"), "Rebuilt title must not contain checkbox glyphs")
 
     // 6. Second invocation toggles back to .off
     let afterToggleOffProject = try registry.toggleWorkstreamWorkspace(workspaceId: wsJob.id, workstreamId: streamB.id, inProjectId: p.id)
@@ -11921,7 +11969,7 @@ runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action
     try assert(!offStreamB.workspaceIds.contains(wsJob.id), "Workstream B workspaceIds must now be empty")
     let rebuiltOffItem = generateScopeItem(forStream: offStreamB, workspace: wsJob)
     try assert(rebuiltOffItem.state == .off, "Rebuilt scope item state must return to .off")
-    try assert(rebuiltOffItem.title.contains("☐ Jobsearcher"), "Rebuilt scope item title must return to ☐")
+    try assert(rebuiltOffItem.title == "Jobsearcher", "Rebuilt scope item title must return to plain workspace name")
 
     // 7. Toggle on again and verify disk reload preserves state
     _ = try registry.toggleWorkstreamWorkspace(workspaceId: wsJob.id, workstreamId: streamB.id, inProjectId: p.id)
@@ -11952,4 +12000,119 @@ runTest("585. End-to-end Workstream Scoping UI integration: item enabled, action
     try assert(renderedRow == "[B Claude] Claude Code: [Jobsearcher]", "Active Agent Sessions row must visibly render '[B Claude] Claude Code: [Jobsearcher]'")
 }
 
-print("🎉 All 585 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution, Workstream Scoping Persistence & Interactive UI Checkmark Tests Passed!")
+// 586. M3 Final Cardinality & Native Scoping UX: Exclusive Auto-Move & Checkmark Invariants
+runTest("586. M3 Final Cardinality & Native Scoping UX: Exclusive Auto-Move & Checkmark Invariants") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_586_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    // Setup Project with 3 workspaces and 3 workstreams
+    let p = try registry.createProject(name: "Jobsearcher")
+    let wsX = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher")
+    let wsY = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-codex")
+    let wsZ = try registry.addWorkspace(toProjectId: p.id, path: "/Users/ava/Projects/Jobsearcher-extra")
+
+    let streamA = try registry.addWorkstream(toProjectId: p.id, name: "A Jobsearcher codex", workspaceIds: [])
+    let streamB = try registry.addWorkstream(toProjectId: p.id, name: "B Claude", workspaceIds: [])
+    let streamC = try registry.addWorkstream(toProjectId: p.id, name: "C Pi5 Claude", workspaceIds: [])
+
+    // 1. Assigning Workspace X to B scopes X to B
+    _ = try registry.assignWorkspace(workspaceId: wsX.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+    var proj = registry.getProject(byId: p.id)!
+    try assert(proj.workstreams.first(where: { $0.id == streamB.id })?.workspaceIds == [wsX.id], "1. Workspace X must be scoped to B")
+
+    // 2. Assigning the SAME Workspace X to C auto-removes it from B (Exclusive Auto-Move)
+    _ = try registry.assignWorkspace(workspaceId: wsX.id, toWorkstreamId: streamC.id, inProjectId: p.id)
+    proj = registry.getProject(byId: p.id)!
+    let bAfterMove = proj.workstreams.first(where: { $0.id == streamB.id })!
+    let cAfterMove = proj.workstreams.first(where: { $0.id == streamC.id })!
+    try assert(bAfterMove.workspaceIds.isEmpty, "2. Workspace X must be auto-removed from B")
+    try assert(cAfterMove.workspaceIds == [wsX.id], "2. Workspace X must now be scoped to C")
+
+    // 3. Persisted state on disk contains X under C only
+    let diskData = try Data(contentsOf: testStorageURL)
+    let diskDecoder = JSONDecoder()
+    diskDecoder.dateDecodingStrategy = .iso8601
+    let diskRegistry = try diskDecoder.decode(ProjectRegistryData.self, from: diskData)
+    let diskProj = diskRegistry.projects.first(where: { $0.id == p.id })!
+    let diskB = diskProj.workstreams.first(where: { $0.id == streamB.id })!
+    let diskC = diskProj.workstreams.first(where: { $0.id == streamC.id })!
+    try assert(diskB.workspaceIds.isEmpty, "3. Persisted disk state must show B with zero workspaces")
+    try assert(diskC.workspaceIds == [wsX.id], "3. Persisted disk state must show C containing X only")
+
+    // 4. Reload preserves exclusive ownership
+    let reloadedRegistry = ProjectRegistry(storageURL: testStorageURL)
+    let reloadedProj = reloadedRegistry.getProject(byId: p.id)!
+    try assert(reloadedProj.workstreams.first(where: { $0.id == streamC.id })?.workspaceIds == [wsX.id], "4. Reload must preserve C owning X exclusively")
+    try assert(reloadedProj.workstreams.first(where: { $0.id == streamB.id })?.workspaceIds.isEmpty == true, "4. Reload must preserve B with empty workspaceIds")
+
+    // 5. C can be returned to zero scoped Workspaces (toggle off / unassign)
+    _ = try registry.unassignWorkspace(workspaceId: wsX.id, fromWorkstreamId: streamC.id, inProjectId: p.id)
+    proj = registry.getProject(byId: p.id)!
+    try assert(proj.workstreams.first(where: { $0.id == streamC.id })?.workspaceIds.isEmpty == true, "5. C must now have zero scoped workspaces")
+
+    // 6. Workstream can own multiple distinct Workspaces
+    _ = try registry.assignWorkspace(workspaceId: wsX.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+    _ = try registry.assignWorkspace(workspaceId: wsY.id, toWorkstreamId: streamA.id, inProjectId: p.id)
+    proj = registry.getProject(byId: p.id)!
+    let aMultiple = proj.workstreams.first(where: { $0.id == streamA.id })!
+    try assert(aMultiple.workspaceIds.count == 2, "6. Workstream A must own 2 distinct workspaces")
+    try assert(aMultiple.workspaceIds.contains(wsX.id) && aMultiple.workspaceIds.contains(wsY.id), "6. Workstream A must contain both X and Y")
+
+    // 7. Separate Workspaces can belong to separate Workstreams
+    // Move wsX to B, wsY remains in A, assign wsZ to C
+    _ = try registry.assignWorkspace(workspaceId: wsX.id, toWorkstreamId: streamB.id, inProjectId: p.id)
+    _ = try registry.assignWorkspace(workspaceId: wsZ.id, toWorkstreamId: streamC.id, inProjectId: p.id)
+    proj = registry.getProject(byId: p.id)!
+    try assert(proj.workstreams.first(where: { $0.id == streamA.id })?.workspaceIds == [wsY.id], "7. A must own Y")
+    try assert(proj.workstreams.first(where: { $0.id == streamB.id })?.workspaceIds == [wsX.id], "7. B must own X")
+    try assert(proj.workstreams.first(where: { $0.id == streamC.id })?.workspaceIds == [wsZ.id], "7. C must own Z")
+
+    // 8. Session CWD resolves uniquely after auto-move
+    let sessX = AgentSessionInfo(provider: .claude, sessionId: "sess-x", title: "Task X", status: .working, cwd: "/Users/ava/Projects/Jobsearcher/app")
+    let sessY = AgentSessionInfo(provider: .codex, sessionId: "sess-y", title: "Task Y", status: .working, cwd: "/Users/ava/Projects/Jobsearcher-codex/sub")
+    let sessZ = AgentSessionInfo(provider: .claude, sessionId: "sess-z", title: "Task Z", status: .working, cwd: "/Users/ava/Projects/Jobsearcher-extra/src")
+
+    try assert(sessX.resolveWorkstream(using: registry)?.id == streamB.id, "8. Session in X must resolve to B")
+    try assert(sessY.resolveWorkstream(using: registry)?.id == streamA.id, "8. Session in Y must resolve to A")
+    try assert(sessZ.resolveWorkstream(using: registry)?.id == streamC.id, "8. Session in Z must resolve to C")
+
+    // Auto-move X from B to C
+    _ = try registry.assignWorkspace(workspaceId: wsX.id, toWorkstreamId: streamC.id, inProjectId: p.id)
+    try assert(sessX.resolveWorkstream(using: registry)?.id == streamC.id, "8. After moving X to C, session in X must resolve to C")
+
+    // 9. Native menu item uses .state and title contains no ☐ or ☑
+    func makeMenuItem(forStream st: ProjectWorkstream, ws: ProjectWorkspace) -> NSMenuItem {
+        let isScoped = st.workspaceIds.contains(ws.id)
+        let wsLabel = ws.name ?? (ws.path as NSString).lastPathComponent
+        let item = NSMenuItem(title: wsLabel, action: #selector(MenuBarManager.toggleWorkstreamWorkspaceClicked(_:)), keyEquivalent: "")
+        item.target = MenuBarManager.shared
+        item.isEnabled = true
+        item.state = isScoped ? .on : .off
+        item.representedObject = [
+            "projectId": p.id,
+            "workstreamId": st.id,
+            "workspaceId": ws.id
+        ]
+        return item
+    }
+
+    proj = registry.getProject(byId: p.id)!
+    let streamBNow = proj.workstreams.first(where: { $0.id == streamB.id })!
+    let streamCNow = proj.workstreams.first(where: { $0.id == streamC.id })!
+
+    let itemBX = makeMenuItem(forStream: streamBNow, ws: wsX)
+    let itemCX = makeMenuItem(forStream: streamCNow, ws: wsX)
+
+    try assert(!itemBX.title.contains("☐") && !itemBX.title.contains("☑"), "9. Menu item title must NOT contain checkbox glyphs")
+    try assert(!itemCX.title.contains("☐") && !itemCX.title.contains("☑"), "9. Menu item title must NOT contain checkbox glyphs")
+    try assert(itemBX.title == "Jobsearcher", "9. Menu item title must be plain workspace name")
+    try assert(itemCX.title == "Jobsearcher", "9. Menu item title must be plain workspace name")
+
+    // 10. Rebuilt B/C menus reflect exclusive reassignment
+    try assert(itemBX.state == .off, "10. Rebuilt B menu for X must be .off")
+    try assert(itemCX.state == .on, "10. Rebuilt C menu for X must be .on")
+}
+
+print("🎉 All 586 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution, Workstream Scoping Persistence, Exclusive Auto-Move Cardinality & Native UI Checkmark Tests Passed!")

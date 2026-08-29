@@ -489,6 +489,23 @@ public struct ProjectWorkstream: Identifiable, Codable, Sendable, Equatable, Has
         self.updatedAt = updatedAt
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, name, currentReviewer, reviewerHistory, workspaceIds, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        let rawName = try container.decodeIfPresent(String.self, forKey: .name) ?? "Default"
+        let cleanName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = cleanName.isEmpty ? "Default" : cleanName
+        self.currentReviewer = try container.decodeIfPresent(ProjectReviewer.self, forKey: .currentReviewer)
+        self.reviewerHistory = try container.decodeIfPresent([ReviewerHistoryRecord].self, forKey: .reviewerHistory) ?? []
+        self.workspaceIds = try container.decodeIfPresent([String].self, forKey: .workspaceIds) ?? []
+        self.createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
+
     /// Evaluates whether this workstream's reviewer is actively open / observable among open Chrome tabs.
     public func liveReviewerStatus(openTabs: [ChatGPTTabInfo]) -> ProjectReviewerLiveStatus? {
         guard let reviewer = currentReviewer else { return nil }
@@ -826,7 +843,32 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
 
         // 2. Decode or migrate Workstreams
         if let decodedWorkstreams = try container.decodeIfPresent([ProjectWorkstream].self, forKey: .workstreams), !decodedWorkstreams.isEmpty {
-            self.workstreams = decodedWorkstreams
+            let validWorkspaceIdSet = Set(self.workspaces.map { $0.id })
+            var workspaceIdCount: [String: Int] = [:]
+            for st in decodedWorkstreams {
+                for wsId in Set(st.workspaceIds) {
+                    if validWorkspaceIdSet.contains(wsId) {
+                        workspaceIdCount[wsId, default: 0] += 1
+                    }
+                }
+            }
+
+            self.workstreams = decodedWorkstreams.map { st in
+                let cleanWsIds = st.workspaceIds.filter { wsId in
+                    validWorkspaceIdSet.contains(wsId) && (workspaceIdCount[wsId] == 1)
+                }
+                var seenWsIds = Set<String>()
+                var dedupedWsIds: [String] = []
+                for wsId in cleanWsIds {
+                    if !seenWsIds.contains(wsId) {
+                        seenWsIds.insert(wsId)
+                        dedupedWsIds.append(wsId)
+                    }
+                }
+                var normSt = st
+                normSt.workspaceIds = dedupedWsIds
+                return normSt
+            }
         } else {
             let legacyReviewer = try container.decodeIfPresent(ProjectReviewer.self, forKey: .currentReviewer)
             let legacyHistory = try container.decodeIfPresent([ReviewerHistoryRecord].self, forKey: .reviewerHistory) ?? []
