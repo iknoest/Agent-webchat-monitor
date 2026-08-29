@@ -12115,4 +12115,108 @@ runTest("586. M3 Final Cardinality & Native Scoping UX: Exclusive Auto-Move & Ch
     try assert(itemCX.state == .on, "10. Rebuilt C menu for X must be .on")
 }
 
-print("🎉 All 586 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution, Workstream Scoping Persistence, Exclusive Auto-Move Cardinality & Native UI Checkmark Tests Passed!")
+// 587. Codex Desktop 5-Hour + Weekly Dual-Window Quota Accuracy & Independence
+runTest("587. Codex Desktop 5-Hour + Weekly Dual-Window Quota Accuracy & Independence") {
+    let usageStore = AgentUsageStore.shared
+    let origCodexUsage = usageStore.getUsage(for: .codex)
+    defer {
+        if let orig = origCodexUsage {
+            usageStore.updateUsage(for: .codex, data: orig)
+        }
+    }
+
+    // 1. Dual-window payload: 5-Hour exhausted (100% used / 0% left), Weekly healthy (40% used / 60% left)
+    let t5h: Int64 = 1788030269   // e.g. resets 4:03 PM
+    let tWeekly: Int64 = 1788501732 // e.g. resets Sep 4
+    let dualPayload: [String: Any] = [
+        "rateLimits": [
+            "limitId": "codex",
+            "planType": "plus",
+            "primary": [
+                "usedPercent": 100,
+                "windowDurationMins": 300,
+                "resetsAt": t5h
+            ],
+            "secondary": [
+                "usedPercent": 40,
+                "windowDurationMins": 10080,
+                "resetsAt": tWeekly
+            ],
+            "credits": [
+                "hasCredits": false,
+                "unlimited": false,
+                "balance": "0"
+            ],
+            "rateLimitReachedType": "primary_rate_limit_reached"
+        ],
+        "rateLimitResetCredits": [
+            "availableCount": 1
+        ]
+    ]
+
+    let parsed = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(dualPayload)
+    try assert(parsed != nil, "1. parseCodexRateLimitsResult must succeed on dual-window payload")
+
+    // 2. Remaining percentage semantics
+    try assert(parsed?.sessionLimitPercent == 100.0, "2. 5-Hour raw used must be 100.0%")
+    try assert(parsed?.sessionRemainingPercent == 0.0, "2. 5-Hour remaining must be 0% left")
+    try assert(parsed?.weeklyLimitPercent == 40.0, "2. Weekly raw used must be 40.0%")
+    try assert(parsed?.weeklyRemainingPercent == 60.0, "2. Weekly remaining must be 60% left")
+
+    // 3. Independence: 5-hour exhaustion does NOT force weekly to 0% left
+    try assert(parsed?.weeklyRemainingPercent == 60.0, "3. Weekly remaining must NOT be clobbered by 5-hour exhaustion")
+    try assert(parsed?.isQuotaExhausted == true, "3. Provider is exhausted overall because 5-Hour is 0% left")
+    try assert(parsed?.availability == .quotaExhausted, "3. Provider availability must be .quotaExhausted")
+
+    // 4. Reset timestamps map to correct windows
+    try assert(parsed?.sessionResetText?.contains("resets") == true, "4. 5-Hour reset text must be populated")
+    try assert(parsed?.weeklyResetText?.contains("resets") == true, "4. Weekly reset text must be populated")
+    try assert(parsed?.resetCardCount == 1, "4. Reset credit count must be 1")
+
+    // 5. Store & Availability
+    usageStore.updateUsage(for: .codex, data: parsed!)
+    let stored = usageStore.getUsage(for: .codex)!
+    try assert(stored.sessionRemainingPercent == 0.0, "5. Stored session remaining must be 0%")
+    try assert(stored.weeklyRemainingPercent == 60.0, "5. Stored weekly remaining must be 60%")
+
+    // 6. Menu rendering for Codex with dual windows
+    let menu = MenuBarManager.shared.buildMenuForTesting()
+    let titles = menu.items.map { $0.title }
+
+    let has5Hour = titles.contains(where: { $0.contains("5-Hour:") && $0.contains("0% left") })
+    let hasWeekly = titles.contains(where: { $0.contains("Weekly:") && $0.contains("60% left") })
+    try assert(has5Hour, "6. Codex 5-Hour row must render in menu with '0% left'")
+    try assert(hasWeekly, "7. Codex Weekly row must render in menu with '60% left'")
+
+    // 8. Single window graceful fallback (Weekly only)
+    let weeklyOnlyPayload: [String: Any] = [
+        "rateLimits": [
+            "limitId": "codex",
+            "planType": "plus",
+            "primary": [
+                "usedPercent": 25,
+                "windowDurationMins": 10080,
+                "resetsAt": tWeekly
+            ],
+            "secondary": NSNull()
+        ]
+    ]
+    let weeklyOnlyParsed = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(weeklyOnlyPayload)
+    try assert(weeklyOnlyParsed?.sessionLimitPercent == nil, "8. Session limit must be nil for weekly-only payload")
+    try assert(weeklyOnlyParsed?.sessionRemainingPercent == nil, "8. Session remaining must be nil for weekly-only payload")
+    try assert(weeklyOnlyParsed?.weeklyRemainingPercent == 75.0, "8. Weekly remaining must be 75% left")
+
+    // 9. Live App-Server integration (read-only query)
+    if let live = CodexAppServerQuotaConnector.shared.fetchQuota() {
+        try assert(live.agent == .codex, "9. Live agent must be .codex")
+        try assert(live.isLiveSource == true, "9. Live source must be true")
+        if let s = live.sessionRemainingPercent {
+            try assert(s >= 0.0 && s <= 100.0, "9. Live 5-hour remaining must be between 0 and 100")
+        }
+        if let w = live.weeklyRemainingPercent {
+            try assert(w >= 0.0 && w <= 100.0, "9. Live weekly remaining must be between 0 and 100")
+        }
+    }
+}
+
+print("🎉 All 587 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association, M3.5 Project Switcher Contextual Navigation, M3.6 Project Formation Multi-Workspace Workstream Model, M3.7 Recent Session Continuity, Antigravity Authoritative workspacePaths Attribution, Workstream Scoping Persistence, Exclusive Auto-Move Cardinality, Native UI Checkmarks & Codex Dual-Window Quota Tests Passed!")

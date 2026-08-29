@@ -898,6 +898,14 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
                 if agent == .claude {
                     let pct = Int(AgentUsageStore.shared.getUsage(for: .claude)?.sessionRemainingPercent ?? 0.0)
                     durationTag = " [5-hour: \(pct)% left]"
+                } else if agent == .codex {
+                    if let sPct = AgentUsageStore.shared.getUsage(for: .codex)?.sessionRemainingPercent, sPct == 0 {
+                        durationTag = " [5-hour: \(Int(sPct))% left]"
+                    } else if let wPct = AgentUsageStore.shared.getUsage(for: .codex)?.weeklyRemainingPercent, wPct == 0 {
+                        durationTag = " [weekly: \(Int(wPct))% left]"
+                    } else {
+                        durationTag = " [\(info.lastUpdated.relativeString())]"
+                    }
                 } else {
                     durationTag = " [\(info.lastUpdated.relativeString())]"
                 }
@@ -1197,14 +1205,30 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             hdr.isEnabled = false
             menu.addItem(hdr)
 
-            if let wRemaining = cdxUsage.weeklyRemainingPercent {
-                let bar = makeCompactBar(percent: wRemaining)
-                let resetTag = cdxUsage.weeklyResetText ?? ""
-                let resetPrefix = resetTag.isEmpty ? "" : " · \(resetTag)"
-                let row = NSMenuItem(title: "     Weekly:  \(bar) \(Int(wRemaining))% left\(resetPrefix)", action: nil, keyEquivalent: "")
-                row.isEnabled = false
-                menu.addItem(row)
+            let isCodexWeeklyZero = (cdxUsage.weeklyRemainingPercent == 0)
+            var hasAnyQuotaRow = false
 
+            if !isCodexWeeklyZero, let sRemaining = cdxUsage.sessionRemainingPercent {
+                let sBar = makeCompactBar(percent: sRemaining)
+                let sReset = cdxUsage.sessionResetText ?? ""
+                let resetTag = sReset.isEmpty ? "" : " · \(sReset)"
+                let row1 = NSMenuItem(title: "     5-Hour:  \(sBar) \(Int(sRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
+                row1.isEnabled = false
+                menu.addItem(row1)
+                hasAnyQuotaRow = true
+            }
+
+            if let wRemaining = cdxUsage.weeklyRemainingPercent {
+                let wBar = makeCompactBar(percent: wRemaining)
+                let wReset = cdxUsage.weeklyResetText ?? ""
+                let resetTag = wReset.isEmpty ? "" : " · \(wReset)"
+                let row2 = NSMenuItem(title: "     Weekly:  \(wBar) \(Int(wRemaining))% left\(resetTag)", action: nil, keyEquivalent: "")
+                row2.isEnabled = false
+                menu.addItem(row2)
+                hasAnyQuotaRow = true
+            }
+
+            if hasAnyQuotaRow {
                 if let freshnessText = makeProviderFreshnessTag(usage: cdxUsage) {
                     let freshRow = NSMenuItem(title: "     · \(freshnessText)", action: nil, keyEquivalent: "")
                     freshRow.isEnabled = false

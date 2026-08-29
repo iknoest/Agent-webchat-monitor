@@ -490,7 +490,7 @@ public final class AutoMonitor: @unchecked Sendable {
                 return
             } else {
                 // Live fetch failed: preserve prior sample but mark source as not live (last known)
-                if var existing = AgentUsageStore.shared.getUsage(for: .codex), existing.weeklyLimitPercent != nil {
+                if var existing = AgentUsageStore.shared.getUsage(for: .codex), existing.weeklyLimitPercent != nil || existing.sessionLimitPercent != nil {
                     existing.isLiveSource = false
                     existing.freshness = "Stale"
                     existing.lastUpdated = now
@@ -502,7 +502,7 @@ public final class AutoMonitor: @unchecked Sendable {
 
         // Stale-while-revalidate: if existing live usage exists, preserve it!
         let existing = AgentUsageStore.shared.getUsage(for: .codex)
-        if let existing = existing, existing.isLiveSource || existing.weeklyLimitPercent != nil {
+        if let existing = existing, existing.isLiveSource || existing.weeklyLimitPercent != nil || existing.sessionLimitPercent != nil {
             AgentStore.shared.updateAvailability(for: .codex, availability: existing.availability)
             return
         }
@@ -2047,10 +2047,6 @@ public final class CodexAppServerQuotaConnector: @unchecked Sendable {
             let durationMins = (win["windowDurationMins"] as? NSNumber)?.int64Value ?? 0
             let resetsAt = (win["resetsAt"] as? NSNumber)?.int64Value
 
-            if used >= 100.0 {
-                isExhausted = true
-            }
-
             if durationMins >= 1440 { // Daily or Weekly
                 weeklyPercent = used
                 if let resetsAt = resetsAt {
@@ -2068,7 +2064,7 @@ public final class CodexAppServerQuotaConnector: @unchecked Sendable {
         processWindow(secondary)
 
         var usage = AgentUsageData(agent: .codex)
-        usage.weeklyLimitPercent = isExhausted ? max(weeklyPercent ?? 100.0, 100.0) : weeklyPercent
+        usage.weeklyLimitPercent = weeklyPercent
         usage.weeklyResetText = weeklyResetText
         usage.sessionLimitPercent = sessionPercent
         usage.sessionResetText = sessionResetText

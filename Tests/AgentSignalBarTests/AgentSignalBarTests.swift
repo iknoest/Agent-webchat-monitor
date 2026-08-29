@@ -3181,5 +3181,49 @@ final class AgentSignalBarTests: XCTestCase {
         let sess = AgentSessionInfo(provider: .claude, sessionId: "c-legacy", title: "Legacy Task", status: .working, cwd: "/Users/test/Jobsearcher/sub")
         XCTAssertNil(sess.resolveWorkstream(using: registry))
     }
+
+    func testCodexDualWindowQuotaAccuracyAndIndependence() throws {
+        let dualPayload: [String: Any] = [
+            "rateLimits": [
+                "limitId": "codex",
+                "planType": "plus",
+                "primary": [
+                    "usedPercent": 100,
+                    "windowDurationMins": 300,
+                    "resetsAt": 1788030269
+                ],
+                "secondary": [
+                    "usedPercent": 40,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1788501732
+                ],
+                "credits": [
+                    "hasCredits": false,
+                    "unlimited": false,
+                    "balance": "0"
+                ],
+                "rateLimitReachedType": "primary_rate_limit_reached"
+            ],
+            "rateLimitResetCredits": [
+                "availableCount": 1
+            ]
+        ]
+
+        let parsed = CodexAppServerQuotaConnector.shared.parseCodexRateLimitsResult(dualPayload)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(parsed?.sessionLimitPercent, 100.0)
+        XCTAssertEqual(parsed?.sessionRemainingPercent, 0.0)
+        XCTAssertEqual(parsed?.weeklyLimitPercent, 40.0)
+        XCTAssertEqual(parsed?.weeklyRemainingPercent, 60.0)
+        XCTAssertTrue(parsed?.isQuotaExhausted == true)
+        XCTAssertEqual(parsed?.availability, .quotaExhausted)
+
+        AgentUsageStore.shared.updateUsage(for: .codex, data: parsed!)
+        let menu = MenuBarManager.shared.buildMenuForTesting()
+        let titles = menu.items.map { $0.title }
+
+        XCTAssertTrue(titles.contains(where: { $0.contains("5-Hour:") && $0.contains("0% left") }))
+        XCTAssertTrue(titles.contains(where: { $0.contains("Weekly:") && $0.contains("60% left") }))
+    }
 }
 #endif
