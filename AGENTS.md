@@ -1752,3 +1752,34 @@ Next: Present M3.4 report to Ava in Traditional Chinese.
 Blockers: none
 
 [RELEASE] M3.4 Optional GitHub Repository Association — antigravity — 2026-08-28T18:24:00+02:00
+
+## 2026-08-29 — antigravity — macos
+Status: DONE
+Phase: M3.5 Project Switcher & Contextual Navigation
+Done:
+1. Canonical Project-Level Status Derivation (`ProjectModel.swift`):
+   - Added `Project.StatusSummary` struct and `Project.statusSummary(sessions:openTabs:)` aggregating session lifecycles using canonical priority (`Needs You / .blocked > .working > .done > .idle > no active sessions`).
+   - Produces clear, honest badge texts (`⚠️ 1 Needs You`, `2 Working`, `1 Ready`, `No Active Sessions`) and pixel-perfect status dot badges.
+2. Unified Top-Level Project Switcher & Menu Consolidation (`MenuBarManager.swift`):
+   - Promoted Projects to the top Section 2 in the AgentBridge menu under "Projects & Workspaces (\(count)):".
+   - Each project row renders its aggregate status dot, project name, and status badge text (`  📁 <Name> [⚠️ 1 Needs You]`).
+   - Submenu exposes compact, context-first navigation:
+     - Local root path + `📂 Reveal in Finder` action (`NSWorkspace.selectFile`).
+     - Optional GitHub repo + `🌐 Open in GitHub` action (`openWebLinkClicked`).
+     - Current Reviewer details + `↗️ Jump to Reviewer in Chrome` + `Unlink Reviewer` + link/replace reviewer actions.
+     - Previous Reviewers history.
+     - Active Agent Sessions with status dot badges, provider names, session titles, and 1-click focus/jump actions to the corresponding provider app (`WindowFocuser`).
+   - Removed redundant old Section 4, unifying all Project affordances into one coherent Project Switcher while keeping provider-first menus functioning.
+3. Rapid UI Re-Rendering (`MenuBarManager.swift`):
+   - Fingerprinted project sessions and statuses in `computeRenderSignature()` ensuring zero-delay menu bar re-rendering when session states or counts change.
+4. Deterministic Automated Verification:
+   - Added Tests 499 to 516 in `Stage1TestRunner` covering project switcher listing, empty project grace, single session display, multi-session aggregation, cross-project separation, Needs You attention prioritization, working-over-blocked prevention, unassigned session isolation, live/closed reviewer observability, GitHub integration and non-GitHub grace, nested project resolution precision, dynamic removal cleanup, canonical reviewer/GitHub navigation, provider-menu coexistence, and zero duplicate persistent storage (516/516 passed).
+   - Added `testProjectStatusSummaryAndContextualNavigation` in `AgentSignalBarTests.swift` (`swift test` clean exit 0).
+   - Verified 30/30 JS tests in `background_test.js` passed.
+   - Built and installed release app to `/Applications/AgentBridge.app` via `./build_app.sh`.
+   - Verified clean git diff whitespace (`git diff --check`).
+Verified: `swift run Stage1TestRunner` (516/516 passed), `swift test` (clean exit 0), `node adapters/chrome-extension/background_test.js` (30/30 passed), `./build_app.sh` (clean exit 0), `git diff --check` (clean exit 0).
+Next: Present M3.5 report to Ava in Traditional Chinese.
+Blockers: none
+
+[RELEASE] M3.5 Project Switcher & Contextual Navigation — antigravity — 2026-08-29T11:03:00+02:00

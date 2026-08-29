@@ -332,7 +332,9 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         for p in ProjectRegistry.shared.getAllProjects() {
             let rev = p.currentReviewer
             let gitFullName = (p.gitRepository ?? p.liveGitRepository)?.fullName ?? ""
-            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count):\(gitFullName);"
+            let pSessions = AgentStore.shared.getSessions(forProjectId: p.id)
+            let sessSig = pSessions.map { "\($0.provider.rawValue):\($0.sessionId):\($0.status.rawValue)" }.joined(separator: ",")
+            projectsSig += "\(p.id):\(p.name):\(p.rootPath):\(rev?.conversationId ?? ""):\(rev?.title ?? ""):\(rev?.url ?? ""):\(p.reviewerHistory.count):\(gitFullName):[\(sessSig)];"
         }
 
         return "\(displayMode)|\(summary)|\(compact)|\(theme)|\(overwork)|\(notifyEnabled)|\(soundEnabled)|\(doneSound)|\(attentionSound)|\(sleepMode)|\(closedLid)|\(refreshingTag)|\(axTrusted)|\(disabledAgents)|\(armedWatchTag)|\(tgEnabled):\(tgConfigured):\(tgLastTest):\(tgThreshold):\(tgQuotaAlerts):[\(tgMutedSessions)]|\(netConnected)|\(badgesSig)|\(sessionsStr)|\(stateDetails)|\(projectsSig)"
@@ -437,7 +439,177 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Direct 1-Click Agent & Session Rows (Filtered by Monitored Agents)
+        // 2. Projects & Workspaces (M3.5 Project Switcher & Contextual Navigation)
+        let allProjects = ProjectRegistry.shared.getAllProjects()
+        let chatgptInfo = AgentStore.shared.getStatus(for: .chatgpt)
+        let openTabs = chatgptInfo.openTabs
+
+        let eligibleTabs = openTabs.compactMap { tab -> (tab: ChatGPTTabInfo, parsed: ParsedChatGPTReviewerIdentity)? in
+            guard let parsed = ChatGPTURLParser.parseReviewerIdentity(from: tab.url) else { return nil }
+            return (tab, parsed)
+        }
+        let activeOrFirstEligibleTab = eligibleTabs.first(where: { $0.tab.active == true }) ?? eligibleTabs.first
+
+        if !allProjects.isEmpty {
+            let projectsHdr = NSMenuItem(title: "Projects & Workspaces (\(allProjects.count)):", action: nil, keyEquivalent: "")
+            projectsHdr.isEnabled = false
+            menu.addItem(projectsHdr)
+
+            for project in allProjects {
+                let projectSessions = AgentStore.shared.getSessions(forProjectId: project.id)
+                let summary = project.statusSummary(sessions: projectSessions, openTabs: openTabs)
+                let liveStatus = project.liveReviewerStatus(openTabs: openTabs)
+
+                let projItem = NSMenuItem(title: "  📁 \(project.name) [\(summary.statusBadgeText)]", action: nil, keyEquivalent: "")
+                projItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: summary.status, availability: .available))
+                let projSubmenu = NSMenu()
+
+                // Project root path + Reveal in Finder
+                let pathItem = NSMenuItem(title: "Root: \(project.rootPath)", action: nil, keyEquivalent: "")
+                pathItem.isEnabled = false
+                projSubmenu.addItem(pathItem)
+
+                let revealItem = NSMenuItem(title: "  📂 Reveal in Finder", action: #selector(revealProjectFolderClicked(_:)), keyEquivalent: "")
+                revealItem.target = self
+                revealItem.representedObject = ["path": project.rootPath]
+                projSubmenu.addItem(revealItem)
+
+                // Associated GitHub repository (M3.4)
+                if let gitRepo = project.gitRepository ?? project.liveGitRepository {
+                    let gitItem = NSMenuItem(title: "GitHub: \(gitRepo.fullName)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                    gitItem.target = self
+                    gitItem.representedObject = ["url": gitRepo.canonicalUrl]
+                    projSubmenu.addItem(gitItem)
+                }
+
+                projSubmenu.addItem(NSMenuItem.separator())
+
+                // Current Reviewer Details (M3.2)
+                if let reviewer = project.currentReviewer {
+                    let revHdr = NSMenuItem(title: "Current Reviewer:", action: nil, keyEquivalent: "")
+                    revHdr.isEnabled = false
+                    projSubmenu.addItem(revHdr)
+
+                    let titleStr = reviewer.title ?? reviewer.conversationId
+                    let revDetailItem = NSMenuItem(title: "  Title: \(titleStr)", action: nil, keyEquivalent: "")
+                    revDetailItem.isEnabled = false
+                    projSubmenu.addItem(revDetailItem)
+
+                    let convIdItem = NSMenuItem(title: "  ID: \(reviewer.conversationId)", action: nil, keyEquivalent: "")
+                    convIdItem.isEnabled = false
+                    projSubmenu.addItem(convIdItem)
+
+                    if let gId = reviewer.chatgptProjectId {
+                        let gItem = NSMenuItem(title: "  ChatGPT Project: \(gId)", action: nil, keyEquivalent: "")
+                        gItem.isEnabled = false
+                        projSubmenu.addItem(gItem)
+                    }
+
+                    let obsStatusStr = (liveStatus?.isCurrentlyObservable == true) ? "Currently open in Chrome" : "Closed / Not currently observable"
+                    let statusItem = NSMenuItem(title: "  Status: \(obsStatusStr)", action: nil, keyEquivalent: "")
+                    statusItem.isEnabled = false
+                    projSubmenu.addItem(statusItem)
+
+                    // Open / Focus in Chrome
+                    let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                    openRevItem.target = self
+                    openRevItem.representedObject = ["url": reviewer.url, "tabId": liveStatus?.activeTabId as Any]
+                    projSubmenu.addItem(openRevItem)
+
+                    // Unlink / Remove reviewer option
+                    let unlinkItem = NSMenuItem(title: "  Unlink Current Reviewer", action: #selector(removeProjectReviewerClicked(_:)), keyEquivalent: "")
+                    unlinkItem.target = self
+                    unlinkItem.representedObject = ["projectId": project.id]
+                    projSubmenu.addItem(unlinkItem)
+
+                    projSubmenu.addItem(NSMenuItem.separator())
+                }
+
+                // Explicit Assignment Action: "Set current ChatGPT conversation as reviewer"
+                if let eligible = activeOrFirstEligibleTab {
+                    let candidateConvId = eligible.parsed.conversationId
+                    let candidateTitle = eligible.tab.title
+
+                    let conflictingProject = allProjects.first(where: { $0.id != project.id && $0.currentReviewer?.conversationId == candidateConvId })
+
+                    if let conflict = conflictingProject {
+                        let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict.name)'", action: nil, keyEquivalent: "")
+                        conflictItem.isEnabled = false
+                        projSubmenu.addItem(conflictItem)
+                    } else if project.currentReviewer?.conversationId == candidateConvId {
+                        let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
+                        alreadyLinkedItem.isEnabled = false
+                        projSubmenu.addItem(alreadyLinkedItem)
+                    } else {
+                        let linkTitle = project.currentReviewer == nil ?
+                            "Set current ChatGPT conversation as reviewer ('\(candidateTitle)')" :
+                            "Replace Reviewer with '\(candidateTitle)'"
+                        let linkItem = NSMenuItem(title: linkTitle, action: #selector(setProjectReviewerClicked(_:)), keyEquivalent: "")
+                        linkItem.target = self
+                        linkItem.representedObject = [
+                            "projectId": project.id,
+                            "url": eligible.tab.url,
+                            "title": candidateTitle
+                        ]
+                        projSubmenu.addItem(linkItem)
+                    }
+                } else {
+                    let noEligibleItem = NSMenuItem(title: "Open a ChatGPT conversation in Chrome to set as Reviewer", action: nil, keyEquivalent: "")
+                    noEligibleItem.isEnabled = false
+                    projSubmenu.addItem(noEligibleItem)
+                }
+
+                // Previous Reviewer Association History
+                if !project.reviewerHistory.isEmpty {
+                    projSubmenu.addItem(NSMenuItem.separator())
+                    let histHdr = NSMenuItem(title: "Previous Reviewers (\(project.reviewerHistory.count)):", action: nil, keyEquivalent: "")
+                    histHdr.isEnabled = false
+                    projSubmenu.addItem(histHdr)
+
+                    for past in project.reviewerHistory.reversed().prefix(5) {
+                        let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
+                        let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
+                        pastItem.target = self
+                        pastItem.representedObject = ["url": past.url]
+                        projSubmenu.addItem(pastItem)
+                    }
+                }
+
+                // Active Agent Sessions in this Project (M3.3 / M3.5 Contextual Navigation)
+                projSubmenu.addItem(NSMenuItem.separator())
+                if !projectSessions.isEmpty {
+                    let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(projectSessions.count)):", action: nil, keyEquivalent: "")
+                    sessHdr.isEnabled = false
+                    projSubmenu.addItem(sessHdr)
+
+                    for sess in projectSessions {
+                        let sessBadge = sess.status.statusDot(theme: currentTheme)
+                        let sessTitle = sess.title.isEmpty ? sess.sessionId : sess.title
+                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(sess.provider.displayName): \(sessTitle)", action: #selector(focusSessionProviderClicked(_:)), keyEquivalent: "")
+                        sessItem.target = self
+                        sessItem.representedObject = [
+                            "provider": sess.provider,
+                            "sessionId": sess.sessionId,
+                            "url": sess.webLink as Any,
+                            "tabId": sess.targetTabId as Any
+                        ]
+                        sessItem.image = cachedDisplayDotImage(for: EffectiveDisplayStatus.from(lifecycle: sess.status, availability: .available))
+                        projSubmenu.addItem(sessItem)
+                    }
+                } else {
+                    let noSessItem = NSMenuItem(title: "Active Agent Sessions: None", action: nil, keyEquivalent: "")
+                    noSessItem.isEnabled = false
+                    projSubmenu.addItem(noSessItem)
+                }
+
+                projItem.submenu = projSubmenu
+                menu.addItem(projItem)
+            }
+
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // 3. Direct 1-Click Agent & Session Rows (Filtered by Monitored Agents)
         let allStates = AgentStore.shared.getAllStates()
         for agent in AgentID.allCases {
             guard ConfigManager.shared.isAgentMonitored(agent) else { continue }
@@ -816,165 +988,6 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
         let refreshUsageItem = NSMenuItem(title: refreshUsageTitle, action: #selector(refreshUsageClicked), keyEquivalent: "r")
         refreshUsageItem.target = self
         menu.addItem(refreshUsageItem)
-
-        // 4. Registered Projects & ChatGPT Reviewers (M3.2)
-        let allProjects = ProjectRegistry.shared.getAllProjects()
-        let chatgptInfo = AgentStore.shared.getStatus(for: .chatgpt)
-        let openTabs = chatgptInfo.openTabs
-
-        let eligibleTabs = openTabs.compactMap { tab -> (tab: ChatGPTTabInfo, parsed: ParsedChatGPTReviewerIdentity)? in
-            guard let parsed = ChatGPTURLParser.parseReviewerIdentity(from: tab.url) else { return nil }
-            return (tab, parsed)
-        }
-        let activeOrFirstEligibleTab = eligibleTabs.first(where: { $0.tab.active == true }) ?? eligibleTabs.first
-
-        if !allProjects.isEmpty {
-            menu.addItem(NSMenuItem.separator())
-
-            let projectsHdr = NSMenuItem(title: "Registered Projects & Reviewers (\(allProjects.count)):", action: nil, keyEquivalent: "")
-            projectsHdr.isEnabled = false
-            menu.addItem(projectsHdr)
-
-            for project in allProjects {
-                let liveStatus = project.liveReviewerStatus(openTabs: openTabs)
-                let reviewerSummary: String
-                if let reviewer = project.currentReviewer {
-                    let dispTitle = liveStatus?.liveTitle ?? reviewer.title ?? "Conversation (\(reviewer.conversationId.prefix(8)))"
-                    let obsTag = (liveStatus?.isCurrentlyObservable == true) ? "🟢 Open" : "⚪ Closed"
-                    reviewerSummary = "\(project.name) → \(dispTitle) [\(obsTag)]"
-                } else {
-                    reviewerSummary = "\(project.name) → (No Reviewer)"
-                }
-
-                let projItem = NSMenuItem(title: "  📁 \(reviewerSummary)", action: nil, keyEquivalent: "")
-                let projSubmenu = NSMenu()
-
-                // Project root path
-                let pathItem = NSMenuItem(title: "Root: \(project.rootPath)", action: nil, keyEquivalent: "")
-                pathItem.isEnabled = false
-                projSubmenu.addItem(pathItem)
-
-                // Associated GitHub repository (M3.4)
-                if let gitRepo = project.gitRepository ?? project.liveGitRepository {
-                    let gitItem = NSMenuItem(title: "GitHub: \(gitRepo.fullName)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                    gitItem.target = self
-                    gitItem.representedObject = ["url": gitRepo.canonicalUrl]
-                    projSubmenu.addItem(gitItem)
-                }
-
-                projSubmenu.addItem(NSMenuItem.separator())
-
-                // Current Reviewer Details
-                if let reviewer = project.currentReviewer {
-                    let revHdr = NSMenuItem(title: "Current Reviewer:", action: nil, keyEquivalent: "")
-                    revHdr.isEnabled = false
-                    projSubmenu.addItem(revHdr)
-
-                    let titleStr = reviewer.title ?? reviewer.conversationId
-                    let revDetailItem = NSMenuItem(title: "  Title: \(titleStr)", action: nil, keyEquivalent: "")
-                    revDetailItem.isEnabled = false
-                    projSubmenu.addItem(revDetailItem)
-
-                    let convIdItem = NSMenuItem(title: "  ID: \(reviewer.conversationId)", action: nil, keyEquivalent: "")
-                    convIdItem.isEnabled = false
-                    projSubmenu.addItem(convIdItem)
-
-                    if let gId = reviewer.chatgptProjectId {
-                        let gItem = NSMenuItem(title: "  ChatGPT Project: \(gId)", action: nil, keyEquivalent: "")
-                        gItem.isEnabled = false
-                        projSubmenu.addItem(gItem)
-                    }
-
-                    let obsStatusStr = (liveStatus?.isCurrentlyObservable == true) ? "Currently open in Chrome" : "Closed / Not currently observable"
-                    let statusItem = NSMenuItem(title: "  Status: \(obsStatusStr)", action: nil, keyEquivalent: "")
-                    statusItem.isEnabled = false
-                    projSubmenu.addItem(statusItem)
-
-                    // Open / Focus in Chrome
-                    let openRevItem = NSMenuItem(title: "  Jump to Reviewer in Chrome", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                    openRevItem.target = self
-                    openRevItem.representedObject = ["url": reviewer.url, "tabId": liveStatus?.activeTabId as Any]
-                    projSubmenu.addItem(openRevItem)
-
-                    // Unlink / Remove reviewer option
-                    let unlinkItem = NSMenuItem(title: "  Unlink Current Reviewer", action: #selector(removeProjectReviewerClicked(_:)), keyEquivalent: "")
-                    unlinkItem.target = self
-                    unlinkItem.representedObject = ["projectId": project.id]
-                    projSubmenu.addItem(unlinkItem)
-
-                    projSubmenu.addItem(NSMenuItem.separator())
-                }
-
-                // Explicit Assignment Action: "Set current ChatGPT conversation as reviewer"
-                if let eligible = activeOrFirstEligibleTab {
-                    let candidateConvId = eligible.parsed.conversationId
-                    let candidateTitle = eligible.tab.title
-
-                    let conflictingProject = allProjects.first(where: { $0.id != project.id && $0.currentReviewer?.conversationId == candidateConvId })
-
-                    if let conflict = conflictingProject {
-                        let conflictItem = NSMenuItem(title: "⚠️ Cannot Link: '\(candidateTitle)' is Reviewer for '\(conflict.name)'", action: nil, keyEquivalent: "")
-                        conflictItem.isEnabled = false
-                        projSubmenu.addItem(conflictItem)
-                    } else if project.currentReviewer?.conversationId == candidateConvId {
-                        let alreadyLinkedItem = NSMenuItem(title: "✓ Current Tab is Already Reviewer", action: nil, keyEquivalent: "")
-                        alreadyLinkedItem.isEnabled = false
-                        projSubmenu.addItem(alreadyLinkedItem)
-                    } else {
-                        let linkTitle = project.currentReviewer == nil ?
-                            "Set current ChatGPT conversation as reviewer ('\(candidateTitle)')" :
-                            "Replace Reviewer with '\(candidateTitle)'"
-                        let linkItem = NSMenuItem(title: linkTitle, action: #selector(setProjectReviewerClicked(_:)), keyEquivalent: "")
-                        linkItem.target = self
-                        linkItem.representedObject = [
-                            "projectId": project.id,
-                            "url": eligible.tab.url,
-                            "title": candidateTitle
-                        ]
-                        projSubmenu.addItem(linkItem)
-                    }
-                } else {
-                    let noEligibleItem = NSMenuItem(title: "Open a ChatGPT conversation in Chrome to set as Reviewer", action: nil, keyEquivalent: "")
-                    noEligibleItem.isEnabled = false
-                    projSubmenu.addItem(noEligibleItem)
-                }
-
-                // Previous Reviewer Association History
-                if !project.reviewerHistory.isEmpty {
-                    projSubmenu.addItem(NSMenuItem.separator())
-                    let histHdr = NSMenuItem(title: "Previous Reviewers (\(project.reviewerHistory.count)):", action: nil, keyEquivalent: "")
-                    histHdr.isEnabled = false
-                    projSubmenu.addItem(histHdr)
-
-                    for past in project.reviewerHistory.reversed().prefix(5) {
-                        let pastTitle = past.title ?? "Conversation (\(past.conversationId.prefix(8)))"
-                        let pastItem = NSMenuItem(title: "  • \(pastTitle)", action: #selector(openWebLinkClicked(_:)), keyEquivalent: "")
-                        pastItem.target = self
-                        pastItem.representedObject = ["url": past.url]
-                        projSubmenu.addItem(pastItem)
-                    }
-                }
-
-                // M3.3: Active Agent Sessions in this Project (Derived by CWD/Workspace)
-                let projectSessions = AgentStore.shared.getSessions(forProjectId: project.id)
-                if !projectSessions.isEmpty {
-                    projSubmenu.addItem(NSMenuItem.separator())
-                    let sessHdr = NSMenuItem(title: "Active Agent Sessions (\(projectSessions.count)):", action: nil, keyEquivalent: "")
-                    sessHdr.isEnabled = false
-                    projSubmenu.addItem(sessHdr)
-
-                    for sess in projectSessions {
-                        let sessBadge = sess.status.statusDot(theme: currentTheme)
-                        let sessItem = NSMenuItem(title: "  \(sessBadge) \(sess.provider.displayName): \(sess.title)", action: nil, keyEquivalent: "")
-                        sessItem.isEnabled = false
-                        projSubmenu.addItem(sessItem)
-                    }
-                }
-
-                projItem.submenu = projSubmenu
-                menu.addItem(projItem)
-            }
-        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1459,6 +1472,38 @@ public final class MenuBarManager: NSObject, NSMenuDelegate {
             print("🌐 Opening URL in Browser: \(urlStr)")
             WindowFocuser.focusURL(urlStr)
         }
+    }
+
+    @objc private func revealProjectFolderClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let path = dict["path"] as? String else {
+            return
+        }
+        let url = URL(fileURLWithPath: path)
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+    }
+
+    @objc private func focusSessionProviderClicked(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let provider = dict["provider"] as? AgentID else {
+            return
+        }
+        let sessionId = dict["sessionId"] as? String
+        let tabId = dict["tabId"] as? Int
+        let targetURL = dict["url"] as? String
+
+        if provider == .chatgpt, let tid = tabId {
+            HTTPServer.shared.requestTabFocus(tabId: tid)
+            WindowFocuser.focusAppOnly("com.google.Chrome")
+            AgentStore.shared.markSessionChecked(provider: .chatgpt, sessionId: "\(tid)")
+        } else {
+            if let sid = sessionId {
+                AgentStore.shared.markSessionChecked(provider: provider, sessionId: sid)
+            }
+            WindowFocuser.focusAgent(provider, targetURL: targetURL, sessionId: sessionId, tabId: tabId)
+        }
+        NotificationManager.shared.stopCurrentSound()
+        updateTitleAndMenu()
     }
 
     @objc public func openChromeExtensionsClicked(_ sender: Any?) {

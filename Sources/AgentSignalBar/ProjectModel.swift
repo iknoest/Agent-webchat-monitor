@@ -509,6 +509,102 @@ public struct Project: Identifiable, Codable, Sendable, Equatable, Hashable {
         )
     }
 
+    /// Aggregated state summary of a Project for top-level switcher display (M3.5).
+    public struct StatusSummary: Sendable, Equatable {
+        public let status: AgentStatus
+        public let totalSessions: Int
+        public let blockedCount: Int
+        public let workingCount: Int
+        public let doneCount: Int
+        public let idleCount: Int
+        public let isReviewerOpen: Bool
+        public let reviewerTitle: String?
+
+        public var statusBadgeText: String {
+            if blockedCount > 0 {
+                return "⚠️ \(blockedCount) Needs You"
+            }
+            if workingCount > 0 {
+                return "\(workingCount) Working"
+            }
+            if doneCount > 0 {
+                return "\(doneCount) Ready"
+            }
+            if totalSessions > 0 {
+                return "\(totalSessions) Active"
+            }
+            return "No Active Sessions"
+        }
+
+        public init(
+            status: AgentStatus,
+            totalSessions: Int,
+            blockedCount: Int,
+            workingCount: Int,
+            doneCount: Int,
+            idleCount: Int,
+            isReviewerOpen: Bool,
+            reviewerTitle: String? = nil
+        ) {
+            self.status = status
+            self.totalSessions = totalSessions
+            self.blockedCount = blockedCount
+            self.workingCount = workingCount
+            self.doneCount = doneCount
+            self.idleCount = idleCount
+            self.isReviewerOpen = isReviewerOpen
+            self.reviewerTitle = reviewerTitle
+        }
+    }
+
+    /// Computes the aggregated status summary for this project using canonical lifecycle priority (M3.5).
+    public func statusSummary(sessions: [AgentSessionInfo], openTabs: [ChatGPTTabInfo] = []) -> StatusSummary {
+        var blocked = 0
+        var working = 0
+        var done = 0
+        var idle = 0
+
+        for sess in sessions {
+            switch sess.status {
+            case .blocked:
+                blocked += 1
+            case .working:
+                working += 1
+            case .done:
+                done += 1
+            case .idle, .off, .quotaExceeded:
+                idle += 1
+            }
+        }
+
+        let liveRev = liveReviewerStatus(openTabs: openTabs)
+        let isRevOpen = liveRev?.isCurrentlyObservable == true
+
+        let aggregate: AgentStatus
+        if blocked > 0 {
+            aggregate = .blocked
+        } else if working > 0 {
+            aggregate = .working
+        } else if done > 0 {
+            aggregate = .done
+        } else if !sessions.isEmpty {
+            aggregate = .idle
+        } else {
+            aggregate = .idle
+        }
+
+        return StatusSummary(
+            status: aggregate,
+            totalSessions: sessions.count,
+            blockedCount: blocked,
+            workingCount: working,
+            doneCount: done,
+            idleCount: idle,
+            isReviewerOpen: isRevOpen,
+            reviewerTitle: liveRev?.liveTitle
+        )
+    }
+
     /// Normalizes a path string into a canonical absolute path.
     public static func canonicalizePath(_ path: String) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -549,3 +645,5 @@ public struct ProjectRegistryData: Codable, Sendable, Equatable {
         self.projects = projects
     }
 }
+
+public typealias ProjectStatusSummary = Project.StatusSummary

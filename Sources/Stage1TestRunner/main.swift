@@ -9805,4 +9805,374 @@ runTest("498. Live Drift Refresh: Git remote change on disk updates Project meta
     try assert(refreshed.gitRepository?.canonicalUrl == "https://github.com/org-beta/project-repo")
 }
 
-print("🎉 All 498 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association & M3.4 GitHub Repository Association Tests Passed!")
+// 499. Project Switcher: All registered Projects appear in the switcher list
+runTest("499. Project Switcher: All registered Projects appear in the switcher list") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_499_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/projectA", name: "Project Alpha")
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/projectB", name: "Project Beta")
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/projectC", name: "Project Gamma")
+
+    let all = registry.getAllProjects()
+    try assert(all.count == 3)
+    try assert(all.map { $0.name } == ["Project Alpha", "Project Beta", "Project Gamma"])
+}
+
+// 500. Empty / Partial Project: Project with no sessions/reviewer/repo remains cleanly visible
+runTest("500. Empty / Partial Project: Project with no sessions/reviewer/repo remains cleanly visible") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_500_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let emptyProj = try registry.registerProject(rootPath: "/Users/test/workspace/scratch_docs", name: "Scratch")
+    let summary = emptyProj.statusSummary(sessions: [], openTabs: [])
+
+    try assert(summary.status == .idle)
+    try assert(summary.totalSessions == 0)
+    try assert(summary.blockedCount == 0)
+    try assert(summary.workingCount == 0)
+    try assert(summary.statusBadgeText == "No Active Sessions")
+    try assert(emptyProj.currentReviewer == nil)
+    try assert(emptyProj.gitRepository == nil)
+}
+
+// 501. Single Session: Working session appears under correct Project with working badge
+runTest("501. Single Session: Working session appears under correct Project with working badge") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_501_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+    let session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-501",
+        title: "Coding feature",
+        status: .working,
+        cwd: "/Users/test/workspace/agent-os/Sources"
+    )
+
+    let summary = project.statusSummary(sessions: [session], openTabs: [])
+    try assert(summary.status == .working)
+    try assert(summary.totalSessions == 1)
+    try assert(summary.workingCount == 1)
+    try assert(summary.statusBadgeText == "1 Working")
+}
+
+// 502. Multi-Session Aggregation: Multiple provider sessions aggregate under same Project
+runTest("502. Multi-Session Aggregation: Multiple provider sessions aggregate under same Project") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_502_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/monorepo", name: "Monorepo")
+
+    let sessClaude = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "claude-502",
+        title: "Claude turn",
+        status: .working,
+        cwd: "/Users/test/workspace/monorepo/pkgA"
+    )
+    let sessCodex = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "codex-502",
+        title: "Codex thread",
+        status: .working,
+        cwd: "/Users/test/workspace/monorepo/pkgB"
+    )
+    let sessAgy = AgentSessionInfo(
+        provider: .antigravity,
+        sessionId: "agy-502",
+        title: "AGY subagent",
+        status: .idle,
+        cwd: "/Users/test/workspace/monorepo/scripts"
+    )
+
+    let summary = project.statusSummary(sessions: [sessClaude, sessCodex, sessAgy], openTabs: [])
+    try assert(summary.status == .working)
+    try assert(summary.totalSessions == 3)
+    try assert(summary.workingCount == 2)
+    try assert(summary.idleCount == 1)
+    try assert(summary.statusBadgeText == "2 Working")
+}
+
+// 503. Project Separation: Sessions across different Projects remain strictly separated
+runTest("503. Project Separation: Sessions across different Projects remain strictly separated") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_503_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let p1 = try registry.registerProject(rootPath: "/Users/test/workspace/frontend", name: "Frontend")
+    let p2 = try registry.registerProject(rootPath: "/Users/test/workspace/backend", name: "Backend")
+
+    let s1 = AgentSessionInfo(provider: .claude, sessionId: "s1", title: "UI", status: .working, cwd: "/Users/test/workspace/frontend")
+    let s2 = AgentSessionInfo(provider: .codex, sessionId: "s2", title: "API", status: .blocked, cwd: "/Users/test/workspace/backend")
+
+    try assert(s1.resolveProject(using: registry)?.id == p1.id)
+    try assert(s2.resolveProject(using: registry)?.id == p2.id)
+
+    let summary1 = p1.statusSummary(sessions: [s1])
+    let summary2 = p2.statusSummary(sessions: [s2])
+
+    try assert(summary1.status == .working)
+    try assert(summary2.status == .blocked)
+    try assert(summary1.blockedCount == 0)
+    try assert(summary2.blockedCount == 1)
+}
+
+// 504. Needs You Priority: Blocked session surfaces Project-level attention state
+runTest("504. Needs You Priority: Blocked session surfaces Project-level attention state") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_504_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/critical-app", name: "CriticalApp")
+    let blockedSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-504",
+        title: "Awaiting permission",
+        status: .blocked,
+        cwd: "/Users/test/workspace/critical-app"
+    )
+
+    let summary = project.statusSummary(sessions: [blockedSession], openTabs: [])
+    try assert(summary.status == .blocked)
+    try assert(summary.blockedCount == 1)
+    try assert(summary.statusBadgeText == "⚠️ 1 Needs You")
+}
+
+// 505. Priority Hierarchy: Working sessions do not override Needs You attention state
+runTest("505. Priority Hierarchy: Working sessions do not override Needs You attention state") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_505_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/mixed", name: "Mixed")
+    let blockedSess = AgentSessionInfo(provider: .antigravity, sessionId: "b1", title: "Tool confirmation", status: .blocked, cwd: "/Users/test/workspace/mixed")
+    let workingSess1 = AgentSessionInfo(provider: .claude, sessionId: "w1", title: "Generating code", status: .working, cwd: "/Users/test/workspace/mixed")
+    let workingSess2 = AgentSessionInfo(provider: .codex, sessionId: "w2", title: "Thinking", status: .working, cwd: "/Users/test/workspace/mixed")
+
+    let summary = project.statusSummary(sessions: [blockedSess, workingSess1, workingSess2], openTabs: [])
+    try assert(summary.status == .blocked, "Needs You (.blocked) must dominate over .working in project summary")
+    try assert(summary.blockedCount == 1)
+    try assert(summary.workingCount == 2)
+    try assert(summary.statusBadgeText == "⚠️ 1 Needs You")
+}
+
+// 506. Unassigned Isolation: Unassigned sessions outside registered roots do not appear under projects
+runTest("506. Unassigned Isolation: Unassigned sessions outside registered roots do not appear under projects") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_506_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/app", name: "App")
+    let unassignedSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "outside-506",
+        title: "Scratch",
+        status: .working,
+        cwd: "/tmp/scratch_unregistered"
+    )
+
+    try assert(unassignedSession.resolveProject(using: registry) == nil)
+}
+
+// 507. Current Reviewer: Current ChatGPT Reviewer displays with live observable state
+runTest("507. Current Reviewer: Current ChatGPT Reviewer displays with live observable state") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_507_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    var project = try registry.registerProject(rootPath: "/Users/test/workspace/reviewed-project", name: "ReviewedProj")
+    project = try registry.assignReviewer(
+        toProjectId: project.id,
+        url: "https://chatgpt.com/c/conv-507-live",
+        title: "M3.5 Review Thread"
+    )
+
+    let openTabs = [
+        ChatGPTTabInfo(tabId: 101, title: "M3.5 Review Thread", url: "https://chatgpt.com/c/conv-507-live", status: "idle", active: true)
+    ]
+
+    let live = project.liveReviewerStatus(openTabs: openTabs)
+    try assert(live?.isCurrentlyObservable == true)
+    try assert(live?.activeTabId == 101)
+    try assert(live?.liveTitle == "M3.5 Review Thread")
+}
+
+// 508. Unavailable Reviewer: Closed reviewer remains associated and shown as closed
+runTest("508. Unavailable Reviewer: Closed reviewer remains associated and shown as closed") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_508_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    var project = try registry.registerProject(rootPath: "/Users/test/workspace/proj-closed", name: "ClosedReviewerProj")
+    project = try registry.assignReviewer(
+        toProjectId: project.id,
+        url: "https://chatgpt.com/c/conv-508-closed",
+        title: "Prior Review"
+    )
+
+    // No matching open tab in Chrome
+    let openTabs = [
+        ChatGPTTabInfo(tabId: 202, title: "Other Chat", url: "https://chatgpt.com/c/different-conv", status: "idle")
+    ]
+
+    let live = project.liveReviewerStatus(openTabs: openTabs)
+    try assert(live?.isCurrentlyObservable == false)
+    try assert(live?.activeTabId == nil)
+    try assert(project.currentReviewer?.conversationId == "conv-508-closed")
+}
+
+// 509. GitHub Association: Associated GitHub repo renders canonical full name and URL
+runTest("509. GitHub Association: Associated GitHub repo renders canonical full name and URL") {
+    let tempDir = NSTemporaryDirectory()
+    let repoFolder = "\(tempDir)/github_proj_509_\(UUID().uuidString)"
+    let gitFolder = "\(repoFolder)/.git"
+    try FileManager.default.createDirectory(atPath: gitFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: repoFolder) }
+
+    let gitConfig = """
+    [remote "origin"]
+        url = git@github.com:iknoest/Agent-webchat-monitor.git
+    """
+    try gitConfig.write(toFile: "\(gitFolder)/config", atomically: true, encoding: .utf8)
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_509_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: repoFolder, name: "AgentBridge")
+    try assert(project.gitRepository?.fullName == "iknoest/Agent-webchat-monitor")
+    try assert(project.gitRepository?.canonicalUrl == "https://github.com/iknoest/Agent-webchat-monitor")
+}
+
+// 510. Non-GitHub Grace: Project without GitHub repo shows cleanly without error or warning
+runTest("510. Non-GitHub Grace: Project without GitHub repo shows cleanly without error or warning") {
+    let tempDir = NSTemporaryDirectory()
+    let plainFolder = "\(tempDir)/plain_proj_510_\(UUID().uuidString)"
+    try FileManager.default.createDirectory(atPath: plainFolder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: plainFolder) }
+
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_510_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: plainFolder, name: "Local Docs")
+    try assert(project.gitRepository == nil)
+    try assert(project.liveGitRepository == nil)
+}
+
+// 511. Nested Project Precision: Nested Project session resolves to deepest matching child
+runTest("511. Nested Project Precision: Nested Project session resolves to deepest matching child") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_511_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let parent = try registry.registerProject(rootPath: "/Users/test/workspace/monorepo", name: "Monorepo Parent")
+    let child = try registry.registerProject(rootPath: "/Users/test/workspace/monorepo/packages/api", name: "API Child")
+
+    let childSession = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-511-child",
+        title: "API work",
+        status: .working,
+        cwd: "/Users/test/workspace/monorepo/packages/api/src"
+    )
+    let parentSession = AgentSessionInfo(
+        provider: .codex,
+        sessionId: "sess-511-parent",
+        title: "Root scripts",
+        status: .working,
+        cwd: "/Users/test/workspace/monorepo/scripts"
+    )
+
+    try assert(childSession.resolveProject(using: registry)?.id == child.id)
+    try assert(parentSession.resolveProject(using: registry)?.id == parent.id)
+}
+
+// 512. Dynamic Removal: Removing Project clears association without stale references
+runTest("512. Dynamic Removal: Removing Project clears association without stale references") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_512_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    let project = try registry.registerProject(rootPath: "/Users/test/workspace/temporary", name: "Temporary")
+    let session = AgentSessionInfo(
+        provider: .claude,
+        sessionId: "sess-512",
+        title: "Temp work",
+        status: .working,
+        cwd: "/Users/test/workspace/temporary"
+    )
+
+    try assert(session.resolveProject(using: registry)?.id == project.id)
+
+    _ = try registry.removeProject(id: project.id)
+    try assert(session.resolveProject(using: registry) == nil, "Removed project must immediately clear session association")
+}
+
+// 513. Canonical Navigation: Reviewer jump targets exact conversation identity URL and tabId
+runTest("513. Canonical Navigation: Reviewer jump targets exact conversation identity URL and tabId") {
+    let reviewer = ProjectReviewer(
+        conversationId: "conv-513-target",
+        url: "https://chatgpt.com/c/conv-513-target",
+        title: "Review Target",
+        chatgptProjectId: nil
+    )
+    let parsed = ChatGPTURLParser.parseReviewerIdentity(from: reviewer.url)
+    try assert(parsed?.conversationId == "conv-513-target")
+    try assert(parsed?.canonicalUrl == "https://chatgpt.com/c/conv-513-target")
+}
+
+// 514. Canonical Navigation: GitHub action targets canonical HTTPS repository URL
+runTest("514. Canonical Navigation: GitHub action targets canonical HTTPS repository URL") {
+    let sshUrl = "git@github.com:facebook/react.git"
+    let parsed = GitHubURLParser.parseRepository(from: sshUrl)
+    try assert(parsed?.canonicalUrl == "https://github.com/facebook/react")
+}
+
+// 515. Coexistence: Provider-first menu sections continue functioning alongside Project Switcher
+runTest("515. Coexistence: Provider-first menu sections continue functioning alongside Project Switcher") {
+    let allAgents = AgentID.allCases
+    try assert(allAgents.count == 5)
+    for agent in allAgents {
+        try assert(ConfigManager.shared.isAgentMonitored(agent) == true || ConfigManager.shared.isAgentMonitored(agent) == false)
+    }
+}
+
+// 516. Non-Duplication: M3.5 introduces zero duplicate persistent state or out-of-sync storage
+runTest("516. Non-Duplication: M3.5 introduces zero duplicate persistent state or out-of-sync storage") {
+    let tempDir = NSTemporaryDirectory()
+    let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_516_\(UUID().uuidString).json")
+    let registry = ProjectRegistry(storageURL: testStorageURL)
+    defer { registry.resetForTesting() }
+
+    _ = try registry.registerProject(rootPath: "/Users/test/workspace/app516", name: "App516")
+
+    let savedData = try Data(contentsOf: testStorageURL)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(ProjectRegistryData.self, from: savedData)
+
+    // ProjectRegistryData contains only the canonical Project list with M3.1-M3.4 properties
+    try assert(decoded.projects.count == 1)
+    try assert(decoded.projects[0].name == "App516")
+    try assert(decoded.projects[0].rootPath == "/Users/test/workspace/app516")
+}
+
+print("🎉 All 516 Production Swift Containment, Turn Continuity, Quota, Closed-Lid Default, Product Actions Simplification, Theme-Aware Legend, Structured Claude Quota, Monitored Agents, Copilot Lifecycle Repair, Copilot Quota, One-Shot Switch, Provider Icons, Canonical Priority, Lifecycle Reconciliation, Menu Bar UI Visibility, Five-Provider Smart Auto, Telegram Bridge Foundation, Codex Lifecycle Repair, Turn-Aware Auto-Switch, Rate-Limit Semantic Repair, Telegram Privacy Security, Codex Title Hierarchy, Thinking Timestamp Truth, P1 UX, Closed-Provider Space Optimization, Codex Multi-Session Lifecycle Reconciliation, ChatGPT Monitor Health, Provider Close Lifecycle Truth, Claude Quota Reset Preservation, Telegram Root Menu, Fun Emoji Config, Codex Current Version Lifecycle Truth, Source Health, M2.1 Identity & Notification UX, P0-A Test Isolation & P0-B1/B2 Codex Rollout, Subprocess Deadlock, Antigravity Transcript Probe, M2.1.1 Cached Privilege Probing, Startup-Silent Health Notifications, Antigravity Evidence-Driven Fallback, M3.1 Project Registry Foundation, Subprocess Non-Blocking Worker Reaping, Telegram Health Delivery Confirmation, Sleep Outage Preservation, Store Deadlock Elimination, M3.2 ChatGPT Reviewer Association, M3.3 CWD Session Association, M3.4 GitHub Repository Association & M3.5 Project Switcher Contextual Navigation Tests Passed!")

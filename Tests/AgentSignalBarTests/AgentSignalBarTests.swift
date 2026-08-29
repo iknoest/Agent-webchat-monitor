@@ -2850,5 +2850,62 @@ final class AgentSignalBarTests: XCTestCase {
         let reloaded = reloadedRegistry.getProject(byId: project.id)
         XCTAssertEqual(reloaded?.gitRepository?.fullName, "test-owner/test-repo")
     }
+
+    func testProjectStatusSummaryAndContextualNavigation() throws {
+        let tempDir = NSTemporaryDirectory()
+        let testStorageURL = URL(fileURLWithPath: "\(tempDir)/AgentSignalBarTest_projects_m35_unit_\(UUID().uuidString).json")
+        let registry = ProjectRegistry(storageURL: testStorageURL)
+        defer { registry.resetForTesting() }
+
+        var project = try registry.registerProject(rootPath: "/Users/test/workspace/agent-os", name: "AgentOS")
+
+        // 1. Empty sessions
+        let emptySummary = project.statusSummary(sessions: [], openTabs: [])
+        XCTAssertEqual(emptySummary.status, .idle)
+        XCTAssertEqual(emptySummary.totalSessions, 0)
+        XCTAssertEqual(emptySummary.statusBadgeText, "No Active Sessions")
+
+        // 2. Working session
+        let workingSess = AgentSessionInfo(
+            provider: .claude,
+            sessionId: "s1",
+            title: "Writing M3.5",
+            status: .working,
+            cwd: "/Users/test/workspace/agent-os/Sources"
+        )
+        let workingSummary = project.statusSummary(sessions: [workingSess], openTabs: [])
+        XCTAssertEqual(workingSummary.status, .working)
+        XCTAssertEqual(workingSummary.totalSessions, 1)
+        XCTAssertEqual(workingSummary.workingCount, 1)
+        XCTAssertEqual(workingSummary.statusBadgeText, "1 Working")
+
+        // 3. Blocked session overrides working
+        let blockedSess = AgentSessionInfo(
+            provider: .antigravity,
+            sessionId: "s2",
+            title: "Confirm delete",
+            status: .blocked,
+            cwd: "/Users/test/workspace/agent-os/Tests"
+        )
+        let mixedSummary = project.statusSummary(sessions: [workingSess, blockedSess], openTabs: [])
+        XCTAssertEqual(mixedSummary.status, .blocked)
+        XCTAssertEqual(mixedSummary.totalSessions, 2)
+        XCTAssertEqual(mixedSummary.blockedCount, 1)
+        XCTAssertEqual(mixedSummary.workingCount, 1)
+        XCTAssertEqual(mixedSummary.statusBadgeText, "⚠️ 1 Needs You")
+
+        // 4. Assign Reviewer
+        project = try registry.assignReviewer(
+            toProjectId: project.id,
+            url: "https://chatgpt.com/c/m35-review-conv",
+            title: "M3.5 Review Discussion"
+        )
+        let openTabs = [
+            ChatGPTTabInfo(tabId: 55, title: "M3.5 Review Discussion", url: "https://chatgpt.com/c/m35-review-conv", status: "idle", active: true)
+        ]
+        let live = project.liveReviewerStatus(openTabs: openTabs)
+        XCTAssertTrue(live?.isCurrentlyObservable == true)
+        XCTAssertEqual(live?.activeTabId, 55)
+    }
 }
 #endif
